@@ -1,0 +1,176 @@
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  background: var(--xr-primary);
+  font-family: var(--xr-font);
+}
+
+/* Lets wide tables scroll inside their card instead of stretching the page on phones. */
+.d-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Cards */
+.xr-card {
+  background: var(--xr-surface);
+  border-radius: var(--xr-radius-card);
+  box-shadow: var(--xr-shadow-card);
+}
+
+.xr-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px;
+  border-bottom: 1px solid var(--xr-border);
+}
+
+.xr-card__title {
+  margin: 0;
+  font-size: var(--xr-fs-card-title);
+  font-weight: 400;
+}
+
+.xr-card__body {
+  padding: 20px;
+}
+
+/* Buttons */
+.btn {
+  --bs-btn-border-radius: var(--xr-radius-control);
+  --bs-btn-font-size: var(--xr-fs-body);
+  --bs-btn-padding-y: 8px;
+  --bs-btn-padding-x: 16px;
+}
+
+.btn-primary {
+  --bs-btn-bg: var(--xr-primary);
+  --bs-btn-border-color: var(--xr-primary);
+  --bs-btn-hover-bg: #078b9a;
+  --bs-btn-hover-border-color: #078b9a;
+  --bs-btn-active-bg: #067a87;
+  --bs-btn-active-border-color: #067a87;
+  --bs-btn-disabled-bg: var(--xr-primary);
+  --bs-btn-disabled-border-color: var(--xr-primary);
+}
+
+.btn-soft {
+  --bs-btn-bg: var(--xr-primary-light);
+  --bs-btn-color: var(--xr-primary);
+  --bs-btn-border-color: transparent;
+  --bs-btn-hover-bg: #bde4e8;
+  --bs-btn-hover-color: var(--xr-primary);
+  --bs-btn-hover-border-color: transparent;
+  --bs-btn-active-bg: #bde4e8;
+  --bs-btn-active-color: var(--xr-primary);
+}
+
+/* Forms: light-teal filled inputs as in the sign-in reference */
+.form-control,
+.form-select {
+  min-height: var(--xr-control-height);
+  border-radius: var(--xr-radius-control);
+  border-color: transparent;
+  background-color: var(--xr-primary-light);
+  font-size: var(--xr-fs-body);
+}
+
+.form-control:focus,
+.form-select:focus {
+  background-color: var(--xr-primary-light);
+  border-color: var(--xr-primary);
+  box-shadow: none;
+}
+
+.form-control::placeholder {
+  color: #6f8a8e;
+}
+
+.form-label {
+  margin-bottom: 6px;
+  color: var(--xr-text);
+  font-size: 13px;
+}
+
+/* Tables */
+.xr-table-wrap {
+  overflow-x: auto;
+}
+
+.xr-table {
+  width: 100%;
+  margin: 0;
+}
+
+.xr-table th {
+  padding: 14px 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-align: start;
+}
+
+.xr-table td {
+  padding: 14px 12px;
+  border-top: 1px solid var(--xr-border);
+  vertical-align: middle;
+}
+
+/* Tabs: soft pill on the active tab, as in the Tasks card of the reference */
+.xr-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.xr-tab {
+  padding: 7px 16px;
+  border: 0;
+  border-radius: var(--xr-radius-control);
+  background: transparent;
+  color: var(--xr-text);
+  font-size: var(--xr-fs-body);
+}
+
+.xr-tab--active {
+  background: var(--xr-primary-light);
+  color: var(--xr-primary);
+}
+
+/* Small status badges */
+.xr-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.xr-badge--primary { background: var(--xr-primary); }
+.xr-badge--orange { background: var(--xr-orange); }
+.xr-badge--red { background: var(--xr-red); }
+.xr-badge--cyan { background: var(--xr-cyan); }
+.xr-badge--green { background: var(--xr-green); }
+
+@media print {
+  body {
+    background: #fff;
+  }
+
+  .no-print,
+  .sidebar,
+  .header {
+    display: none !important;
+  }
+}
+
+.ltr-num {
+  direction: ltr;
+  unicode-bidi: isolate;
+}

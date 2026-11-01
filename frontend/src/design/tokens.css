@@ -1,0 +1,44 @@
+/*
+ * Design tokens measured from the XRay reference screenshots (1600px wide).
+ * Colours and layout sizes are sampled from pixels; values marked "est." are visual estimates.
+ */
+:root {
+  --xr-primary: #089eaf;
+  --xr-primary-light: #ceecee;
+  --xr-orange: #fca262;
+  --xr-orange-light: #fbe9dd;
+  --xr-red: #dd4e4a;
+  --xr-red-light: #fcecec;
+  --xr-cyan: #12d4fe;
+  --xr-cyan-light: #e6f9ff;
+  --xr-green: #27b345; /* est. */
+  --xr-page-bg: #eff7f9;
+  --xr-surface: #ffffff;
+  --xr-text: #3f414d; /* est. */
+  --xr-text-muted: #a09e9e; /* est. */
+  --xr-border: #eef0f4; /* est. */
+
+  --xr-sidebar-width: 260px;
+  --xr-header-height: 75px;
+  --xr-gap: 30px;
+  --xr-radius-card: 25px;
+  --xr-radius-pill: 25px;
+  --xr-radius-control: 10px; /* est. */
+  --xr-shadow-card: 0 0 20px rgba(8, 158, 175, 0.05); /* est. */
+  --xr-control-height: 42px; /* est. */
+
+  --xr-font: 'Vazirmatn', system-ui, sans-serif;
+  --xr-fs-body: 14px;
+  --xr-fs-card-title: 18px;
+  --xr-fs-stat: 28px;
+
+  --bs-primary: var(--xr-primary);
+  --bs-primary-rgb: 8, 158, 175;
+  --bs-body-bg: var(--xr-page-bg);
+  --bs-body-color: var(--xr-text);
+  --bs-body-font-family: var(--xr-font);
+  --bs-body-font-size: var(--xr-fs-body);
+  --bs-border-color: var(--xr-border);
+  --bs-link-color: var(--xr-primary);
+  --bs-link-color-rgb: 8, 158, 175;
+}

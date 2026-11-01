@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/AlShifa.Api/AlShifa.Api.csproj" />
+  <Project Path="tests/AlShifa.Tests/AlShifa.Tests.csproj" />
+</Solution>

@@ -1,0 +1,37 @@
+# Local SDK, MySQL data and development passwords
+.tools/
+
+# Build output
+bin/
+obj/
+dist/
+node_modules/
+
+# Test output
+playwright-report/
+test-results/
+
+# Secrets and local configuration
+.env
+.env.*
+*.pem
+*.pfx
+*.key
+backup.cnf
+api.env
+appsettings.*.local.json
+
+# Uploaded files and database dumps can contain patient data
+storage/
+*.sql
+*.sql.gz
+
+# Reference screenshots of the commercial XRay template: third-party material, not project source
+/*.jpg
+
+# Tooling and logs
+.vs/
+.vscode/
+.claude/
+*.user
+*.log

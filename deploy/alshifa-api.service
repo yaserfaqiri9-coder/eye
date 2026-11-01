@@ -1,0 +1,32 @@
+[Unit]
+Description=Al-Shifa Eye Center API
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=alshifa
+WorkingDirectory=/opt/alshifa/api
+ExecStart=/usr/bin/dotnet /opt/alshifa/api/AlShifa.Api.dll
+Restart=always
+RestartSec=5
+# Lets in-flight requests finish on stop.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://127.0.0.1:5080
+Environment=DOTNET_NOLOGO=1
+Environment=Storage__Path=/var/lib/alshifa/storage
+Environment=DataProtection__KeysPath=/var/lib/alshifa/keys
+# Holds ConnectionStrings__Default. Owner root, mode 600. Never commit this file.
+EnvironmentFile=/etc/alshifa/api.env
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/alshifa
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
