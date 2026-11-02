@@ -17,7 +17,8 @@ public sealed record DiscountRequest([Range(0, 100000000)] decimal Amount, [Requ
 
 public sealed record VoidRequest([Required, MaxLength(300)] string Reason, int Version);
 
-public sealed record PaymentRequest(long InvoiceId, [Range(0.01, 100000000)] decimal Amount, PaymentMethod Method, [MaxLength(100)] string? Reference);
+/// <param name="InvoiceVersion">The version on the cashier's screen; a change since then means the amount was decided on old figures.</param>
+public sealed record PaymentRequest(long InvoiceId, [Range(0.01, 100000000)] decimal Amount, PaymentMethod Method, [MaxLength(100)] string? Reference, int? InvoiceVersion = null);
 
 public sealed record RefundRequest(long PaymentId, [Range(0.01, 100000000)] decimal Amount, [Required, MinLength(3), MaxLength(300)] string Reason);
 
@@ -269,6 +270,11 @@ public static class FinanceEndpoints
                 if (invoice.Status == InvoiceStatus.Void)
                 {
                     throw new AppException(StatusCodes.Status409Conflict, "invoice_void", "این فاکتور باطل شده است.");
+                }
+
+                if (request.InvoiceVersion is { } seen && seen != invoice.Version)
+                {
+                    throw new AppException(StatusCodes.Status409Conflict, "invoice_changed", "این فاکتور همین حالا تغییر کرده یا پرداخت شده است. مانده تازه را ببینید و دوباره تصمیم بگیرید.");
                 }
 
                 if (request.Amount > InvoiceService.Balance(invoice))

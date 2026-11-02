@@ -210,6 +210,7 @@ app.MapSettings();
 app.MapReports();
 app.MapPrint();
 app.MapAudit();
+app.MapSystemStatus();
 
 app.Run();
 
