@@ -1,44 +1,94 @@
 /*
- * Design tokens measured from the XRay reference screenshots (1600px wide).
- * Colours and layout sizes are sampled from pixels; values marked "est." are visual estimates.
+ * Design tokens read from the XRay template's computed styles at 1600x900.
+ * The template is left-to-right; this system mirrors it, so its "left" is our inline start.
  */
 :root {
-  --xr-primary: #089eaf;
-  --xr-primary-light: #ceecee;
-  --xr-orange: #fca262;
-  --xr-orange-light: #fbe9dd;
-  --xr-red: #dd4e4a;
+  --xr-primary: #089bab;
+  --xr-primary-end: #0db5c8;
+  --xr-primary-light: #ceebee;
+  --xr-orange: #ffb177;
+  --xr-orange-light: #fae9dd;
+  --xr-red: #e64141;
   --xr-red-light: #fcecec;
-  --xr-cyan: #12d4fe;
-  --xr-cyan-light: #e6f9ff;
-  --xr-green: #27b345; /* est. */
-  --xr-page-bg: #eff7f9;
+  --xr-cyan: #00d0ff;
+  --xr-cyan-light: #e5faff;
+  --xr-green: #31c02c;
+  --xr-green-light: #e5fae5;
+  --xr-yellow: #fbc647;
+  --xr-page-bg: #eff7f8;
   --xr-surface: #ffffff;
-  --xr-text: #3f414d; /* est. */
-  --xr-text-muted: #a09e9e; /* est. */
-  --xr-border: #eef0f4; /* est. */
+  --xr-text: #3f414d;
+  --xr-text-muted: #a09e9e;
+  --xr-text-table: #000000;
+  --xr-border: #eeeeee;
+  --xr-border-table: #dee2e6;
+  --xr-track: #eef1f7;
+
+  --xr-gradient-primary: linear-gradient(to right, #089bab 0%, #0db5c8 100%);
+  --xr-gradient-green: linear-gradient(to right, #31c02c 0%, #57de53 100%);
+  --xr-gradient-red: linear-gradient(to right, #d84a45 0%, #f26361 100%);
+  --xr-gradient-orange: linear-gradient(to right, #fc9e5b 0%, #ffb67e 100%);
+  --xr-gradient-cyan: linear-gradient(to right, #02d1ff 0%, #61e2fc 100%);
+  --xr-gradient-grey: linear-gradient(to right, #787d76 0%, #ababab 100%);
+  --xr-gradient-light: linear-gradient(to right, #e9eef4 0%, #eef5fd 100%);
+  --xr-gradient-dark: linear-gradient(to right, #374949 0%, #455d5d 100%);
+
+  /* Fields, list rows and status colours deliberately keep the system's earlier design, not the template's. */
+  --xr-field-bg: #ceecee;
+  --xr-field-focus: #089eaf;
+  --xr-field-placeholder: #6f8a8e;
+  --xr-row-border: #eef0f4;
+  --xr-row-link: #089eaf;
+  --xr-status-primary: #089eaf;
+  --xr-status-orange: #fca262;
+  --xr-status-red: #dd4e4a;
+  --xr-status-cyan: #12d4fe;
+  --xr-status-green: #27b345;
+
+  --xr-chart-teal: #089bab;
+  --xr-chart-orange: #fc9e5b;
+  --xr-chart-sky: #5ec6d4;
+  --xr-chart-grid: #e0e0e0;
+  --xr-chart-band: #f3f3f3;
+  --xr-chart-axis: #373d3f;
 
   --xr-sidebar-width: 260px;
+  --xr-sidebar-mini: 80px;
   --xr-header-height: 75px;
-  --xr-gap: 30px;
+  --xr-gap-x: 24px;
+  --xr-gap-y: 30px;
+  --xr-gap: var(--xr-gap-y) var(--xr-gap-x);
   --xr-radius-card: 25px;
-  --xr-radius-pill: 25px;
-  --xr-radius-control: 10px; /* est. */
-  --xr-shadow-card: 0 0 20px rgba(8, 158, 175, 0.05); /* est. */
-  --xr-control-height: 42px; /* est. */
+  --xr-radius-tile: 16px;
+  --xr-radius-link: 15px;
+  --xr-radius-control: 10px;
+  --xr-radius-button: 6px;
+  --xr-shadow-card: 0 4px 5px 1px rgba(175, 175, 175, 0.1);
+  --xr-shadow-bar: 0 0 25px 0 rgba(45, 69, 95, 0.1);
+  --xr-shadow-footer: 0 0 12px 0 rgba(55, 73, 72, 0.06);
+  --xr-shadow-active: 3px 2px 20px 1px rgba(0, 0, 0, 0.1);
+  --xr-shadow-table: 0 0 12px 0 rgba(120, 146, 141, 0.06);
+  --xr-control-height: 42px;
 
-  --xr-font: 'Vazirmatn', system-ui, sans-serif;
+  /* Poppins draws Latin letters and digits as in the template; Dari text falls through to Vazirmatn. */
+  --xr-font: 'Poppins', 'Vazirmatn', system-ui, sans-serif;
   --xr-fs-body: 14px;
-  --xr-fs-card-title: 18px;
-  --xr-fs-stat: 28px;
+  --xr-lh-body: 1.8;
+  --xr-fs-card-title: 19.6px;
+  --xr-fs-stat: 32.2px;
 
   --bs-primary: var(--xr-primary);
-  --bs-primary-rgb: 8, 158, 175;
+  --bs-primary-rgb: 8, 155, 171;
   --bs-body-bg: var(--xr-page-bg);
-  --bs-body-color: var(--xr-text);
+  --bs-body-color: var(--xr-text-muted);
   --bs-body-font-family: var(--xr-font);
   --bs-body-font-size: var(--xr-fs-body);
-  --bs-border-color: var(--xr-border);
+  --bs-body-line-height: var(--xr-lh-body);
+  --bs-secondary-color: var(--xr-text-muted);
+  --bs-border-color: var(--xr-border-table);
+  --bs-heading-color: var(--xr-text);
   --bs-link-color: var(--xr-primary);
-  --bs-link-color-rgb: 8, 158, 175;
+  --bs-link-color-rgb: 8, 155, 171;
+  --bs-link-hover-color: var(--xr-primary);
+  --bs-link-hover-color-rgb: 8, 155, 171;
 }

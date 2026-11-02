@@ -113,7 +113,7 @@ onMounted(async () => {
     <template #actions>
       <button v-if="auth.can('users.create')" type="button" class="btn btn-primary" @click="open()">کارمند جدید</button>
     </template>
-    <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
     <div v-if="loading" class="py-4 text-center text-muted" role="status">در حال بارگذاری...</div>
     <div v-else-if="rows.length === 0" class="py-4 text-center text-muted">کارمندی ثبت نشده است.</div>
     <div v-else class="xr-table-wrap">
@@ -164,7 +164,7 @@ onMounted(async () => {
         <label class="form-check-label"><input v-model="form.isDoctor" class="form-check-input ms-2" type="checkbox" />داکتر است</label>
         <label class="form-check-label"><input v-model="form.isActive" class="form-check-input ms-2" type="checkbox" />فعال</label>
       </div>
-      <div v-if="form.error" class="alert alert-danger py-2" role="alert">{{ form.error }}</div>
+      <div v-if="form.error" class="alert alert-danger" role="alert">{{ form.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="form.saving">ذخیره</button>
     </form>
   </UiModal>

@@ -54,15 +54,15 @@ onMounted(load)
       </form>
     </UiCard>
 
-    <div v-if="error" class="alert alert-danger py-2 mb-0" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
 
     <template v-if="operations">
       <p class="mb-0">دوره گزارش: {{ formatDate(operations.from) }} تا {{ formatDate(operations.to) }}</p>
       <div class="report-stats">
-        <StatCard label="مراجعات" :value="operations.visits" icon="bi-people-fill" />
-        <StatCard label="مراجعات تکمیل‌شده" :value="operations.completedVisits" icon="bi-check-lg" tone="cyan" />
-        <StatCard label="عملیات" :value="operations.surgeries" icon="bi-bandaid-fill" tone="orange" />
-        <StatCard label="نسخه‌های دوا" :value="operations.prescriptions" icon="bi-capsule" tone="red" />
+        <StatCard label="مراجعات" :value="operations.visits" icon="ri-group-fill" />
+        <StatCard label="مراجعات تکمیل‌شده" :value="operations.completedVisits" icon="ri-check-line" tone="cyan" />
+        <StatCard label="عملیات" :value="operations.surgeries" icon="ri-surgical-mask-fill" tone="orange" />
+        <StatCard label="نسخه‌های دوا" :value="operations.prescriptions" icon="ri-capsule-fill" tone="red" />
       </div>
 
       <div class="report-columns">

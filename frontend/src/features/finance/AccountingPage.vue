@@ -164,7 +164,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
+  <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
 
   <section class="xr-card">
     <div class="xr-card__header flex-wrap">
@@ -174,7 +174,7 @@ onMounted(async () => {
     </div>
     <div class="xr-card__body">
       <template v-if="tab === 'ledger'">
-        <div v-if="reconciliation" class="alert py-2" :class="reconciliation.balanced ? 'alert-success' : 'alert-danger'" role="status">
+        <div v-if="reconciliation" class="alert" :class="reconciliation.balanced ? 'alert-success' : 'alert-danger'" role="status">
           {{ reconciliation.balanced ? 'دفتر مالی با فاکتورها و دریافت‌ها تطبیق دارد.' : 'دفتر مالی با تراکنش‌ها تطبیق ندارد. فوراً بررسی شود.' }}
         </div>
         <div class="xr-table-wrap">
@@ -263,7 +263,7 @@ onMounted(async () => {
       <input id="d-amount" v-model.number="discount.amount" class="form-control mb-3" type="number" min="0.01" step="0.01" :max="discount.detail.invoice.balance" required />
       <label class="form-label" for="d-reason">دلیل</label>
       <input id="d-reason" v-model="discount.reason" class="form-control mb-3" maxlength="300" required />
-      <div v-if="discount.error" class="alert alert-danger py-2" role="alert">{{ discount.error }}</div>
+      <div v-if="discount.error" class="alert alert-danger" role="alert">{{ discount.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="discount.saving">ثبت تخفیف</button>
     </form>
   </UiModal>
@@ -274,7 +274,7 @@ onMounted(async () => {
       <input id="rf-amount" v-model.number="refund.amount" class="form-control mb-3" type="number" min="0.01" step="0.01" :max="refund.payment.amount - refund.payment.refunded" required />
       <label class="form-label" for="rf-reason">دلیل</label>
       <input id="rf-reason" v-model="refund.reason" class="form-control mb-3" minlength="3" maxlength="300" required />
-      <div v-if="refund.error" class="alert alert-danger py-2" role="alert">{{ refund.error }}</div>
+      <div v-if="refund.error" class="alert alert-danger" role="alert">{{ refund.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="refund.saving">تأیید برگشت وجه</button>
     </form>
   </UiModal>
@@ -294,7 +294,7 @@ onMounted(async () => {
         <input id="e-amount" v-model.number="expense.amount" class="form-control" type="number" min="0.01" step="0.01" required />
       </div>
       <div class="mb-3"><ShamsiDateInput v-model="expense.date" label="تاریخ" :initial="today" /></div>
-      <div v-if="expense.error" class="alert alert-danger py-2" role="alert">{{ expense.error }}</div>
+      <div v-if="expense.error" class="alert alert-danger" role="alert">{{ expense.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="expense.saving">ثبت مصرف</button>
     </form>
   </UiModal>
@@ -303,7 +303,7 @@ onMounted(async () => {
     <form @submit.prevent="submitCancel">
       <label class="form-label" for="x-reason">دلیل</label>
       <input id="x-reason" v-model="cancelling.reason" class="form-control mb-3" maxlength="300" required />
-      <div v-if="cancelling.error" class="alert alert-danger py-2" role="alert">{{ cancelling.error }}</div>
+      <div v-if="cancelling.error" class="alert alert-danger" role="alert">{{ cancelling.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="cancelling.saving">لغو مصرف</button>
     </form>
   </UiModal>

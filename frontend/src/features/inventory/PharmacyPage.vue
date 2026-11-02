@@ -141,7 +141,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
 
 <template>
   <div class="d-grid gap-4">
-    <div v-if="error" class="alert alert-danger py-2 mb-0" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
 
     <UiCard title="نسخه‌های در انتظار">
       <template #actions>
@@ -197,7 +197,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
   </div>
 
   <UiModal v-if="sale.open" :title="sale.rx ? `تحویل نسخه ${sale.rx.rxNumber}` : 'فروش مستقل'" @close="sale.open = false">
-    <div v-if="sale.done" class="alert alert-success py-2" role="status">
+    <div v-if="sale.done" class="alert alert-success" role="status">
       فروش <span class="ltr-num">{{ sale.done.saleNumber }}</span> ثبت شد. فاکتور <span class="ltr-num">{{ sale.done.invoiceNumber }}</span> در صندوق قابل پرداخت است.
       <RouterLink v-if="auth.can('pharmacy.print')" :to="`/print/sale/${sale.done.id}`" target="_blank" class="btn btn-soft btn-sm ms-2">چاپ رسید</RouterLink>
     </div>
@@ -217,7 +217,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
       </div>
       <button v-if="!sale.rx" type="button" class="btn btn-soft btn-sm mb-3" @click="sale.lines.push({ productId: null, quantity: 1, prescriptionItemId: null, label: '' })">افزودن قلم</button>
       <p>مجموع: <strong>{{ money(saleTotal) }}</strong></p>
-      <div v-if="sale.error" class="alert alert-danger py-2" role="alert">{{ sale.error }}</div>
+      <div v-if="sale.error" class="alert alert-danger" role="alert">{{ sale.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="sale.saving">ثبت فروش</button>
     </form>
   </UiModal>
@@ -226,7 +226,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
     <form @submit.prevent="submitReturn">
       <label class="form-label" for="ret-reason">دلیل</label>
       <input id="ret-reason" v-model="returning.reason" class="form-control mb-3" minlength="3" maxlength="300" required />
-      <div v-if="returning.error" class="alert alert-danger py-2" role="alert">{{ returning.error }}</div>
+      <div v-if="returning.error" class="alert alert-danger" role="alert">{{ returning.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="returning.saving">ثبت برگشت</button>
     </form>
   </UiModal>

@@ -12,6 +12,23 @@ export interface OperationsReport {
   lowStockProducts: number
 }
 
+export interface DashboardDay {
+  date: string
+  completed: number
+  active: number
+  cancelled: number
+  male: number
+  female: number
+}
+
+export interface DashboardReport {
+  today: string
+  yesterdayVisits: number
+  days: DashboardDay[]
+  visitsByDepartment: { name: string; count: number }[]
+  todayByStatus: { name: string; count: number }[]
+}
+
 export interface FinancialReport {
   from: string
   to: string

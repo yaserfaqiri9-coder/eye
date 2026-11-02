@@ -24,7 +24,7 @@ watch(
 <template>
   <fieldset>
     <legend class="form-label">{{ label }}</legend>
-    <div class="row g-2">
+    <div class="row gx-2">
       <div class="col-3">
         <input v-model.number="day" class="form-control" type="number" min="1" :max="dayCount" placeholder="روز" :aria-label="`${label}: روز`" />
       </div>

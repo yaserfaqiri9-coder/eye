@@ -21,9 +21,11 @@ Browser (Vue 3 SPA) ──HTTPS──> Nginx ──> ASP.NET Core 10 ──> MyS
 | MySQL | 8.4.11 LTS | |
 | Vue / Router / Pinia | 3.5.44 / 5.4.0 / 4.1.0 | |
 | Vite / TypeScript / vue-tsc | 8.3.5 / 6.0.3 / 3.3.14 | TypeScript 7 با vue-tsc 3.3.14 اجرا نمی‌شود (خطای `./lib/tsc`) |
-| Bootstrap / bootstrap-icons | 5.3.8 / 1.13.2 | RTL داخلی Bootstrap |
+| Bootstrap | 5.3.8 | RTL داخلی Bootstrap |
+| Remix Icon | 4.9.1 | آیکون‌ها، همان مجموعه قالب XRay، با مجوز Apache |
 | @microsoft/signalr | 10.0.11 | |
 | Vazirmatn | 33.0.3 | فونت فارسی با مجوز OFL |
+| Poppins (`@fontsource/poppins`) | 5.3.0 | فقط حروف و عددهای لاتین، با مجوز OFL |
 | Playwright | 1.64.1 | E2E |
 
 ## ساختار پوشه
@@ -73,7 +75,7 @@ scripts/                 اجرای محیط توسعه
 
 ## طراحی UI
 
-مرجع: XRay (`templates.iqonic.design/xray/intro/`). سایت از محیط توسعه باز نشد و مقدارها از ۱۱ تصویر مرجع اندازه‌گیری شده است (`frontend/src/design/tokens.css`). هیچ کد، تصویر یا دارایی از قالب برداشته نشده است. فونت Vazirmatn به‌جای Poppins است چون متن دری است.
+مرجع: XRay (`templates.iqonic.design/xray/html/`). مقدارها از computed style هر ۷۳ صفحه قالب در 1600×900 خوانده شده است (`frontend/src/design/tokens.css`) و چون سیستم راست‌به‌چپ است، چیدمان آینه شده است. هیچ کد، تصویر یا دارایی از قالب برداشته نشده است. آیکون‌ها Remix Icon و فونت لاتین Poppins از npm است (هر دو همان‌هایی که قالب استفاده می‌کند)؛ متن دری با Vazirmatn نمایش داده می‌شود چون Poppins حروف فارسی ندارد.
 
 ## ساختار واقعی Backend
 

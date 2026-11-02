@@ -81,6 +81,48 @@ public sealed class ReportTests(ApiFixture api)
     }
 
     [Fact]
+    public async Task Dashboard_counts_today_by_status_gender_and_department_and_excludes_cancelled_from_attendance()
+    {
+        var reception = await UserAsync(Roles.Receptionist);
+        var departments = JsonDocument.Parse(await reception.GetStringAsync("/api/lookups/departments")).RootElement;
+        var department = departments.EnumerateArray().First();
+        var departmentId = department.GetProperty("id").GetInt32();
+        var departmentName = department.GetProperty("name").GetString()!;
+
+        var before = (await reception.GetFromJsonAsync<DashboardReport>("/api/reports/dashboard", JsonOptions))!;
+
+        var female = await Created<PatientDto>(await reception.SendAsync(Post("/api/patients", new SavePatientRequest(Name("مریض"), null, null, Gender.Female, null, 30, null, null))));
+        await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(female.Id, departmentId, null, null))));
+
+        var male = await Created<PatientDto>(await reception.SendAsync(Post("/api/patients", new SavePatientRequest(Name("مریض"), null, null, Gender.Male, null, 30, null, null))));
+        var cancelled = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(male.Id, departmentId, null, null))));
+        var change = await reception.PostAsJsonAsync($"/api/visits/{cancelled.Id}/status", new ChangeVisitStatusRequest(VisitStatus.Cancelled, cancelled.Version));
+        Assert.Equal(HttpStatusCode.OK, change.StatusCode);
+
+        var after = (await reception.GetFromJsonAsync<DashboardReport>("/api/reports/dashboard", JsonOptions))!;
+
+        Assert.Equal(6, after.Days.Count);
+        Assert.Equal(after.Today, after.Days[^1].Date);
+        var (was, now) = (before.Days[^1], after.Days[^1]);
+        Assert.Equal(1, now.Female - was.Female);
+        Assert.Equal(0, now.Male - was.Male);
+        Assert.Equal(1, now.Active - was.Active);
+        Assert.Equal(1, now.Cancelled - was.Cancelled);
+        Assert.Equal(0, now.Completed - was.Completed);
+        Assert.Equal(1, after.VisitsByDepartment.Single(r => r.Name == departmentName).Count - before.VisitsByDepartment.Single(r => r.Name == departmentName).Count);
+        Assert.Equal(1, Count(after, "Cancelled") - Count(before, "Cancelled"));
+
+        static int Count(DashboardReport report, string status) => report.TodayByStatus.FirstOrDefault(r => r.Name == status)?.Count ?? 0;
+    }
+
+    [Fact]
+    public async Task Dashboard_needs_the_reports_permission()
+    {
+        var admin = await UserAsync(Roles.SuperAdmin);
+        Assert.Equal(HttpStatusCode.Forbidden, (await admin.GetAsync("/api/reports/dashboard")).StatusCode);
+    }
+
+    [Fact]
     public async Task Clinical_staff_cannot_read_financial_reports_but_see_operations()
     {
         var doctor = await UserAsync(Roles.Doctor);

@@ -12,7 +12,7 @@ public sealed record CreateVisitRequest(long PatientId, int DepartmentId, long? 
 public sealed record VisitRow(
     long Id, string VisitNumber, int QueueNumber, long PatientId, string PatientFileNumber, string PatientName,
     int DepartmentId, string DepartmentName, string? DoctorName, string Status, string? Reason, DateOnly VisitDate,
-    DateTime CreatedAt, int Version, IReadOnlyList<string> NextStatuses);
+    DateTime CreatedAt, int Version, IReadOnlyList<string> NextStatuses, string PatientGender);
 
 public sealed record ChangeVisitStatusRequest(VisitStatus Status, int Version);
 
@@ -89,17 +89,17 @@ public sealed class VisitService(AppDbContext db, NumberService numbers, Current
 
     public static IQueryable<VisitProjection> QueryRows(IQueryable<Visit> visits) => visits.Select(v => new VisitProjection(
         v.Id, v.VisitNumber, v.QueueNumber, v.PatientId, v.Patient!.FileNumber, v.Patient.FirstName, v.Patient.LastName,
-        v.DepartmentId, v.Department!.Name, v.Doctor != null ? v.Doctor.FullName : null, v.Status, v.Reason, v.VisitDate, v.CreatedAt, v.Version));
+        v.DepartmentId, v.Department!.Name, v.Doctor != null ? v.Doctor.FullName : null, v.Status, v.Reason, v.VisitDate, v.CreatedAt, v.Version, v.Patient.Gender));
 
     public static VisitRow ToRow(VisitProjection v) => new(
         v.Id, v.VisitNumber, v.QueueNumber, v.PatientId, v.FileNumber, $"{v.FirstName} {v.LastName}".Trim(),
         v.DepartmentId, v.DepartmentName, v.DoctorName, v.Status.ToString(), v.Reason, v.VisitDate, v.CreatedAt, v.Version,
-        VisitWorkflow.NextOf(v.Status).Select(s => s.ToString()).ToList());
+        VisitWorkflow.NextOf(v.Status).Select(s => s.ToString()).ToList(), v.Gender.ToString());
 }
 
 public sealed record VisitProjection(
     long Id, string VisitNumber, int QueueNumber, long PatientId, string FileNumber, string FirstName, string? LastName,
-    int DepartmentId, string DepartmentName, string? DoctorName, VisitStatus Status, string? Reason, DateOnly VisitDate, DateTime CreatedAt, int Version);
+    int DepartmentId, string DepartmentName, string? DoctorName, VisitStatus Status, string? Reason, DateOnly VisitDate, DateTime CreatedAt, int Version, Patients.Gender Gender);
 
 public static class VisitEndpoints
 {

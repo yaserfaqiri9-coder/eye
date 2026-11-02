@@ -31,7 +31,7 @@ test('receptionist registers a patient, duplicate is caught, visit reaches the q
   const receptionUser = `rec_${stamp}`
 
   await login(page, adminUser, adminPassword)
-  await expect(page.getByText('خوش آمدید')).toBeVisible()
+  await expect(page.getByRole('img', { name: 'تصویر خوش‌آمدگویی' })).toBeVisible()
   await createUser(page, receptionUser, password, 'پذیرش')
 
   const context = await browser.newContext()

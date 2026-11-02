@@ -1,6 +1,7 @@
 using AlShifa.Api.Features.Auth;
 using AlShifa.Api.Features.Clinical;
 using AlShifa.Api.Features.Finance;
+using AlShifa.Api.Features.Patients;
 using AlShifa.Api.Features.Visits;
 using AlShifa.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -21,6 +22,11 @@ public sealed record FinancialReport(
     DateOnly From, DateOnly To, decimal ServiceRevenue, decimal PharmacyRevenue, decimal OpticalRevenue, decimal Discounts, decimal Refunds,
     decimal NetRevenue, decimal CostOfGoods, decimal Expenses, decimal Receipts, IReadOnlyList<CashierRow> ReceiptsByCashier,
     decimal OutstandingNow, int OpenInvoicesNow, decimal StockValueNow);
+
+public sealed record DashboardDay(DateOnly Date, int Completed, int Active, int Cancelled, int Male, int Female);
+
+public sealed record DashboardReport(
+    DateOnly Today, int YesterdayVisits, IReadOnlyList<DashboardDay> Days, IReadOnlyList<CountRow> VisitsByDepartment, IReadOnlyList<CountRow> TodayByStatus);
 
 public static class ReportEndpoints
 {
@@ -64,6 +70,46 @@ public static class ReportEndpoints
                 await db.MedicalPrescriptions.AsNoTracking().CountAsync(p => p.CreatedAt >= startUtc && p.CreatedAt < endUtc && p.Status != PrescriptionStatus.Cancelled, ct),
                 await db.OpticalOrders.AsNoTracking().CountAsync(o => o.CreatedAt >= startUtc && o.CreatedAt < endUtc, ct),
                 lowStock));
+        }).RequirePermission("reports.view");
+
+        // Counts only: no patient names or clinical detail, so it is safe for every role that can see reports.
+        group.MapGet("/dashboard", async (AppDbContext db, CancellationToken ct) =>
+        {
+            var today = KabulClock.Today;
+            var firstDay = today.AddDays(-5);
+            var rows = await db.Visits.AsNoTracking()
+                .Where(v => v.VisitDate >= firstDay && v.VisitDate <= today)
+                .GroupBy(v => new { v.VisitDate, v.Status, v.Patient!.Gender })
+                .Select(g => new { g.Key.VisitDate, g.Key.Status, g.Key.Gender, Count = g.Count() })
+                .ToListAsync(ct);
+
+            var days = Enumerable.Range(0, 6).Select(offset =>
+            {
+                var date = firstDay.AddDays(offset);
+                var day = rows.Where(r => r.VisitDate == date).ToList();
+                var cancelled = day.Where(r => r.Status == VisitStatus.Cancelled).Sum(r => r.Count);
+                var completed = day.Where(r => r.Status == VisitStatus.Completed).Sum(r => r.Count);
+                var attended = day.Where(r => r.Status != VisitStatus.Cancelled).ToList();
+                return new DashboardDay(
+                    date, completed, attended.Sum(r => r.Count) - completed, cancelled,
+                    attended.Where(r => r.Gender == Gender.Male).Sum(r => r.Count),
+                    attended.Where(r => r.Gender == Gender.Female).Sum(r => r.Count));
+            }).ToList();
+
+            var monthStart = today.AddDays(-29);
+            var counts = await db.Visits.AsNoTracking()
+                .Where(v => v.VisitDate >= monthStart && v.VisitDate <= today && v.Status != VisitStatus.Cancelled)
+                .GroupBy(v => v.DepartmentId)
+                .Select(g => new { DepartmentId = g.Key, Count = g.Count() })
+                .ToListAsync(ct);
+            var departments = await db.Departments.AsNoTracking().OrderBy(d => d.Id).Select(d => new { d.Id, d.Name }).ToListAsync(ct);
+
+            return Results.Ok(new DashboardReport(
+                today,
+                rows.Where(r => r.VisitDate == today.AddDays(-1)).Sum(r => r.Count),
+                days,
+                departments.Select(d => new CountRow(d.Name, counts.FirstOrDefault(c => c.DepartmentId == d.Id)?.Count ?? 0)).ToList(),
+                rows.Where(r => r.VisitDate == today).GroupBy(r => r.Status).Select(g => new CountRow(g.Key.ToString(), g.Sum(r => r.Count))).ToList()));
         }).RequirePermission("reports.view");
 
         // Every figure comes from the ledger and source tables, so a report cannot disagree with the books.

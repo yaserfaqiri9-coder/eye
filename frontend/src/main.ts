@@ -1,9 +1,13 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 
+import '@fontsource/poppins/latin-300.css'
+import '@fontsource/poppins/latin-400.css'
+import '@fontsource/poppins/latin-500.css'
+import '@fontsource/poppins/latin-700.css'
 import 'vazirmatn/Vazirmatn-font-face.css'
 import 'bootstrap/dist/css/bootstrap.rtl.min.css'
-import 'bootstrap-icons/font/bootstrap-icons.min.css'
+import 'remixicon/fonts/remixicon.css'
 import '@/design/tokens.css'
 import '@/design/base.css'
 

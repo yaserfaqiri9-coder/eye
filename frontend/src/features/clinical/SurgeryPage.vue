@@ -98,7 +98,7 @@ watch(status, load)
         <option v-for="(label, value) in surgeryStatusLabels" :key="value" :value="value">{{ label }}</option>
       </select>
     </template>
-    <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
     <div v-if="loading" class="py-4 text-center text-muted" role="status">در حال بارگذاری...</div>
     <div v-else-if="rows.length === 0" class="py-4 text-center text-muted">پرونده عملیاتی نیست.</div>
     <div v-else class="xr-table-wrap">
@@ -157,7 +157,7 @@ watch(status, load)
         <label class="form-label" for="sg-post">وضعیت پس از عملیات</label>
         <textarea id="sg-post" v-model="form.postOpStatus" class="form-control" rows="2" maxlength="2000"></textarea>
       </div>
-      <div v-if="form.error" class="alert alert-danger py-2" role="alert">{{ form.error }}</div>
+      <div v-if="form.error" class="alert alert-danger" role="alert">{{ form.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="form.saving">ذخیره</button>
     </form>
     <hr />

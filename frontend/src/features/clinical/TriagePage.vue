@@ -85,7 +85,7 @@ onMounted(load)
 
 <template>
   <UiCard title="صف معاینه ابتدایی">
-    <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
     <div v-if="loading" class="py-4 text-center text-muted" role="status">در حال بارگذاری...</div>
     <div v-else-if="rows.length === 0" class="py-4 text-center text-muted">مریضی در صف نیست.</div>
     <div v-else class="xr-table-wrap">
@@ -143,7 +143,7 @@ onMounted(load)
         <label class="form-label" for="pe-notes">یادداشت</label>
         <textarea id="pe-notes" v-model="form.notes" class="form-control" rows="2" maxlength="2000"></textarea>
       </div>
-      <div v-if="form.error" class="alert alert-danger py-2" role="alert">{{ form.error }}</div>
+      <div v-if="form.error" class="alert alert-danger" role="alert">{{ form.error }}</div>
       <div class="d-flex gap-2">
         <button type="submit" class="btn btn-soft" :disabled="form.saving">ذخیره</button>
         <button type="button" class="btn btn-primary" :disabled="form.saving" @click="save(true)">ذخیره و ارسال به داکتر</button>

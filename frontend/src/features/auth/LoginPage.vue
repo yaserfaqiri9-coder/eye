@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError } from '@/api/http'
+import ClinicIllustration from '@/features/home/ClinicIllustration.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -34,18 +35,22 @@ async function submit() {
   <div class="login">
     <div class="login__frame">
       <div class="login__panel">
-        <i class="bi bi-eye-fill login__logo" aria-hidden="true"></i>
-        <h1 class="login__brand">شفاخانه تخصصی چشم الشفا</h1>
+        <div class="login__brand">
+          <i class="ri-eye-fill" aria-hidden="true"></i>
+          <span>الشفا</span>
+        </div>
+        <div class="login__picture" aria-hidden="true"><ClinicIllustration /></div>
+        <h4 class="login__heading">شفاخانه تخصصی چشم الشفا</h4>
         <p class="login__sub">سیستم مدیریت شفاخانه</p>
       </div>
       <form class="login__card" @submit.prevent="submit">
-        <h2 class="login__title">ورود</h2>
-        <p class="login__hint">نام کاربری و رمز خود را وارد کنید.</p>
-        <div class="mb-3">
+        <h1 class="login__title">ورود</h1>
+        <p>نام کاربری و رمز خود را وارد کنید.</p>
+        <div class="login__field">
           <label class="form-label" for="login-user">نام کاربری</label>
           <input id="login-user" v-model="userName" class="form-control" dir="ltr" autocomplete="username" required />
         </div>
-        <div class="mb-3">
+        <div class="login__field">
           <label class="form-label" for="login-pass">رمز عبور</label>
           <input
             id="login-pass"
@@ -57,8 +62,10 @@ async function submit() {
             required
           />
         </div>
-        <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
-        <button type="submit" class="btn btn-primary w-100" :disabled="submitting">ورود</button>
+        <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
+        <div class="login__actions">
+          <button type="submit" class="btn btn-primary" :disabled="submitting">ورود</button>
+        </div>
       </form>
     </div>
   </div>
@@ -70,68 +77,141 @@ async function submit() {
   align-items: center;
   justify-content: center;
   min-height: 100vh;
-  padding: 16px;
-  background: var(--xr-surface);
+  padding: 48px 16px;
+  overflow: hidden;
+  background: var(--xr-page-bg);
 }
 
+/* A teal panel with a white form overlapping its far edge, mirrored from the template. */
 .login__frame {
+  position: relative;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   width: 100%;
-  max-width: 900px;
+  max-width: 1320px;
+  min-height: 812px;
 }
 
 .login__panel {
-  flex: 1;
-  min-height: 480px;
-  padding: 60px 40px 60px 120px;
-  border-radius: var(--xr-radius-card);
-  background: var(--xr-primary);
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 1050px;
+  padding: 100px 100px 0 502px;
+  border-radius: 40px;
+  background-image: linear-gradient(to left, var(--xr-primary) 0%, var(--xr-primary-end) 100%);
   color: #fff;
   text-align: center;
 }
 
-.login__logo {
-  font-size: 56px;
+.login__brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100px;
+  margin-bottom: 48px;
+  font-size: 34px;
+  font-weight: 700;
 }
 
-.login__brand {
-  margin-top: 20px;
-  font-size: 22px;
-  font-weight: 500;
+.login__brand i {
+  font-size: 48px;
+}
+
+.login__picture {
+  height: 315px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--xr-surface);
+}
+
+.login__picture :deep(svg) {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.login__heading {
+  margin-top: 26px;
+  color: #fff;
 }
 
 .login__sub {
-  opacity: 0.85;
+  margin: 4px 0 0;
+  color: #fff;
+  font-weight: 500;
 }
 
 .login__card {
-  width: 400px;
-  flex: none;
-  margin-inline-start: -90px;
-  padding: 35px;
-  border-radius: var(--xr-radius-card);
+  position: relative;
+  width: 660px;
+  min-height: 649px;
+  padding: 20px 60px;
+  border-start-start-radius: 37px;
+  border-end-start-radius: 37px;
+  border-start-end-radius: 20px;
+  border-end-end-radius: 20px;
   background: var(--xr-surface);
-  box-shadow: 0 0 30px rgba(8, 158, 175, 0.12);
 }
 
 .login__title {
-  font-size: 32px;
-  font-weight: 400;
+  line-height: 64px;
 }
 
-.login__hint {
-  color: var(--xr-text-muted);
+.login__title + p {
+  margin-bottom: 24px;
 }
 
-@media (max-width: 767.98px) {
+.login__field {
+  margin-bottom: 16px;
+}
+
+.login__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+@media (max-width: 1399.98px) {
+  .login__frame {
+    max-width: 1100px;
+    min-height: 700px;
+  }
+
+  .login__panel {
+    width: 880px;
+    padding: 60px 60px 0 440px;
+  }
+
+  .login__picture {
+    height: 260px;
+  }
+
+  .login__card {
+    width: 520px;
+    min-height: 560px;
+    padding: 20px 40px;
+  }
+}
+
+@media (max-width: 991.98px) {
+  .login__frame {
+    display: block;
+    max-width: 480px;
+    min-height: 0;
+  }
+
   .login__panel {
     display: none;
   }
 
   .login__card {
     width: 100%;
-    margin: 0;
+    min-height: 0;
+    padding: 24px;
+    border-radius: var(--xr-radius-card);
   }
 }
 </style>

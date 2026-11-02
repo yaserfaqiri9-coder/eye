@@ -126,7 +126,7 @@ onMounted(async () => {
         <label class="form-label" for="v-reason">علت مراجعه</label>
         <input id="v-reason" v-model="form.reason" class="form-control" maxlength="300" />
       </div>
-      <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
+      <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="saving">ثبت مراجعه</button>
     </form>
   </UiModal>

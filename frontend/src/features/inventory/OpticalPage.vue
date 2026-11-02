@@ -127,7 +127,7 @@ onMounted(load)
 
 <template>
   <div class="d-grid gap-4">
-    <div v-if="error" class="alert alert-danger py-2 mb-0" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
 
     <UiCard title="نسخه‌های عینک">
       <template #actions>
@@ -202,7 +202,7 @@ onMounted(load)
         </div>
       </div>
       <p>مجموع: <strong>{{ money(formTotal) }}</strong></p>
-      <div v-if="form.error" class="alert alert-danger py-2" role="alert">{{ form.error }}</div>
+      <div v-if="form.error" class="alert alert-danger" role="alert">{{ form.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="form.saving">ثبت سفارش</button>
     </form>
   </UiModal>

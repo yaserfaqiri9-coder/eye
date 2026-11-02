@@ -176,12 +176,12 @@ onBeforeUnmount(() => clearTimeout(debounce))
 <template>
   <div class="d-grid gap-4">
     <div class="cash-stats">
-      <StatCard label="پرداخت‌های در انتظار" :value="invoices.length" icon="bi-receipt" tone="orange" />
-      <StatCard label="مجموع مانده" :value="money(pendingTotal)" icon="bi-cash-stack" tone="red" />
-      <StatCard label="دریافت نقدی این صندوق" :value="money(openSession?.cashCollected ?? 0)" icon="bi-wallet2" />
+      <StatCard label="پرداخت‌های در انتظار" :value="invoices.length" icon="ri-receipt-fill" tone="orange" />
+      <StatCard label="مجموع مانده" :value="money(pendingTotal)" icon="ri-bill-fill" tone="red" />
+      <StatCard label="دریافت نقدی این صندوق" :value="money(openSession?.cashCollected ?? 0)" icon="ri-wallet-3-fill" />
     </div>
 
-    <div v-if="error" class="alert alert-danger py-2 mb-0" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
 
     <UiCard title="صندوق">
       <template v-if="openSession">
@@ -244,7 +244,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
       <li v-for="item in pay.detail.items.filter((i) => !i.isVoid)" :key="item.id">{{ item.description }}: {{ money(item.lineTotal) }}</li>
     </ul>
     <p>مانده: <strong>{{ money(pay.detail.invoice.balance) }}</strong></p>
-    <div v-if="pay.receipt" class="alert alert-success py-2" role="status">
+    <div v-if="pay.receipt" class="alert alert-success" role="status">
       دریافت ثبت شد. شماره رسید: <span class="ltr-num">{{ pay.receipt.receiptNumber }}</span>
       <RouterLink v-if="auth.can('payments.print')" :to="`/print/receipt/${pay.receipt.id}`" target="_blank" class="btn btn-soft btn-sm ms-2">چاپ رسید</RouterLink>
     </div>
@@ -266,7 +266,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
           <input id="pay-ref" v-model="pay.reference" class="form-control" dir="ltr" maxlength="100" />
         </div>
       </div>
-      <div v-if="pay.error" class="alert alert-danger py-2" role="alert">{{ pay.error }}</div>
+      <div v-if="pay.error" class="alert alert-danger" role="alert">{{ pay.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="pay.saving">ثبت دریافت</button>
     </form>
   </UiModal>
@@ -276,7 +276,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
       <p>دریافت نقدی این جلسه: {{ money(openSession.cashCollected) }}<br />مبلغ مورد انتظار: {{ money(openSession.openingAmount + openSession.cashCollected) }}</p>
       <label class="form-label" for="c-counted">مبلغ شمارش‌شده</label>
       <input id="c-counted" v-model.number="closing.counted" class="form-control mb-3" type="number" min="0" step="0.01" required />
-      <div v-if="closing.error" class="alert alert-danger py-2" role="alert">{{ closing.error }}</div>
+      <div v-if="closing.error" class="alert alert-danger" role="alert">{{ closing.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="closing.saving">بستن صندوق</button>
     </form>
   </UiModal>
@@ -285,7 +285,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
     <form @submit.prevent="submitVoid">
       <label class="form-label" for="v-reason">دلیل</label>
       <input id="v-reason" v-model="voiding.reason" class="form-control mb-3" maxlength="300" required />
-      <div v-if="voiding.error" class="alert alert-danger py-2" role="alert">{{ voiding.error }}</div>
+      <div v-if="voiding.error" class="alert alert-danger" role="alert">{{ voiding.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="voiding.saving">باطل کردن فاکتور</button>
     </form>
   </UiModal>
@@ -303,7 +303,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
         <label class="form-label" for="f-qty">تعداد</label>
         <input id="f-qty" v-model.number="fresh.quantity" class="form-control" type="number" min="1" step="1" required />
       </div>
-      <div v-if="fresh.error" class="alert alert-danger py-2" role="alert">{{ fresh.error }}</div>
+      <div v-if="fresh.error" class="alert alert-danger" role="alert">{{ fresh.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="fresh.saving">صدور فاکتور</button>
     </form>
   </UiModal>

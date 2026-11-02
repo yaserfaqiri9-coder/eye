@@ -195,13 +195,13 @@ watch(departmentId, refresh)
 <template>
   <div class="d-grid gap-4">
     <div class="reception-stats">
-      <StatCard label="مراجعات امروز" :value="totalVisits" icon="bi-people-fill" />
-      <StatCard label="در جریان" :value="counts.waiting" icon="bi-hourglass-split" tone="orange" />
-      <StatCard label="تکمیل‌شده" :value="counts.completed" icon="bi-check-lg" tone="cyan" />
-      <StatCard label="لغو شده" :value="counts.cancelled" icon="bi-x-lg" tone="red" />
+      <StatCard label="مراجعات امروز" :value="totalVisits" icon="ri-group-fill" />
+      <StatCard label="در جریان" :value="counts.waiting" icon="ri-hourglass-fill" tone="orange" />
+      <StatCard label="تکمیل‌شده" :value="counts.completed" icon="ri-check-line" tone="cyan" />
+      <StatCard label="لغو شده" :value="counts.cancelled" icon="ri-close-line" tone="red" />
     </div>
 
-    <div v-if="error" class="alert alert-danger py-2 mb-0" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
 
     <UiCard title="صف امروز">
       <template #actions>
@@ -287,7 +287,7 @@ watch(departmentId, refresh)
           <option v-for="d in departments" :key="d.id" :value="d.id">{{ d.name }}</option>
         </select>
       </div>
-      <div v-if="checkIn.error" class="alert alert-danger py-2" role="alert">{{ checkIn.error }}</div>
+      <div v-if="checkIn.error" class="alert alert-danger" role="alert">{{ checkIn.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="checkIn.saving">ثبت پذیرش</button>
     </form>
   </UiModal>
@@ -330,7 +330,7 @@ watch(departmentId, refresh)
         <label class="form-label" for="b-note">یادداشت</label>
         <input id="b-note" v-model="booking.note" class="form-control" maxlength="300" />
       </div>
-      <div v-if="booking.error" class="alert alert-danger py-2" role="alert">{{ booking.error }}</div>
+      <div v-if="booking.error" class="alert alert-danger" role="alert">{{ booking.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="booking.saving">ثبت نوبت</button>
     </form>
   </UiModal>

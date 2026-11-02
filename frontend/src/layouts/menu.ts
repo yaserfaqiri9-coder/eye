@@ -14,47 +14,47 @@ export interface MenuSection {
 export const menu: MenuSection[] = [
   {
     title: 'داشبورد',
-    items: [{ label: 'صفحه اصلی', icon: 'bi-house-door-fill', to: '/' }],
+    items: [{ label: 'صفحه اصلی', icon: 'ri-home-4-fill', to: '/' }],
   },
   {
     title: 'مریضان',
     items: [
-      { label: 'پذیرش و صف', icon: 'bi-clipboard2-pulse-fill', to: '/reception', permission: 'visits.view' },
-      { label: 'مریضان', icon: 'bi-person-vcard-fill', to: '/patients', permission: 'patients.view' },
+      { label: 'پذیرش و صف', icon: 'ri-survey-fill', to: '/reception', permission: 'visits.view' },
+      { label: 'مریضان', icon: 'ri-user-heart-fill', to: '/patients', permission: 'patients.view' },
     ],
   },
   {
     title: 'بخش‌های طبی',
     items: [
-      { label: 'معاینه ابتدایی', icon: 'bi-eyeglasses', to: '/triage', permission: 'preexam.edit' },
-      { label: 'صف داکتر', icon: 'bi-eye-fill', to: '/doctor', permission: 'consultation.edit' },
-      { label: 'آزمایشگاه', icon: 'bi-eyedropper', to: '/lab', permission: 'diagnostics.edit' },
-      { label: 'عملیات', icon: 'bi-bandaid-fill', to: '/surgery', permission: 'surgery.view' },
+      { label: 'معاینه ابتدایی', icon: 'ri-glasses-2-fill', to: '/triage', permission: 'preexam.edit' },
+      { label: 'صف داکتر', icon: 'ri-eye-fill', to: '/doctor', permission: 'consultation.edit' },
+      { label: 'آزمایشگاه', icon: 'ri-test-tube-fill', to: '/lab', permission: 'diagnostics.edit' },
+      { label: 'عملیات', icon: 'ri-surgical-mask-fill', to: '/surgery', permission: 'surgery.view' },
     ],
   },
   {
     title: 'دواخانه و عینک',
     items: [
-      { label: 'دواخانه', icon: 'bi-capsule', to: '/pharmacy', permission: 'pharmacy.create' },
-      { label: 'عینک', icon: 'bi-sunglasses', to: '/optical', permission: 'optical.view' },
-      { label: 'گدام', icon: 'bi-box-seam-fill', to: '/inventory', permission: 'inventory.view' },
+      { label: 'دواخانه', icon: 'ri-capsule-fill', to: '/pharmacy', permission: 'pharmacy.create' },
+      { label: 'عینک', icon: 'ri-glasses-fill', to: '/optical', permission: 'optical.view' },
+      { label: 'گدام', icon: 'ri-archive-fill', to: '/inventory', permission: 'inventory.view' },
     ],
   },
   {
     title: 'مالی',
     items: [
-      { label: 'صندوق', icon: 'bi-cash-coin', to: '/cashier', permission: 'payments.create' },
-      { label: 'حسابداری', icon: 'bi-journal-text', to: '/accounting', permission: 'invoices.view' },
+      { label: 'صندوق', icon: 'ri-money-dollar-circle-fill', to: '/cashier', permission: 'payments.create' },
+      { label: 'حسابداری', icon: 'ri-book-2-fill', to: '/accounting', permission: 'invoices.view' },
     ],
   },
   {
     title: 'مدیریت',
     items: [
-      { label: 'گزارش‌ها', icon: 'bi-clipboard-data-fill', to: '/reports', permission: 'reports.view' },
-      { label: 'تنظیمات', icon: 'bi-gear-fill', to: '/settings', permission: 'settings.view' },
-      { label: 'کارمندان', icon: 'bi-person-badge-fill', to: '/staff', permission: 'users.view' },
-      { label: 'کاربران', icon: 'bi-people-fill', to: '/users', permission: 'users.view' },
-      { label: 'ثبت فعالیت‌ها', icon: 'bi-shield-lock-fill', to: '/audit', permission: 'audit.view' },
+      { label: 'گزارش‌ها', icon: 'ri-file-chart-fill', to: '/reports', permission: 'reports.view' },
+      { label: 'تنظیمات', icon: 'ri-settings-3-fill', to: '/settings', permission: 'settings.view' },
+      { label: 'کارمندان', icon: 'ri-nurse-fill', to: '/staff', permission: 'users.view' },
+      { label: 'کاربران', icon: 'ri-group-fill', to: '/users', permission: 'users.view' },
+      { label: 'ثبت فعالیت‌ها', icon: 'ri-shield-keyhole-fill', to: '/audit', permission: 'audit.view' },
     ],
   },
 ]

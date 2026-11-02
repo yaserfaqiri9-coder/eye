@@ -38,7 +38,7 @@ test('full clinical journey crosses departments without re-entering data', async
   const stamp = Date.now()
 
   await login(page, adminUser, adminPassword)
-  await expect(page.getByText('خوش آمدید')).toBeVisible()
+  await expect(page.getByRole('img', { name: 'تصویر خوش‌آمدگویی' })).toBeVisible()
   await createUser(page, `rec_${stamp}`, 'پذیرش')
   await createUser(page, `tri_${stamp}`, 'معاینه ابتدایی')
   await createUser(page, `doc_${stamp}`, 'داکتر چشم')

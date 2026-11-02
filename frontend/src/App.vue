@@ -8,7 +8,7 @@ function retry() {
 
 <template>
   <div v-if="bootError" class="boot-error" role="alert">
-    <i class="bi bi-exclamation-triangle-fill boot-error__icon" aria-hidden="true"></i>
+    <i class="ri-error-warning-fill boot-error__icon" aria-hidden="true"></i>
     <p class="boot-error__message">{{ bootError }}</p>
     <button type="button" class="btn btn-primary" @click="retry">تلاش دوباره</button>
   </div>

@@ -319,8 +319,8 @@ watch(() => props.visitId, load)
 </script>
 
 <template>
-  <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
-  <div v-if="notice" class="alert alert-success py-2" role="status">{{ notice }}</div>
+  <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
+  <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
 
   <UiCard v-if="needsEmergency" title="دسترسی اضطراری">
     <p>این مریض به شما مربوط نیست. در حالت اضطرار می‌توانید با ثبت دلیل، برای ۴ ساعت دسترسی بگیرید. این دسترسی ثبت و قابل بررسی است.</p>
@@ -382,7 +382,7 @@ watch(() => props.visitId, load)
                     </select>
                   </div>
                   <div class="col"><input v-model="d.text" class="form-control" maxlength="500" :aria-label="`متن تشخیص ${i + 1}`" /></div>
-                  <div class="col-auto"><button type="button" class="btn btn-soft" aria-label="حذف تشخیص" @click="exam.diagnoses.splice(i, 1)"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+                  <div class="col-auto"><button type="button" class="btn btn-soft" aria-label="حذف تشخیص" @click="exam.diagnoses.splice(i, 1)"><i class="ri-close-line" aria-hidden="true"></i></button></div>
                 </div>
                 <button type="button" class="btn btn-soft btn-sm" @click="exam.diagnoses.push({ eye: 'None', text: '' })">افزودن تشخیص</button>
               </div>
@@ -481,8 +481,9 @@ watch(() => props.visitId, load)
                 <div class="col-md-2"><input v-model="item.dose" class="form-control" placeholder="مقدار" :aria-label="`مقدار ${i + 1}`" maxlength="100" /></div>
                 <div class="col-md-2"><input v-model="item.route" class="form-control" placeholder="روش مصرف" :aria-label="`روش مصرف ${i + 1}`" maxlength="100" /></div>
                 <div class="col-md-2"><input v-model="item.duration" class="form-control" placeholder="مدت" :aria-label="`مدت ${i + 1}`" maxlength="100" /></div>
-                <div class="col-md-2"><input v-model="item.instructions" class="form-control" placeholder="توضیح" :aria-label="`توضیح ${i + 1}`" maxlength="300" /></div>
+                <div class="col-md"><input v-model="item.instructions" class="form-control" placeholder="توضیح" :aria-label="`توضیح ${i + 1}`" maxlength="300" /></div>
                 <div class="col-md-1"><input v-model.number="item.quantity" class="form-control" type="number" min="0.001" step="any" :aria-label="`تعداد ${i + 1}`" required /></div>
+                <div class="col-md-auto"><button type="button" class="btn btn-soft" :aria-label="`حذف دوا ${i + 1}`" title="حذف دوا" :disabled="rx.items.length === 1" @click="rx.items.splice(i, 1)"><i class="ri-close-line" aria-hidden="true"></i></button></div>
               </div>
               <button type="button" class="btn btn-soft btn-sm mb-3" @click="rx.items.push({ drugName: '', dose: '', route: '', duration: '', instructions: '', quantity: 1 })">افزودن دوا</button>
               <label class="form-label d-block" for="rx-notes">توضیحات نسخه</label>

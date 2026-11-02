@@ -61,7 +61,7 @@ async function save(confirmNotDuplicate = false) {
           </RouterLink>
         </li>
       </ul>
-      <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
+      <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
       <button type="button" class="btn btn-soft" :disabled="saving" @click="save(true)">شخص دیگری است، ثبت شود</button>
     </div>
     <form v-else @submit.prevent="save()">
@@ -100,7 +100,7 @@ async function save(confirmNotDuplicate = false) {
           <input id="p-address" v-model="form.address" class="form-control" maxlength="300" />
         </div>
       </div>
-      <div v-if="error" class="alert alert-danger py-2 mt-3 mb-0" role="alert">{{ error }}</div>
+      <div v-if="error" class="alert alert-danger mt-3 mb-0" role="alert">{{ error }}</div>
       <button type="submit" class="btn btn-primary mt-3" :disabled="saving">ذخیره</button>
     </form>
   </UiModal>

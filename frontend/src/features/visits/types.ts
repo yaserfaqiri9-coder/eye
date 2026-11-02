@@ -14,6 +14,7 @@ export interface VisitRow {
   createdAt: string
   version: number
   nextStatuses: string[]
+  patientGender: string
 }
 
 export interface LookupItem {

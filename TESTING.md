@@ -2,7 +2,7 @@
 
 | نوع | ابزار | تعداد | اجرا |
 |---|---|---|---|
-| Integration | xUnit روی MySQL 8.4 واقعی و دیتابیس جدا `alshifa_test` | ۶۹ | `cd backend; dotnet test` |
+| Integration | xUnit روی MySQL 8.4 واقعی و دیتابیس جدا `alshifa_test` | ۷۱ | `cd backend; dotnet test` |
 | E2E | Playwright با Edge | ۱۷ | `cd frontend; npx playwright test` با `ALSHIFA_E2E_USER` و `ALSHIFA_E2E_PASSWORD`. به سرور توسعه نیاز دارد: `npx vite --port 5199` و `ALSHIFA_E2E_BASE=http://localhost:5199`، چون `start.bat` روی 5173 نسخه Build شده را اجرا می‌کند |
 | Load و خاموشی | `scripts/load/run-load.ps1` (با `-CrashTest`) | ۲ اجرا | دیتابیس جدا و موقت `alshifa_load` |
 | پشتیبان و بازیابی | `scripts/backup-test.ps1` | ۱ اجرا | بازیابی در دیتابیس موقت و مقایسه جدول‌به‌جدول |

@@ -47,13 +47,13 @@ onMounted(load)
 <template>
   <div class="d-grid gap-4">
     <div class="doctor-stats">
-      <StatCard label="مریضان در صف" :value="rows.length" icon="bi-people-fill" />
-      <StatCard label="در حال معاینه" :value="inConsultation" icon="bi-eye-fill" tone="cyan" />
-      <StatCard label="نتایج آماده" :value="results.length" icon="bi-eyedropper" tone="orange" />
-      <StatCard label="مراجعات بعدی" :value="followUps.length" icon="bi-calendar-event" tone="red" />
+      <StatCard label="مریضان در صف" :value="rows.length" icon="ri-group-fill" />
+      <StatCard label="در حال معاینه" :value="inConsultation" icon="ri-eye-fill" tone="cyan" />
+      <StatCard label="نتایج آماده" :value="results.length" icon="ri-test-tube-fill" tone="orange" />
+      <StatCard label="مراجعات بعدی" :value="followUps.length" icon="ri-calendar-event-fill" tone="red" />
     </div>
 
-    <div v-if="error" class="alert alert-danger py-2 mb-0" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
 
     <UiCard title="مریضان در صف داکتر">
       <div v-if="loading" class="py-4 text-center text-muted" role="status">در حال بارگذاری...</div>

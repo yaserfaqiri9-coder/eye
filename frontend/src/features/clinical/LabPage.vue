@@ -125,7 +125,7 @@ watch(status, load)
         <button v-if="auth.can('diagnostics.create')" type="button" class="btn btn-primary text-nowrap" @click="openNew">درخواست مستقل</button>
       </div>
     </template>
-    <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
     <div v-if="loading" class="py-4 text-center text-muted" role="status">در حال بارگذاری...</div>
     <div v-else-if="rows.length === 0" class="py-4 text-center text-muted">درخواستی نیست.</div>
     <div v-else class="xr-table-wrap">
@@ -157,7 +157,7 @@ watch(status, load)
     <form @submit.prevent="saveResult">
       <label class="form-label" for="r-text">نتیجه</label>
       <textarea id="r-text" v-model="result.text" class="form-control mb-3" rows="4" maxlength="4000" required></textarea>
-      <div v-if="result.error" class="alert alert-danger py-2" role="alert">{{ result.error }}</div>
+      <div v-if="result.error" class="alert alert-danger" role="alert">{{ result.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="result.saving">ثبت نتیجه</button>
     </form>
     <hr />
@@ -195,7 +195,7 @@ watch(status, load)
         <label class="form-label" for="l-note">توضیح</label>
         <input id="l-note" v-model="fresh.note" class="form-control" maxlength="500" />
       </div>
-      <div v-if="fresh.error" class="alert alert-danger py-2" role="alert">{{ fresh.error }}</div>
+      <div v-if="fresh.error" class="alert alert-danger" role="alert">{{ fresh.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="fresh.saving">ثبت درخواست</button>
     </form>
   </UiModal>

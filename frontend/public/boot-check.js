@@ -11,7 +11,7 @@
     box.innerHTML =
       '<p style="font-size:18px;margin:0 0 8px">سیستم بارگذاری نشد.</p>' +
       '<p style="margin:0 0 16px">از روشن بودن سیستم مطمئن شوید و از نسخه به‌روز Chrome یا Edge استفاده کنید. اگر مشکل ماند، این پیام را به مسئول سیستم بگویید.</p>' +
-      '<button id="boot-retry" type="button" style="padding:8px 20px;border:0;border-radius:10px;background:#089eaf;color:#fff;font:inherit;cursor:pointer">تلاش دوباره</button>'
+      '<button id="boot-retry" type="button" style="padding:8px 20px;border:0;border-radius:10px;background:#089bab;color:#fff;font:inherit;cursor:pointer">تلاش دوباره</button>'
     document.getElementById('boot-retry').addEventListener('click', function () {
       window.location.reload()
     })

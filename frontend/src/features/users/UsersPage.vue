@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api, ApiError } from '@/api/http'
 import UiCard from '@/components/UiCard.vue'
+import UiPager from '@/components/UiPager.vue'
 import UiModal from '@/components/UiModal.vue'
 import { useAuthStore } from '@/stores/auth'
 import { roleLabel, roles } from './roles'
@@ -150,7 +151,7 @@ onMounted(load)
       <div class="col-auto"><button type="submit" class="btn btn-soft">جستجو</button></div>
     </form>
 
-    <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
 
     <div v-if="loading" class="py-4 text-center text-muted" role="status">در حال بارگذاری...</div>
     <div v-else-if="rows.length === 0" class="py-4 text-center text-muted">کاربری پیدا نشد.</div>
@@ -192,11 +193,7 @@ onMounted(load)
       </table>
     </div>
 
-    <div v-if="pageCount > 1" class="d-flex align-items-center justify-content-center gap-2 mt-3">
-      <button type="button" class="btn btn-soft btn-sm" :disabled="page <= 1" @click="goTo(page - 1)">قبلی</button>
-      <span>{{ page }} از {{ pageCount }}</span>
-      <button type="button" class="btn btn-soft btn-sm" :disabled="page >= pageCount" @click="goTo(page + 1)">بعدی</button>
-    </div>
+    <UiPager :page="page" :page-count="pageCount" @go="goTo" />
   </UiCard>
 
   <UiModal v-if="form.open" title="کاربر جدید" @close="form.open = false">
@@ -221,7 +218,7 @@ onMounted(load)
           </div>
         </div>
       </fieldset>
-      <div v-if="form.error" class="alert alert-danger py-2" role="alert">{{ form.error }}</div>
+      <div v-if="form.error" class="alert alert-danger" role="alert">{{ form.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="form.saving">ذخیره</button>
     </form>
   </UiModal>
@@ -231,7 +228,7 @@ onMounted(load)
       <p class="text-muted small">نشست فعلی این کاربر پایان می‌یابد. رمز جدید را حضوری به او بدهید.</p>
       <label class="form-label" for="reset-password">رمز جدید (حداقل ۱۰ حرف)</label>
       <input id="reset-password" v-model="reset.password" class="form-control mb-3" type="password" dir="ltr" minlength="10" autocomplete="new-password" required />
-      <div v-if="reset.error" class="alert alert-danger py-2" role="alert">{{ reset.error }}</div>
+      <div v-if="reset.error" class="alert alert-danger" role="alert">{{ reset.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="reset.saving">بازنشانی رمز</button>
     </form>
   </UiModal>
@@ -244,7 +241,7 @@ onMounted(load)
           <label class="form-check-label"><input v-model="roleForm.roles" class="form-check-input ms-2" type="checkbox" :value="role.value" />{{ role.label }}</label>
         </div>
       </div>
-      <div v-if="roleForm.error" class="alert alert-danger py-2" role="alert">{{ roleForm.error }}</div>
+      <div v-if="roleForm.error" class="alert alert-danger" role="alert">{{ roleForm.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="roleForm.saving">ذخیره</button>
     </form>
   </UiModal>

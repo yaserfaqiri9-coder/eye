@@ -147,8 +147,8 @@ onMounted(load)
 </script>
 
 <template>
-  <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
-  <div v-if="notice" class="alert alert-success py-2" role="status">{{ notice }}</div>
+  <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
+  <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
 
   <section class="xr-card">
     <div class="xr-card__header flex-wrap">
@@ -214,7 +214,7 @@ onMounted(load)
       <div class="mb-3"><label class="form-label" for="sv-code">کد</label><input id="sv-code" v-model="service.code" class="form-control" dir="ltr" maxlength="30" required /></div>
       <div class="mb-3"><label class="form-label" for="sv-name">نام خدمت</label><input id="sv-name" v-model="service.name" class="form-control" maxlength="150" required /></div>
       <div class="mb-3"><label class="form-label" for="sv-price">قیمت</label><input id="sv-price" v-model.number="service.price" class="form-control" type="number" min="0" step="0.01" required /></div>
-      <div v-if="service.error" class="alert alert-danger py-2" role="alert">{{ service.error }}</div>
+      <div v-if="service.error" class="alert alert-danger" role="alert">{{ service.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="service.saving">ذخیره</button>
     </form>
   </UiModal>
@@ -224,7 +224,7 @@ onMounted(load)
       <p class="small text-muted">قیمت جدید فقط روی فاکتورهای بعدی اثر دارد.</p>
       <label class="form-label" for="pr-value">قیمت جدید</label>
       <input id="pr-value" v-model.number="price.value" class="form-control mb-3" type="number" min="0" step="0.01" required />
-      <div v-if="price.error" class="alert alert-danger py-2" role="alert">{{ price.error }}</div>
+      <div v-if="price.error" class="alert alert-danger" role="alert">{{ price.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="price.saving">ذخیره</button>
     </form>
   </UiModal>
@@ -239,7 +239,7 @@ onMounted(load)
           <option v-for="s in services" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
       </div>
-      <div v-if="test.error" class="alert alert-danger py-2" role="alert">{{ test.error }}</div>
+      <div v-if="test.error" class="alert alert-danger" role="alert">{{ test.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="test.saving">ذخیره</button>
     </form>
   </UiModal>

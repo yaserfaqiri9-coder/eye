@@ -186,7 +186,7 @@ onMounted(load)
 </script>
 
 <template>
-  <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
+  <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
   <section class="xr-card">
     <div class="xr-card__header flex-wrap">
       <nav class="xr-tabs" role="tablist" aria-label="بخش‌های گدام">
@@ -287,7 +287,7 @@ onMounted(load)
         <div class="col-6"><label class="form-label" for="pr-reorder">حد کمبود</label><input id="pr-reorder" v-model.number="product.reorderLevel" class="form-control" type="number" min="0" step="any" /></div>
         <div class="col-6"><label class="form-label" for="pr-price">قیمت فروش</label><input id="pr-price" v-model.number="product.salePrice" class="form-control" type="number" min="0" step="0.01" /></div>
       </div>
-      <div v-if="product.error" class="alert alert-danger py-2" role="alert">{{ product.error }}</div>
+      <div v-if="product.error" class="alert alert-danger" role="alert">{{ product.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="product.saving">ذخیره</button>
     </form>
   </UiModal>
@@ -303,7 +303,7 @@ onMounted(load)
         <div class="col-12"><label class="form-label" for="pu-lot">شماره بچ/لات</label><input id="pu-lot" v-model="purchase.lot" class="form-control" dir="ltr" maxlength="50" /></div>
         <div class="col-12"><ShamsiDateInput v-model="purchase.expiry" label="تاریخ انقضا" /></div>
       </div>
-      <div v-if="purchase.error" class="alert alert-danger py-2" role="alert">{{ purchase.error }}</div>
+      <div v-if="purchase.error" class="alert alert-danger" role="alert">{{ purchase.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="purchase.saving">ثبت خرید</button>
     </form>
   </UiModal>
@@ -314,7 +314,7 @@ onMounted(load)
       <div class="mb-3"><label class="form-label" for="ad-kind">نوع</label><select id="ad-kind" v-model="adjust.kind" class="form-select"><option value="Adjustment">تعدیل شمارش</option><option value="Consumption">مصرف بخش</option></select></div>
       <div class="mb-3"><label class="form-label" for="ad-qty">تغییر مقدار (کاهش با علامت منفی)</label><input id="ad-qty" v-model.number="adjust.quantity" class="form-control" dir="ltr" type="number" step="any" required /></div>
       <div class="mb-3"><label class="form-label" for="ad-reason">دلیل</label><input id="ad-reason" v-model="adjust.reason" class="form-control" minlength="3" maxlength="300" required /></div>
-      <div v-if="adjust.error" class="alert alert-danger py-2" role="alert">{{ adjust.error }}</div>
+      <div v-if="adjust.error" class="alert alert-danger" role="alert">{{ adjust.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="adjust.saving">ثبت تعدیل</button>
     </form>
   </UiModal>
@@ -324,7 +324,7 @@ onMounted(load)
       <p>از {{ transfer.batch.locationName }} — موجودی: {{ quantity(transfer.batch.quantity) }}</p>
       <div class="mb-3"><label class="form-label" for="tr-to">مقصد</label><select id="tr-to" v-model="transfer.to" class="form-select"><option v-for="(label, value) in locationLabels" :key="value" :value="value">{{ label }}</option></select></div>
       <div class="mb-3"><label class="form-label" for="tr-qty">مقدار</label><input id="tr-qty" v-model.number="transfer.quantity" class="form-control" type="number" min="0.001" step="any" :max="transfer.batch.quantity" required /></div>
-      <div v-if="transfer.error" class="alert alert-danger py-2" role="alert">{{ transfer.error }}</div>
+      <div v-if="transfer.error" class="alert alert-danger" role="alert">{{ transfer.error }}</div>
       <button type="submit" class="btn btn-primary" :disabled="transfer.saving">ثبت انتقال</button>
     </form>
   </UiModal>

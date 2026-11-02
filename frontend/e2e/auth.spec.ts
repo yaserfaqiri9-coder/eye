@@ -26,7 +26,7 @@ test('admin creates a receptionist who sees no user management, then is deactiva
   page.on('pageerror', (e) => consoleErrors.push(e.message))
 
   await login(page, adminUser, adminPassword)
-  await expect(page.getByText('خوش آمدید')).toBeVisible()
+  await expect(page.getByRole('img', { name: 'تصویر خوش‌آمدگویی' })).toBeVisible()
 
   await page.getByRole('link', { name: 'کاربران' }).click()
   await expect(page).toHaveURL(/\/users$/)

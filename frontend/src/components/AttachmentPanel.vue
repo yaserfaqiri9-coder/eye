@@ -56,7 +56,7 @@ onMounted(load)
       <li v-for="row in rows" :key="row.id"><a :href="`/api/attachments/${row.id}`" target="_blank" rel="noopener">{{ row.fileName }}</a> — {{ formatDateTime(row.createdAt) }}</li>
     </ul>
     <p v-else class="small text-muted mb-2">فایلی ضمیمه نشده است.</p>
-    <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
     <input v-if="canUpload" class="form-control" type="file" accept="application/pdf,image/png,image/jpeg" :disabled="uploading" aria-label="بارگذاری فایل (PDF، PNG یا JPEG تا ۱۰ مگابایت)" @change="upload" />
   </div>
 </template>

@@ -13,10 +13,10 @@ const rows = [
 <template>
   <div class="preview">
     <div class="preview__stats">
-      <StatCard label="مراجعات امروز" value="۱۲۰" icon="bi-person-fill" />
-      <StatCard label="در انتظار" value="۱۴" icon="bi-hourglass-split" tone="orange" />
-      <StatCard label="لغو شده" value="۲" icon="bi-x-lg" tone="red" />
-      <StatCard label="نوبت‌ها" value="۳۸" icon="bi-calendar-event" tone="cyan" />
+      <StatCard label="مراجعات امروز" value="۱۲۰" icon="ri-user-3-fill" />
+      <StatCard label="در انتظار" value="۱۴" icon="ri-hourglass-fill" tone="orange" />
+      <StatCard label="لغو شده" value="۲" icon="ri-close-line" tone="red" />
+      <StatCard label="نوبت‌ها" value="۳۸" icon="ri-calendar-event-fill" tone="cyan" />
     </div>
 
     <UiCard title="جدول نمونه">

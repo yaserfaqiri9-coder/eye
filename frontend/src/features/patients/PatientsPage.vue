@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, errorMessage } from '@/api/http'
 import UiCard from '@/components/UiCard.vue'
+import UiPager from '@/components/UiPager.vue'
 import { useAuthStore } from '@/stores/auth'
 import PatientFormModal from './PatientFormModal.vue'
 import { genderLabels, patientName, type Patient, type PatientListItem } from './types'
@@ -88,7 +89,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="error" class="alert alert-danger py-2" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
     <div v-if="loading && rows.length === 0" class="py-4 text-center text-muted" role="status">در حال بارگذاری...</div>
     <div v-else-if="rows.length === 0" class="py-4 text-center text-muted">مریضی پیدا نشد.</div>
     <div v-else class="xr-table-wrap">
@@ -116,11 +117,7 @@ onBeforeUnmount(() => {
       </table>
     </div>
 
-    <div v-if="pageCount > 1" class="d-flex align-items-center justify-content-center gap-2 mt-3">
-      <button type="button" class="btn btn-soft btn-sm" :disabled="page <= 1" @click="goTo(page - 1)">قبلی</button>
-      <span>{{ page }} از {{ pageCount }}</span>
-      <button type="button" class="btn btn-soft btn-sm" :disabled="page >= pageCount" @click="goTo(page + 1)">بعدی</button>
-    </div>
+    <UiPager :page="page" :page-count="pageCount" @go="goTo" />
   </UiCard>
 
   <PatientFormModal v-if="creating" @close="creating = false" @saved="onSaved" />
