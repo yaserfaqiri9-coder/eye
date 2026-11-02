@@ -23,6 +23,8 @@ const saving = ref(false)
 const error = ref('')
 const matches = ref<PatientListItem[]>([])
 const key = newIdempotencyKey()
+// Confirming changes the request, so it needs its own key, but a retry of the confirmation must still register one patient.
+const confirmKey = newIdempotencyKey()
 
 async function save(confirmNotDuplicate = false) {
   saving.value = true
@@ -36,7 +38,7 @@ async function save(confirmNotDuplicate = false) {
   try {
     const saved = props.patient
       ? await api<Patient>(`/patients/${props.patient.id}`, { method: 'PUT', body })
-      : await api<Patient>('/patients', { method: 'POST', body, idempotencyKey: confirmNotDuplicate ? newIdempotencyKey() : key })
+      : await api<Patient>('/patients', { method: 'POST', body, idempotencyKey: confirmNotDuplicate ? confirmKey : key })
     emit('saved', saved)
   } catch (cause) {
     if (cause instanceof ApiError && cause.code === 'possible_duplicate') {

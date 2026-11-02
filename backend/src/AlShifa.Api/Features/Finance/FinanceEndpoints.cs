@@ -260,9 +260,12 @@ public static class FinanceEndpoints
             await idempotency.RunAsync(request, async () =>
             {
                 var userId = user.Id;
-                var session = await db.CashSessions.AsNoTracking()
-                    .Where(s => s.OpenedByUserId == userId && s.ClosedAt == null)
-                    .Select(s => (long?)s.Id).FirstOrDefaultAsync(ct)
+                // A shared lock lets payments run side by side, but makes closing the session wait until they commit,
+                // so the amount calculated at closing can never miss one.
+                var sessions = await db.CashSessions
+                    .FromSqlInterpolated($"SELECT * FROM CashSessions WHERE OpenedByUserId = {userId} AND ClosedAt IS NULL ORDER BY Id LIMIT 1 FOR SHARE")
+                    .AsNoTracking().ToListAsync(ct);
+                var session = sessions.FirstOrDefault()?.Id
                     ?? throw new AppException(StatusCodes.Status409Conflict, "no_open_session", "ابتدا صندوق را باز کنید.");
 
                 var invoice = await invoices.LockAsync(request.InvoiceId, ct);
@@ -307,7 +310,10 @@ public static class FinanceEndpoints
             {
                 var invoiceId = await db.Payments.Where(p => p.Id == request.PaymentId).Select(p => (long?)p.InvoiceId).SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
                 var invoice = await invoices.LockAsync(invoiceId, ct);
-                var payment = await db.Payments.SingleAsync(p => p.Id == request.PaymentId, ct);
+
+                // Must be a locking read: a plain read here sees the data from before the wait for the invoice lock,
+                // so simultaneous refunds would each see the full amount as still available.
+                var payment = await db.Payments.FromSqlInterpolated($"SELECT * FROM Payments WHERE Id = {request.PaymentId} FOR UPDATE").SingleAsync(ct);
 
                 if (request.Amount > payment.Amount - payment.Refunded)
                 {
@@ -378,7 +384,8 @@ public static class FinanceEndpoints
 
         group.MapPost("/sessions/{id:long}/close", async (long id, CloseSessionRequest request, AppDbContext db, CurrentUser user, AuditService audit, CancellationToken ct) =>
         {
-            var session = await db.CashSessions.SingleOrDefaultAsync(s => s.Id == id, ct) ?? throw AppException.NotFound();
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var session = await db.CashSessions.FromSqlInterpolated($"SELECT * FROM CashSessions WHERE Id = {id} FOR UPDATE").SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
             db.Entry(session).Property(s => s.Version).OriginalValue = request.Version;
             if (session.ClosedAt is not null)
             {
@@ -397,6 +404,7 @@ public static class FinanceEndpoints
             session.ClosedByUserId = user.Id;
             audit.Add("CashSessionClosed", "CashSession", id.ToString(), $"expected {session.ExpectedAmount:F2} counted {request.CountedAmount:F2}");
             await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
             return Results.Ok(await QuerySessions(db, db.CashSessions.AsNoTracking().Where(s => s.Id == id)).SingleAsync(ct));
         }).RequirePermission("cash.edit");
     }

@@ -274,6 +274,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
   <UiModal v-if="closing.open && openSession" title="بستن صندوق" @close="closing.open = false">
     <form @submit.prevent="close">
       <p>دریافت نقدی این جلسه: {{ money(openSession.cashCollected) }}<br />مبلغ مورد انتظار: {{ money(openSession.openingAmount + openSession.cashCollected) }}</p>
+      <p class="small text-muted">این مبلغ فقط موجودی آغاز و دریافت نقدی این جلسه است. برگشت وجه و مصارف از آن کم نشده است.</p>
       <label class="form-label" for="c-counted">مبلغ شمارش‌شده</label>
       <input id="c-counted" v-model.number="closing.counted" class="form-control mb-3" type="number" min="0" step="0.01" required />
       <div v-if="closing.error" class="alert alert-danger" role="alert">{{ closing.error }}</div>

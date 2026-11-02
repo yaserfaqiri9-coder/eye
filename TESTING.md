@@ -2,7 +2,8 @@
 
 | نوع | ابزار | تعداد | اجرا |
 |---|---|---|---|
-| Integration | xUnit روی MySQL 8.4 واقعی و دیتابیس جدا `alshifa_test` | ۷۱ | `cd backend; dotnet test` |
+| Integration | xUnit روی MySQL 8.4 واقعی و دیتابیس جدا `alshifa_test` | ۹۰ | `cd backend; dotnet test` |
+| بسته منتشرشده | `scripts/pilot/smoke.ps1 -Release <پوشه> -LanIp <IP>` با MySQL و پوشه موقت جدا؛ در پایان پاک می‌شود | ۱۸ بررسی، شامل ۷ آزمون مرورگر | بدون Administrator. بدون سرویس Windows، دیوار آتش، کامپیوتر دوم و Tailscale |
 | E2E | Playwright با Edge | ۱۷ | `cd frontend; npx playwright test` با `ALSHIFA_E2E_USER` و `ALSHIFA_E2E_PASSWORD`. به سرور توسعه نیاز دارد: `npx vite --port 5199` و `ALSHIFA_E2E_BASE=http://localhost:5199`، چون `start.bat` روی 5173 نسخه Build شده را اجرا می‌کند |
 | Load و خاموشی | `scripts/load/run-load.ps1` (با `-CrashTest`) | ۲ اجرا | دیتابیس جدا و موقت `alshifa_load` |
 | پشتیبان و بازیابی | `scripts/backup-test.ps1` | ۱ اجرا | بازیابی در دیتابیس موقت و مقایسه جدول‌به‌جدول |
@@ -46,8 +47,26 @@ InMemory استفاده نشده چون قفل‌ها، Unique و CHECK باید
 | 29 | عملکرد با داده زیاد ساختگی | Load | پاس (جزئیات در `PROGRESS.md`) |
 | 30 | یکپارچگی مالی و طبی پس از هم‌زمانی | Load | پاس برای یکپارچگی مالی، موجودی و شماره‌ها. برای داده طبی فقط Unique و تداخل نسخه بررسی شد |
 
+## سناریوهای پایلوت چهار کاربره
+
+| # | سناریو | شواهد | نتیجه |
+|---|---|---|---|
+| 1 | ورود هم‌زمان چهار کاربر با نشست مستقل | `PilotReadinessTests`, smoke | پاس |
+| 2 | پذیرش مریض می‌سازد، داکتر همان را می‌بیند | `PilotReadinessTests`, smoke | پاس |
+| 3 | نسخه داکتر در دواخانه | `ClinicalTests`, smoke | پاس |
+| 4 | ویرایش متعارض | `ConcurrencyTests` هم‌زمان واقعی، `ReceptionTests`, `ClinicalTests`, مرورگر | پاس (یک برنده، بقیه 409، بدون از دست رفتن داده) |
+| 5 | پرداخت تکراری | `ConcurrencyTests`, `FinanceTests`, مرورگر | پاس: هم‌زمان، پاسخ گم‌شده روی شبکه، دو کلیک، چند صندوق‌دار، برگشت وجه هم‌زمان، بستن صندوق هنگام پرداخت |
+| 6 | خطا در میانه تراکنش | `PilotReadinessTests` | پاس (بدون باقی‌مانده؛ تکرار با همان کلید موفق) |
+| 7 | قطع انترنت | smoke, مرورگر | **بخشی:** همه آدرس‌های بیرونی مسدود شد و هیچ درخواستی نبود؛ API و MySQL هنگام کار هیچ اتصالی بیرون از میزبان نداشتند؛ قطع و وصل شبکه مرورگر پاس شد. کشیدن کابل واقعی فقط در `PILOT-CHECKLIST.md` |
+| 8 | وصل‌شدن دوباره انترنت و دسترسی از راه دور | - | **اجرا نشد.** Tailscale نصب نیست. مسیر پروکسی فقط با هدرهای شبیه‌سازی‌شده بررسی شد |
+| 9 | ری‌استارت میزبان | smoke | **بخشی:** kill ناگهانی وسط نوشتن، قطع فقط دیتابیس، و شروع API پیش از دیتابیس پاس شد. ری‌استارت واقعی و شروع خودکار سرویس آزمایش نشد |
+| 10 | پشتیبان و بازیابی جدا | smoke | پاس با GnuPG داخل Git: رمز چاپ‌شده، فایل خراب، رمز غلط، باقی‌مانده خوانا، بررسی فایل ضمیمه. Gpg4win آزمایش نشده است |
+| 11 | عملیات غیرمجاز | `PilotReadinessTests` همه endpointها، `AuthTests`, smoke | پاس |
+| 12 | کار هم‌زمان بخش‌ها | `PilotReadinessTests` ۱۲ مسیر موازی | پاس |
+
 ## آزمایش‌نشده
 
+- `deploy/windows/install.ps1`، `update.ps1` و `uninstall.ps1` (نیازمند Administrator)، کامپیوتر دوم و `PILOT-CHECKLIST.md`.
 - آزمون نفوذ مستقل.
 - کار با چند مرورگر یا سیستم‌عامل دیگر؛ E2E فقط با Edge اجرا شد.
 - Backend روی Linux، Nginx و HTTPS واقعی؛ حالت Production فقط با smoke test روی Windows و هدرهای شبیه‌سازی‌شده پروکسی بررسی شد.

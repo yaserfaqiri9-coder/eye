@@ -35,3 +35,6 @@ storage/
 .claude/
 *.user
 *.log
+
+# Release builds of the hospital package
+/release/

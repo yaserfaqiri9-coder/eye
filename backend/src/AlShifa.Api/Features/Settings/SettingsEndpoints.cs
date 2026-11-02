@@ -81,6 +81,9 @@ public static class SettingsEndpoints
             return Results.Ok(await LoadAsync(db, ct));
         }).RequirePermission("settings.edit");
 
+        settings.MapGet("/backup-status", (IConfiguration config) => Results.Ok(BackupStatus.Read(config["Backup:StatusFile"], DateTime.UtcNow)))
+            .RequirePermission("settings.view");
+
         app.MapPost("/api/cash/registers", async (SaveRegisterRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
         {
             var register = new Finance.CashRegister { Name = request.Name.Trim() };

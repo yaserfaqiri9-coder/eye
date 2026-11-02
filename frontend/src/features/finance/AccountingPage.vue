@@ -157,9 +157,10 @@ async function submitCancel() {
   }
 }
 
-onMounted(async () => {
-  await loadAll()
+onMounted(() => {
+  // Chosen before loading, so a tab the user clicks while data is still arriving stays selected.
   tab.value = tabs.value[0]?.key ?? 'ledger'
+  loadAll()
 })
 </script>
 

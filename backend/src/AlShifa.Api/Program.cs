@@ -19,8 +19,16 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Hosting.WindowsServices;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    // A Windows service starts in System32, so its files must be found relative to the executable.
+    ContentRootPath = WindowsServiceHelpers.IsWindowsService() ? AppContext.BaseDirectory : null,
+});
+
+builder.Host.UseWindowsService(o => o.ServiceName = "AlShifaApi");
 
 var connectionString = builder.Configuration.GetConnectionString("Default")
     ?? throw new InvalidOperationException("ConnectionStrings:Default is not configured.");
@@ -144,6 +152,9 @@ if (!app.Environment.IsProduction())
     await Seeder.SeedReferenceDataAsync(scope.ServiceProvider);
 }
 
+// On the hospital host there is no separate web server: the published web app sits in wwwroot next to the API.
+var hostsFrontend = app.Environment.WebRootFileProvider.GetFileInfo("index.html").Exists;
+
 app.UseForwardedHeaders();
 app.UseExceptionHandler();
 
@@ -152,6 +163,10 @@ app.Use((http, next) =>
     http.Response.Headers.XContentTypeOptions = "nosniff";
     http.Response.Headers.XFrameOptions = "DENY";
     http.Response.Headers["Referrer-Policy"] = "no-referrer";
+    if (hostsFrontend)
+    {
+        http.Response.Headers.ContentSecurityPolicy = FrontendHosting.ContentSecurityPolicy;
+    }
 
     // Patient data must not stay in shared browser or proxy caches.
     if (http.Request.Path.StartsWithSegments("/api"))
@@ -165,6 +180,11 @@ app.Use((http, next) =>
 if (app.Environment.IsProduction())
 {
     app.UseHsts();
+}
+
+if (hostsFrontend)
+{
+    app.UseFrontendFiles();
 }
 
 app.UseRateLimiter();
@@ -210,6 +230,11 @@ app.MapSettings();
 app.MapReports();
 app.MapPrint();
 app.MapAudit();
+
+if (hostsFrontend)
+{
+    app.MapFrontendFallback();
+}
 
 app.Run();
 

@@ -1,15 +1,31 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { api } from '@/api/http'
 import { connectRealtime, disconnectRealtime, liveConnected } from '@/api/realtime'
+import { useAuthStore } from '@/stores/auth'
+import { formatDateTime } from '@/utils/date'
 import AppFooter from './AppFooter.vue'
 import AppHeader from './AppHeader.vue'
 import AppSidebar from './AppSidebar.vue'
 
 const MINI_KEY = 'alshifa.sidebar.mini'
+const BACKUP_CHECK_MS = 10 * 60_000
 
+const auth = useAuthStore()
 const sidebarOpen = ref(false)
 const sidebarMini = ref(readMini())
 const mounted = ref(false)
+const backupProblem = ref<{ lastSuccessAt: string | null } | null>(null)
+let backupTimer: ReturnType<typeof setInterval> | undefined
+
+async function checkBackup() {
+  try {
+    const status = await api<{ needsAttention: boolean; lastSuccessAt: string | null }>('/settings/backup-status')
+    backupProblem.value = status.needsAttention ? status : null
+  } catch {
+    // A failed check says nothing about the backup; the connection warning already covers an unreachable server.
+  }
+}
 
 function readMini() {
   try {
@@ -31,9 +47,16 @@ onMounted(() => {
   connectRealtime()
   // Give the first connection a moment before warning about it.
   setTimeout(() => (mounted.value = true), 3000)
+  if (auth.can('settings.view')) {
+    checkBackup()
+    backupTimer = setInterval(checkBackup, BACKUP_CHECK_MS)
+  }
 })
 
-onBeforeUnmount(disconnectRealtime)
+onBeforeUnmount(() => {
+  disconnectRealtime()
+  clearInterval(backupTimer)
+})
 </script>
 
 <template>
@@ -44,6 +67,9 @@ onBeforeUnmount(disconnectRealtime)
       <main class="layout__content">
         <div v-if="mounted && !liveConnected" class="alert alert-warning" role="status">
           اتصال زنده قطع است. اطلاعات این صفحه ممکن است تازه نباشد؛ سیستم خودکار دوباره وصل می‌شود.
+        </div>
+        <div v-if="backupProblem" class="alert alert-danger" role="alert">
+          پشتیبان‌گیری خودکار مشکل دارد. آخرین پشتیبان موفق: {{ formatDateTime(backupProblem.lastSuccessAt) }}. به مسئول سیستم اطلاع دهید.
         </div>
         <RouterView />
       </main>
