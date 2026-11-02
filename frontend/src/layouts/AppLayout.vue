@@ -9,6 +9,7 @@ const MINI_KEY = 'alshifa.sidebar.mini'
 
 const sidebarOpen = ref(false)
 const sidebarMini = ref(readMini())
+const sidebarCollapsed = ref(sidebarMini.value)
 const mounted = ref(false)
 
 function readMini() {
@@ -37,8 +38,14 @@ onBeforeUnmount(disconnectRealtime)
 </script>
 
 <template>
-  <div class="layout" :class="{ 'layout--mini': sidebarMini }">
-    <AppSidebar :open="sidebarOpen" :mini="sidebarMini" @close="sidebarOpen = false" @toggle-mini="sidebarMini = !sidebarMini" />
+  <div class="layout" :class="{ 'layout--mini': sidebarCollapsed }">
+    <AppSidebar
+      :open="sidebarOpen"
+      :mini="sidebarMini"
+      @close="sidebarOpen = false"
+      @toggle-mini="sidebarMini = !sidebarMini"
+      @collapse-change="sidebarCollapsed = $event"
+    />
     <div class="layout__main">
       <AppHeader @toggle-sidebar="sidebarOpen = !sidebarOpen" />
       <main class="layout__content">
@@ -53,15 +60,17 @@ onBeforeUnmount(disconnectRealtime)
 </template>
 
 <style scoped>
-/* The template's gradient runs from the sidebar across the page; mirrored here so the sidebar keeps its darker end. */
 .layout {
   --xr-sidebar-current: var(--xr-sidebar-width);
   min-height: 100vh;
-  background: linear-gradient(to left, var(--xr-primary) 0%, var(--xr-primary-end) 100%);
+  background: var(--xr-gradient-shell);
 }
 
-.layout--mini {
-  --xr-sidebar-current: var(--xr-sidebar-mini);
+/* Collapsing needs hover to slide the labels back out, so touch screens keep the full menu. */
+@media (hover: hover) {
+  .layout--mini {
+    --xr-sidebar-current: var(--xr-sidebar-mini);
+  }
 }
 
 .layout__main {

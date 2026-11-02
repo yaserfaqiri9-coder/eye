@@ -3,10 +3,39 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { menu } from './menu'
 
-defineProps<{ open: boolean; mini: boolean }>()
-defineEmits<{ close: []; 'toggle-mini': [] }>()
+const props = defineProps<{ open: boolean; mini: boolean }>()
+const emit = defineEmits<{ close: []; 'toggle-mini': []; 'collapse-change': [collapsed: boolean] }>()
 
 const auth = useAuthStore()
+
+const hovered = ref(false)
+const focused = ref(false)
+const collapsed = computed(() => props.mini && !hovered.value && !focused.value)
+
+/** The page makes room for the slid-out menu instead of sitting under it. */
+watch(collapsed, (value) => emit('collapse-change', value))
+
+/** A finger has no hover: its enter and leave would only flash the full menu open. */
+function onPointerEnter(event: PointerEvent) {
+  if (event.pointerType !== 'touch') hovered.value = true
+}
+
+/** Only keyboard focus opens the menu, so a clicked link does not hold it open after the pointer leaves. */
+function onFocusIn(event: FocusEvent) {
+  focused.value = (event.target as HTMLElement).matches(':focus-visible')
+}
+
+function onFocusOut(event: FocusEvent) {
+  const inside = (event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)
+  if (!inside) focused.value = false
+}
+
+/** The pointer is still over the menu after this click; without clearing it the menu would stay open over the page. */
+function toggleMini() {
+  hovered.value = false
+  focused.value = false
+  emit('toggle-mini')
+}
 
 const RAIL_HEIGHT = 88
 const MIN_THUMB = 22
@@ -71,12 +100,25 @@ watch(sections, () => nextTick(measure))
 
 <template>
   <div v-if="open" class="sidebar-backdrop" @click="$emit('close')"></div>
-  <aside class="sidebar" :class="{ 'sidebar--open': open, 'sidebar--mini': mini }">
+  <aside
+    class="sidebar"
+    :class="{ 'sidebar--open': open, 'sidebar--mini': collapsed }"
+    @pointerenter="onPointerEnter"
+    @pointerleave="hovered = false"
+    @focusin="onFocusIn"
+    @focusout="onFocusOut"
+  >
     <div class="sidebar__brand">
       <i class="ri-eye-fill sidebar__logo" aria-hidden="true"></i>
       <span class="sidebar__name">الشفا</span>
-      <button type="button" class="sidebar__toggle" aria-label="جمع کردن منو" title="جمع کردن منو" @click="$emit('toggle-mini')">
-        <i class="ri-more-fill" aria-hidden="true"></i>
+      <button
+        type="button"
+        class="sidebar__toggle"
+        :aria-label="mini ? 'باز نگه داشتن منو' : 'جمع کردن منو'"
+        :title="mini ? 'باز نگه داشتن منو' : 'جمع کردن منو'"
+        @click="toggleMini"
+      >
+        <i :class="mini ? 'ri-pushpin-line' : 'ri-more-fill'" aria-hidden="true"></i>
       </button>
     </div>
     <div ref="scroller" class="sidebar__scroll" @scroll.passive="measure">
@@ -89,7 +131,7 @@ watch(sections, () => nextTick(measure))
             :to="item.to"
             class="sidebar__link"
             exact-active-class="sidebar__link--active"
-            :title="mini ? item.label : undefined"
+            :title="collapsed ? item.label : undefined"
             @click="$emit('close')"
           >
             <i :class="item.icon" aria-hidden="true"></i>
@@ -118,6 +160,8 @@ watch(sections, () => nextTick(measure))
   flex-direction: column;
   width: var(--xr-sidebar-width);
   overflow: hidden;
+  /* Fixed so it lines up with the layout's gradient; the page's rounded corners pass under the menu as both animate. */
+  background: var(--xr-gradient-shell) fixed;
   color: #fff;
   box-shadow: var(--xr-shadow-bar);
   transition: width 0.3s ease-in-out;
@@ -219,12 +263,25 @@ watch(sections, () => nextTick(measure))
   line-height: 41px;
 }
 
+/* Small dark label with a rule running to the edge, so a group title cannot be read as one more white link. */
 .sidebar__section {
-  padding: 15px;
-  font-size: 15px;
-  font-weight: 500;
-  line-height: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 20px 15px 8px;
+  color: #03404a;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
   white-space: nowrap;
+}
+
+.sidebar__section::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.35);
 }
 
 .sidebar__link {
@@ -259,21 +316,28 @@ watch(sections, () => nextTick(measure))
   box-shadow: var(--xr-shadow-active);
 }
 
-/* Collapsed: icons only, and the full menu slides back out while the pointer is over it. */
-@media (min-width: 992px) {
-  .sidebar--mini:not(:hover) {
+/* Collapsed: icons only, and the full menu slides back out while the pointer or keyboard focus is in it. */
+@media (min-width: 992px) and (hover: hover) {
+  .sidebar--mini {
     width: var(--xr-sidebar-mini);
   }
 
-  .sidebar--mini:not(:hover) .sidebar__name,
-  .sidebar--mini:not(:hover) .sidebar__toggle,
-  .sidebar--mini:not(:hover) .sidebar__link span,
-  .sidebar--mini:not(:hover) .sidebar__section span {
+  .sidebar--mini .sidebar__name,
+  .sidebar--mini .sidebar__toggle,
+  .sidebar--mini .sidebar__link span,
+  .sidebar--mini .sidebar__section span {
     display: none;
   }
 
-  .sidebar--mini:not(:hover) .sidebar__section {
-    min-height: 48px;
+  /* With the title hidden only its rule is left, at the same height, so icons do not jump on hover. */
+  .sidebar--mini .sidebar__section:first-child::after {
+    display: none;
+  }
+}
+
+@media (hover: none) {
+  .sidebar__toggle {
+    display: none;
   }
 }
 

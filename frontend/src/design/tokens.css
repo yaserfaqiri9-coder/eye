@@ -25,6 +25,8 @@
   --xr-track: #eef1f7;
 
   --xr-gradient-primary: linear-gradient(to right, #089bab 0%, #0db5c8 100%);
+  /* The template's gradient runs from the sidebar across the page; mirrored here so the sidebar keeps its darker end. */
+  --xr-gradient-shell: linear-gradient(to left, #089bab 0%, #0db5c8 100%);
   --xr-gradient-green: linear-gradient(to right, #31c02c 0%, #57de53 100%);
   --xr-gradient-red: linear-gradient(to right, #d84a45 0%, #f26361 100%);
   --xr-gradient-orange: linear-gradient(to right, #fc9e5b 0%, #ffb67e 100%);
