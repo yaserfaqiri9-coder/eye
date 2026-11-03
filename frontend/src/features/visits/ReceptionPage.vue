@@ -31,7 +31,7 @@ interface AppointmentRow {
   version: number
 }
 
-const appointmentLabels: Record<string, string> = { Scheduled: 'نوبت', CheckedIn: 'پذیرش‌شده', Cancelled: 'لغو شده', NoShow: 'نیامده' }
+const appointmentLabels: Record<string, string> = { Scheduled: 'در انتظار حضور', CheckedIn: 'پذیرش‌شده', Cancelled: 'لغو شده', NoShow: 'نیامده' }
 
 const auth = useAuthStore()
 const calls = useCallDesk('Reception')
@@ -40,6 +40,7 @@ const totalVisits = ref(0)
 const appointments = ref<AppointmentRow[]>([])
 const departments = ref<ComboOption[]>([])
 const doctors = ref<ComboOption[]>([])
+const visitFee = ref<number | null>(null)
 const departmentId = ref<number | null>(null)
 const loading = ref(true)
 const error = ref('')
@@ -61,7 +62,6 @@ const canCollect = computed(() => auth.can('visitfees.create'))
 const session = ref<CashSession | null>(null)
 const registers = ref<{ id: number; name: string }[]>([])
 const cash = reactive({ registerId: null as number | null, opening: 0, closing: false, counted: 0, saving: false, error: '' })
-const paidTokens = computed<ComboOption[]>(() => tokens.value.filter((t) => t.paid).map((t) => ({ value: t.id, label: `نوبت ${quantity(t.queueNumber)}`, hint: t.departmentName })))
 
 async function loadDesk() {
   if (!auth.can('visitfees.view')) return
@@ -206,10 +206,11 @@ async function cancelAppointment(row: AppointmentRow) {
   await refresh()
 }
 
-const checkIn = reactive({ row: null as AppointmentRow | null, tokenId: null as number | null, saving: false, error: '', key: '' })
+const checkIn = reactive({ row: null as AppointmentRow | null, departmentId: null as number | null, saving: false, error: '', key: '' })
 
 function openCheckIn(row: AppointmentRow) {
-  Object.assign(checkIn, { row, tokenId: null, saving: false, error: '', key: newIdempotencyKey() })
+  const defaultDepartment = departments.value.find((d) => d.label === 'معاینه ابتدایی')?.value ?? departments.value[0]?.value ?? null
+  Object.assign(checkIn, { row, departmentId: defaultDepartment, saving: false, error: '', key: newIdempotencyKey() })
 }
 
 async function submitCheckIn() {
@@ -219,12 +220,14 @@ async function submitCheckIn() {
     await api(`/appointments/${checkIn.row!.id}/check-in`, {
       method: 'POST',
       idempotencyKey: checkIn.key,
-      body: { departmentId: tokens.value.find((t) => t.id === checkIn.tokenId)?.departmentId, version: checkIn.row!.version, tokenId: checkIn.tokenId },
+      body: { departmentId: checkIn.departmentId, version: checkIn.row!.version },
     })
     checkIn.row = null
     await refresh()
   } catch (cause) {
     checkIn.error = errorMessage(cause)
+    // Keep the key when the result is unknown so retry cannot charge twice.
+    if (cause instanceof ApiError && !cause.outcomeUnknown) checkIn.key = newIdempotencyKey()
   } finally {
     checkIn.saving = false
   }
@@ -273,7 +276,14 @@ useLiveRefresh(['VisitCreated', 'VisitStatusChanged', 'PreExamCompleted', 'Consu
 
 onMounted(async () => {
   try {
-    ;[departments.value, doctors.value] = await Promise.all([departmentOptions(), doctorOptions()])
+    const [loadedDepartments, loadedDoctors, loadedFee] = await Promise.all([
+      departmentOptions(),
+      doctorOptions(),
+      auth.can('visitfees.view') ? api<{ price: number }>('/visit-tokens/fee') : Promise.resolve(null),
+    ])
+    departments.value = loadedDepartments
+    doctors.value = loadedDoctors
+    visitFee.value = loadedFee?.price ?? null
     if (auth.can('cash.create')) {
       registers.value = await api<typeof registers.value>('/cash/registers')
       cash.registerId = registers.value.find((r) => r.name === 'صندوق پذیرش')?.id ?? registers.value[0]?.id ?? null
@@ -289,6 +299,14 @@ watch(departmentId, refresh)
 
 <template>
   <div class="d-grid gap-4">
+    <div class="reception-heading">
+      <div>
+        <h1 class="h4 mb-1">پذیرش امروز</h1>
+        <p class="text-muted mb-0">مریض حضوری را از اینجا پذیرش کنید؛ وقت‌های قبلی در بخش پایین با یک مرحله تکمیل می‌شوند.</p>
+      </div>
+      <button v-if="auth.can('visits.create')" type="button" class="btn btn-primary text-nowrap" @click="addingVisit = true">پذیرش مریض حضوری</button>
+    </div>
+
     <div class="reception-stats">
       <StatCard label="مراجعات امروز" :value="totalVisits" icon="ri-group-fill" />
       <StatCard label="در جریان" :value="counts.waiting" icon="ri-hourglass-fill" tone="orange" />
@@ -298,7 +316,7 @@ watch(departmentId, refresh)
 
     <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
 
-    <UiCard v-if="canCollect" title="نوبت و فیس">
+    <UiCard v-if="canCollect" title="در انتظار تکمیل پذیرش">
       <template #actions>
         <button v-if="session" type="button" class="btn btn-soft text-nowrap" @click="cash.closing = true; cash.counted = 0; cash.error = ''">بستن صندوق</button>
       </template>
@@ -322,15 +340,16 @@ watch(departmentId, refresh)
       </dl>
 
       <CallNotice :desks="[calls]" />
+      <div v-if="tokens.length === 0 && fees.length === 0" class="xr-state">موردی در انتظار تکمیل پذیرش نیست.</div>
       <div v-if="tokens.length || fees.length" class="xr-table-wrap" :class="{ 'mt-3': !session }">
         <table class="xr-table">
-          <thead><tr><th>نوبت</th><th>شرح</th><th>مریض</th><th>مبلغ قابل پرداخت</th><th>فراخوان</th><th>عملیات</th></tr></thead>
+          <thead><tr><th>شماره صف</th><th>نوع کار</th><th>مریض</th><th>وضعیت فیس</th><th>فراخوان</th><th>عملیات</th></tr></thead>
           <tbody>
             <tr v-for="t in tokens" :key="`t${t.id}`">
               <td>{{ quantity(t.queueNumber) }}</td>
-              <td>فیس ویزیت، {{ t.departmentName }}</td>
+              <td>پذیرش حضوری — {{ t.departmentName }}</td>
               <td>مشخصات ثبت نشده</td>
-              <td>{{ t.paid ? 'پرداخت‌شده' : money(t.balance) }}</td>
+              <td>{{ t.paid ? 'فیس دریافت شده' : money(t.balance) }}</td>
               <td><CallControls :desk="calls" :token-id="t.id" /></td>
               <td class="text-nowrap">
                 <button type="button" class="btn btn-soft btn-sm" :disabled="!t.paid && !session" @click="activeToken = t">{{ t.paid ? 'ثبت مشخصات' : 'دریافت فیس' }}</button>
@@ -339,7 +358,7 @@ watch(departmentId, refresh)
             </tr>
             <tr v-for="f in fees" :key="`f${f.invoiceId}`">
               <td>—</td>
-              <td>{{ f.description }}</td>
+              <td>فیس خدمت — {{ f.description }}</td>
               <td>{{ f.patientName }} <span class="ltr-num">{{ f.patientFileNumber }}</span></td>
               <td>{{ money(f.balance) }}</td>
               <td></td>
@@ -350,14 +369,13 @@ watch(departmentId, refresh)
       </div>
     </UiCard>
 
-    <UiCard title="صف امروز">
+    <UiCard title="مراجعات امروز">
       <template #actions>
         <div class="d-flex gap-2">
           <select v-model.number="departmentId" class="form-select" aria-label="فیلتر بخش">
             <option :value="null">همه بخش‌ها</option>
             <option v-for="d in departments" :key="d.value" :value="d.value">{{ d.label }}</option>
           </select>
-          <button v-if="auth.can('visits.create')" type="button" class="btn btn-primary text-nowrap" @click="addingVisit = true">نوبت جدید</button>
         </div>
       </template>
 
@@ -366,7 +384,7 @@ watch(departmentId, refresh)
       <div v-else class="xr-table-wrap">
         <table class="xr-table">
           <thead>
-            <tr><th>نوبت</th><th>مریض</th><th>شماره پرونده</th><th>بخش</th><th>داکتر</th><th>وضعیت</th><th v-if="auth.can('visits.edit') || auth.can('visits.manage')">تغییر وضعیت</th></tr>
+            <tr><th>شماره صف</th><th>مریض</th><th>شماره پرونده</th><th>بخش</th><th>داکتر</th><th>وضعیت</th><th v-if="auth.can('visits.edit') || auth.can('visits.manage')">تغییر وضعیت</th></tr>
           </thead>
           <tbody>
             <tr v-for="visit in visits" :key="visit.id">
@@ -397,11 +415,12 @@ watch(departmentId, refresh)
       </div>
     </UiCard>
 
-    <UiCard v-if="auth.can('appointments.view')" title="نوبت‌های امروز">
+    <UiCard v-if="auth.can('appointments.view')" title="وقت‌های قبلی امروز">
       <template #actions>
-        <button v-if="auth.can('appointments.create')" type="button" class="btn btn-soft" @click="openBooking">ثبت نوبت</button>
+        <button v-if="auth.can('appointments.create')" type="button" class="btn btn-soft" @click="openBooking">ثبت وقت</button>
       </template>
-      <div v-if="appointments.length === 0" class="xr-state">برای امروز نوبتی ثبت نشده است.</div>
+      <div v-if="!session && appointments.some((row) => row.status === 'Scheduled')" class="alert alert-warning" role="status">برای پذیرش وقت قبلی و دریافت فیس، ابتدا صندوق را باز کنید.</div>
+      <div v-if="appointments.length === 0" class="xr-state">برای امروز وقت قبلی ثبت نشده است.</div>
       <div v-else class="xr-table-wrap">
         <table class="xr-table">
           <thead>
@@ -415,7 +434,7 @@ watch(departmentId, refresh)
               <td>{{ appointmentLabels[row.status] }}</td>
               <td class="text-nowrap">
                 <template v-if="row.status === 'Scheduled'">
-                  <button v-if="auth.can('visits.create')" type="button" class="btn btn-soft btn-sm" @click="openCheckIn(row)">پذیرش</button>
+                  <button v-if="auth.can('visits.create') && auth.can('visitfees.create')" type="button" class="btn btn-primary btn-sm" :disabled="!session" :title="session ? undefined : 'ابتدا صندوق را باز کنید'" @click="openCheckIn(row)">پذیرش و دریافت فیس</button>
                   <button v-if="auth.can('appointments.cancel')" type="button" class="btn btn-soft-danger btn-sm ms-2" @click="cancelAppointment(row)">لغو</button>
                 </template>
               </td>
@@ -454,21 +473,25 @@ watch(departmentId, refresh)
     </form>
   </UiModal>
 
-  <UiModal v-if="checkIn.row" :title="`پذیرش ${checkIn.row.patientName}`" @close="checkIn.row = null">
+  <UiModal v-if="checkIn.row" :title="`پذیرش و دریافت فیس — ${checkIn.row.patientName}`" @close="checkIn.row = null">
     <form @submit.prevent="submitCheckIn">
-      <div class="mb-3">
-        <UiComboBox v-model="checkIn.tokenId" label="نوبت پرداخت‌شده" :options="paidTokens" required chip />
-        <p v-if="paidTokens.length === 0" class="form-hint mb-0">فیس ویزیت اجباری است. ابتدا «نوبت جدید» بگیرید و فیس را دریافت کنید.</p>
-      </div>
+      <dl class="xr-facts mb-3">
+        <div><dt>مریض</dt><dd>{{ checkIn.row.patientName }} <span class="ltr-num">{{ checkIn.row.patientFileNumber }}</span></dd></div>
+        <div><dt>داکتر</dt><dd>{{ checkIn.row.doctorName }}</dd></div>
+        <div><dt>ساعت</dt><dd><span class="ltr-num">{{ formatTime(checkIn.row.scheduledAt) }}</span></dd></div>
+        <div><dt>فیس ویزیت</dt><dd>{{ visitFee === null ? 'در حال دریافت قیمت…' : money(visitFee) }}</dd></div>
+      </dl>
+      <div class="mb-3"><UiComboBox v-model="checkIn.departmentId" label="بخش شروع مراجعه" :options="departments" required chip /></div>
+      <p class="form-hint">با تأیید، فیس نقدی دریافت، شماره صف ساخته و مریض مستقیماً وارد مراجعات امروز می‌شود.</p>
       <div v-if="checkIn.error" class="alert alert-danger" role="alert">{{ checkIn.error }}</div>
       <div class="xr-form-actions">
-        <button type="submit" class="btn btn-primary" :disabled="checkIn.saving">ثبت پذیرش</button>
+        <button type="submit" class="btn btn-primary" :disabled="checkIn.saving || !checkIn.departmentId || visitFee === null">{{ checkIn.saving ? 'در حال ثبت…' : 'تأیید دریافت فیس و پذیرش' }}</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>
   </UiModal>
 
-  <UiModal v-if="booking.open" title="ثبت نوبت" @close="booking.open = false">
+  <UiModal v-if="booking.open" title="ثبت وقت" @close="booking.open = false">
     <form @submit.prevent="submitBooking">
       <div class="mb-3"><PatientPicker v-model="booking.patientId" required /></div>
       <div class="mb-3">
@@ -487,7 +510,7 @@ watch(departmentId, refresh)
       </div>
       <div v-if="booking.error" class="alert alert-danger" role="alert">{{ booking.error }}</div>
       <div class="xr-form-actions">
-        <button type="submit" class="btn btn-primary" :disabled="booking.saving">ثبت نوبت</button>
+        <button type="submit" class="btn btn-primary" :disabled="booking.saving">ثبت وقت</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>
@@ -499,5 +522,19 @@ watch(departmentId, refresh)
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--xr-gap);
+}
+
+.reception-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--xr-gap);
+}
+
+@media (max-width: 575.98px) {
+  .reception-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 </style>

@@ -32,7 +32,7 @@ export async function paidToken(desk: Page, departmentId: number) {
 
 /** The first step of the visit dialog: issues the token and collects the fee, which opens the second step. */
 export async function collectFee(dialog: Locator) {
-  await dialog.getByRole('button', { name: 'ثبت نوبت و دریافت فیس' }).click()
+  await dialog.getByRole('button', { name: 'ساخت شماره صف و دریافت فیس' }).click()
   await expect(dialog.getByRole('status').filter({ hasText: 'فیس ویزیت دریافت شد' })).toBeVisible()
 }
 

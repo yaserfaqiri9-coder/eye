@@ -16,6 +16,63 @@ public sealed record VisitTokenRow(
 
 public sealed record ReceptionFeeRow(long InvoiceId, string InvoiceNumber, string? PatientName, string? PatientFileNumber, string Description, decimal Total, decimal Discount, decimal Balance, int InvoiceVersion);
 
+/// <summary>Shared visit-fee workflow used by both walk-in tokens and appointment arrivals.</summary>
+public sealed class VisitFeeService(AppDbContext db, NumberService numbers, InvoiceService invoices, CurrentUser user, AuditService audit)
+{
+    public async Task<VisitToken> CreateTokenAsync(int departmentId, long? doctorStaffId, long? patientId, CancellationToken ct)
+    {
+        if (!await db.Departments.AnyAsync(d => d.Id == departmentId && d.IsActive, ct))
+        {
+            throw new AppException(StatusCodes.Status400BadRequest, "unknown_department", "بخش انتخاب‌شده معتبر نیست.");
+        }
+
+        if (doctorStaffId is { } doctorId && !await db.Staff.AnyAsync(s => s.Id == doctorId && s.IsDoctor && s.IsActive, ct))
+        {
+            throw new AppException(StatusCodes.Status400BadRequest, "unknown_doctor", "داکتر انتخاب‌شده معتبر نیست.");
+        }
+
+        var service = await VisitFeeServiceAsync(db, ct);
+        var price = await VisitFeePriceAsync(db, service, ct);
+        var today = KabulClock.Today;
+        var invoice = await invoices.CreateAsync(patientId, null, ct);
+        var token = new VisitToken
+        {
+            QueueNumber = (int)await numbers.NextAsync(VisitService.QueueNumberScope, today.ToString("yyyyMMdd"), ct),
+            TokenDate = today,
+            DepartmentId = departmentId,
+            DoctorStaffId = doctorStaffId,
+            InvoiceId = invoice.Id,
+            CreatedByUserId = user.Id,
+        };
+        db.VisitTokens.Add(token);
+        await db.SaveChangesAsync(ct);
+
+        await invoices.AddLineAsync(invoice, new ChargeLine(service.Name, 1, price, Accounts.ServiceRevenue, service.Id, nameof(VisitToken), token.Id), ct);
+        audit.Add("VisitTokenCreated", "VisitToken", token.Id.ToString());
+        await db.SaveChangesAsync(ct);
+        return token;
+    }
+
+    public async Task<Payment> CollectFullAsync(VisitToken token, CancellationToken ct)
+    {
+        var invoice = await invoices.LockAsync(token.InvoiceId, ct);
+        var payment = await invoices.ReceiveAsync(new PaymentRequest(invoice.Id, InvoiceService.Balance(invoice), PaymentMethod.Cash, null, invoice.Version), fullOnly: true, ct);
+        audit.Add("ReceptionFeeCollected", "Invoice", invoice.Id.ToString(), $"{payment.Amount:F2} {payment.ReceiptNumber}");
+        await db.SaveChangesAsync(ct);
+        return payment;
+    }
+
+    internal static async Task<Service> VisitFeeServiceAsync(AppDbContext db, CancellationToken ct) =>
+        await db.Services.AsNoTracking().SingleOrDefaultAsync(s => s.Code == ServiceCodes.VisitFee && s.IsActive, ct)
+        ?? throw new AppException(StatusCodes.Status409Conflict, "no_price", "برای فیس ویزیت قیمت تعیین نشده است.");
+
+    internal static async Task<decimal> VisitFeePriceAsync(AppDbContext db, Service service, CancellationToken ct)
+    {
+        var price = await FinanceEndpoints.CurrentPriceAsync(db, service.Id, ct);
+        return price > 0 ? price : throw new AppException(StatusCodes.Status409Conflict, "no_price", "برای فیس ویزیت قیمت تعیین نشده است.");
+    }
+}
+
 /// <summary>
 /// The reception desk's limited finance: a token with its visit fee, and collecting fees for visit tokens and prepaid
 /// requests only. Every payment goes through the same ledger, audit and cash-session path as the cashier's.
@@ -28,8 +85,8 @@ public static class ReceptionFeeEndpoints
 
         tokens.MapGet("/fee", async (AppDbContext db, CancellationToken ct) =>
         {
-            var service = await VisitFeeServiceAsync(db, ct);
-            return Results.Ok(new { service.Name, Price = await VisitFeePriceAsync(db, service, ct) });
+            var service = await VisitFeeService.VisitFeeServiceAsync(db, ct);
+            return Results.Ok(new { service.Name, Price = await VisitFeeService.VisitFeePriceAsync(db, service, ct) });
         }).RequirePermission("visitfees.view");
 
         // The newest hundred, oldest first: abandoned tokens of past days must not push today's off the list.
@@ -48,39 +105,10 @@ public static class ReceptionFeeEndpoints
             Results.Ok(await Rows(db.VisitTokens.AsNoTracking().Where(t => t.Id == id)).SingleOrDefaultAsync(ct) ?? throw AppException.NotFound()))
             .RequirePermission("visitfees.view");
 
-        tokens.MapPost("/", async (CreateVisitTokenRequest request, AppDbContext db, Idempotency idempotency, NumberService numbers, InvoiceService invoices, CurrentUser user, AuditService audit, CancellationToken ct) =>
+        tokens.MapPost("/", async (CreateVisitTokenRequest request, AppDbContext db, Idempotency idempotency, VisitFeeService visitFees, CancellationToken ct) =>
             await idempotency.RunAsync(request, async () =>
             {
-                if (!await db.Departments.AnyAsync(d => d.Id == request.DepartmentId && d.IsActive, ct))
-                {
-                    throw new AppException(StatusCodes.Status400BadRequest, "unknown_department", "بخش انتخاب‌شده معتبر نیست.");
-                }
-
-                if (request.DoctorStaffId is { } doctorId && !await db.Staff.AnyAsync(s => s.Id == doctorId && s.IsDoctor && s.IsActive, ct))
-                {
-                    throw new AppException(StatusCodes.Status400BadRequest, "unknown_doctor", "داکتر انتخاب‌شده معتبر نیست.");
-                }
-
-                var service = await VisitFeeServiceAsync(db, ct);
-                var price = await VisitFeePriceAsync(db, service, ct);
-                var today = KabulClock.Today;
-
-                var invoice = await invoices.CreateAsync(null, null, ct);
-                var token = new VisitToken
-                {
-                    QueueNumber = (int)await numbers.NextAsync(VisitService.QueueNumberScope, today.ToString("yyyyMMdd"), ct),
-                    TokenDate = today,
-                    DepartmentId = request.DepartmentId,
-                    DoctorStaffId = request.DoctorStaffId,
-                    InvoiceId = invoice.Id,
-                    CreatedByUserId = user.Id,
-                };
-                db.VisitTokens.Add(token);
-                await db.SaveChangesAsync(ct);
-
-                await invoices.AddLineAsync(invoice, new ChargeLine(service.Name, 1, price, Accounts.ServiceRevenue, service.Id, nameof(VisitToken), token.Id), ct);
-                audit.Add("VisitTokenCreated", "VisitToken", token.Id.ToString());
-                await db.SaveChangesAsync(ct);
+                var token = await visitFees.CreateTokenAsync(request.DepartmentId, request.DoctorStaffId, null, ct);
                 return (StatusCodes.Status201Created, await Rows(db.VisitTokens.AsNoTracking().Where(t => t.Id == token.Id)).SingleAsync(ct));
             }, ct)).RequirePermission("visitfees.create");
 
@@ -139,16 +167,6 @@ public static class ReceptionFeeEndpoints
                 await db.SaveChangesAsync(ct);
                 return (StatusCodes.Status201Created, new { payment.Id, payment.ReceiptNumber, payment.InvoiceId, payment.Amount });
             }, ct)).RequirePermission("visitfees.create");
-    }
-
-    private static async Task<Service> VisitFeeServiceAsync(AppDbContext db, CancellationToken ct) =>
-        await db.Services.AsNoTracking().SingleOrDefaultAsync(s => s.Code == ServiceCodes.VisitFee && s.IsActive, ct)
-        ?? throw new AppException(StatusCodes.Status409Conflict, "no_price", "برای فیس ویزیت قیمت تعیین نشده است.");
-
-    private static async Task<decimal> VisitFeePriceAsync(AppDbContext db, Service service, CancellationToken ct)
-    {
-        var price = await FinanceEndpoints.CurrentPriceAsync(db, service.Id, ct);
-        return price > 0 ? price : throw new AppException(StatusCodes.Status409Conflict, "no_price", "برای فیس ویزیت قیمت تعیین نشده است.");
     }
 
     private static IQueryable<VisitTokenRow> Rows(IQueryable<VisitToken> tokens) => tokens.Select(t => new VisitTokenRow(

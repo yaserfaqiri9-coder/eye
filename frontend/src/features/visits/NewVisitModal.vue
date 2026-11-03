@@ -115,7 +115,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <UiModal :title="paid ? `نوبت ${quantity(token!.queueNumber)}: ثبت مشخصات مریض` : 'نوبت جدید و دریافت فیس ویزیت'" @close="$emit('close')">
+  <UiModal :title="paid ? `شماره صف ${quantity(token!.queueNumber)}: ثبت مشخصات مریض` : 'پذیرش حضوری و دریافت فیس ویزیت'" @close="$emit('close')">
     <form v-if="!paid" @submit.prevent="collect">
       <template v-if="!token">
         <div class="mb-3"><UiComboBox v-model="form.departmentId" label="بخش" :options="departments" :loading="listsLoading" required chip /></div>
@@ -124,7 +124,7 @@ onMounted(async () => {
       <p>فیس ویزیت: <strong>{{ money(token ? token.balance : fee) }}</strong></p>
       <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
       <div class="xr-form-actions">
-        <button type="submit" class="btn btn-primary" :disabled="saving || listsLoading">{{ token ? 'دریافت فیس' : 'ثبت نوبت و دریافت فیس' }}</button>
+        <button type="submit" class="btn btn-primary" :disabled="saving || listsLoading">{{ token ? 'دریافت فیس' : 'ساخت شماره صف و دریافت فیس' }}</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>

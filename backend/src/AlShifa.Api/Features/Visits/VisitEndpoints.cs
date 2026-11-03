@@ -130,7 +130,7 @@ public sealed class VisitService(AppDbContext db, DbContextOptions<AppDbContext>
     }
 
     private static AppException FeeRequired() =>
-        new(StatusCodes.Status409Conflict, "visit_fee_required", "فیس ویزیت اجباری است. ابتدا نوبت بگیرید و فیس را کامل دریافت کنید.");
+        new(StatusCodes.Status409Conflict, "visit_fee_required", "فیس ویزیت اجباری است. ابتدا پذیرش حضوری را آغاز و فیس را کامل دریافت کنید.");
 
     public async Task<VisitRow> LoadRowAsync(long id, CancellationToken ct) =>
         (await QueryRows(db, db.Visits.AsNoTracking().Where(v => v.Id == id)).ToListAsync(ct)).Select(ToRow).SingleOrDefault()
@@ -352,22 +352,28 @@ public static class VisitEndpoints
             return Results.NoContent();
         }).RequirePermission("appointments.cancel");
 
-        appointments.MapPost("/{id:long}/check-in", async (long id, CheckInRequest request, AppDbContext db, Idempotency idempotency, VisitService service, CancellationToken ct) =>
+        appointments.MapPost("/{id:long}/check-in", async (long id, CheckInRequest request, AppDbContext db, Idempotency idempotency, VisitService service, VisitFeeService visitFees, AuditService audit, CancellationToken ct) =>
             await idempotency.RunAsync(new { id, request }, async () =>
             {
-                var appointment = await db.Appointments.SingleOrDefaultAsync(a => a.Id == id, ct) ?? throw AppException.NotFound();
-                db.Entry(appointment).Property(a => a.Version).OriginalValue = request.Version;
+                var appointment = await db.Appointments.FromSqlInterpolated($"SELECT * FROM Appointments WHERE Id = {id} FOR UPDATE").SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
+                if (appointment.Version != request.Version)
+                {
+                    throw new AppException(StatusCodes.Status409Conflict, "record_changed", "این وقت قبلی همین حالا تغییر کرده است. فهرست را تازه کنید و دوباره تلاش نمایید.");
+                }
                 if (appointment.Status != AppointmentStatus.Scheduled)
                 {
                     throw new AppException(StatusCodes.Status409Conflict, "invalid_transition", "برای این نوبت قبلاً پذیرش انجام شده یا لغو شده است.");
                 }
 
-                var visit = await service.CreateAsync(new CreateVisitRequest(appointment.PatientId, request.DepartmentId, appointment.DoctorStaffId, appointment.Note, null, request.TokenId), ct);
+                var token = await visitFees.CreateTokenAsync(request.DepartmentId, appointment.DoctorStaffId, appointment.PatientId, ct);
+                await visitFees.CollectFullAsync(token, ct);
+                var visit = await service.CreateAsync(new CreateVisitRequest(appointment.PatientId, request.DepartmentId, appointment.DoctorStaffId, appointment.Note, null, token.Id), ct);
                 appointment.Status = AppointmentStatus.CheckedIn;
                 appointment.VisitId = visit.Id;
+                audit.Add("AppointmentCheckedIn", "Appointment", appointment.Id.ToString(), $"Visit {visit.Id}");
                 await db.SaveChangesAsync(ct);
                 return (StatusCodes.Status201Created, await service.LoadRowAsync(visit.Id, ct));
-            }, ct)).RequirePermission("visits.create");
+            }, ct)).RequirePermission("visits.create").RequirePermission("visitfees.create");
 
         app.MapGet("/api/lookups/departments", async (AppDbContext db, CancellationToken ct) =>
             Results.Ok(await db.Departments.AsNoTracking().Where(d => d.IsActive).OrderBy(d => d.Id).Select(d => new LookupItem(d.Id, d.Name)).ToListAsync(ct)))
@@ -379,4 +385,4 @@ public static class VisitEndpoints
     }
 }
 
-public sealed record CheckInRequest(int DepartmentId, int Version, long? TokenId = null);
+public sealed record CheckInRequest(int DepartmentId, int Version);

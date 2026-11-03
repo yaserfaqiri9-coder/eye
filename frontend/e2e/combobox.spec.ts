@@ -27,13 +27,13 @@ test('searchable field: typing, keyboard, tag, clearing, no results, and only re
   await reception.goto('/reception')
 
   // A required choice left empty does not pass the form's own check.
-  await reception.getByRole('button', { name: 'ثبت نوبت' }).click()
-  const booking = reception.getByRole('dialog', { name: 'ثبت نوبت' })
+  await reception.getByRole('button', { name: 'ثبت وقت' }).click()
+  const booking = reception.getByRole('dialog', { name: 'ثبت وقت' })
   expect(await booking.getByRole('combobox', { name: 'داکتر' }).evaluate((el: HTMLInputElement) => el.validity.valid)).toBe(false)
   await booking.getByRole('button', { name: 'انصراف' }).click()
   await expect(booking).toBeHidden()
 
-  await reception.getByRole('button', { name: 'نوبت جدید' }).click()
+  await reception.getByRole('button', { name: 'پذیرش مریض حضوری' }).click()
   const dialog = reception.getByRole('dialog')
   const department = dialog.getByRole('combobox', { name: 'بخش' })
   const list = reception.getByRole('listbox', { name: 'بخش' })
@@ -125,8 +125,8 @@ test('searchable field: a slow old answer cannot replace a newer one, and a fail
   const fresh = await call<{ fileNumber: string }>(reception, 'POST', '/patients', { firstName: `تازه${stamp}`, gender: 'Male', confirmNotDuplicate: true })
 
   await reception.goto('/reception')
-  await reception.getByRole('button', { name: 'ثبت نوبت' }).click()
-  const dialog = reception.getByRole('dialog', { name: 'ثبت نوبت' })
+  await reception.getByRole('button', { name: 'ثبت وقت' }).click()
+  const dialog = reception.getByRole('dialog', { name: 'ثبت وقت' })
   const field = dialog.getByRole('combobox', { name: 'مریض', exact: true })
 
   await reception.route(/\/api\/patients\?.*کهنه|\/api\/patients\?.*%DA%A9%D9%87%D9%86%D9%87/, async (route) => {

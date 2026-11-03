@@ -95,6 +95,9 @@ test('receptionist registers a patient, duplicate is caught, visit reaches the q
 
   // Visit appears in the queue, and status moves directly to completed without any lab step.
   await reception.goto('/reception')
+  await expect(reception.getByRole('button', { name: 'پذیرش مریض حضوری' })).toBeVisible()
+  await expect(reception.getByRole('heading', { name: 'مراجعات امروز' })).toBeVisible()
+  await expect(reception.getByRole('heading', { name: 'وقت‌های قبلی امروز' })).toBeVisible()
   const row = reception.getByRole('row', { name: new RegExp(firstName) })
   await expect(row).toContainText('ثبت‌شده')
   await row.getByRole('combobox').selectOption({ label: 'تکمیل' })

@@ -111,6 +111,7 @@ builder.Services.AddScoped<NumberService>();
 builder.Services.AddScoped<Outbox>();
 builder.Services.AddScoped<Idempotency>();
 builder.Services.AddScoped<VisitService>();
+builder.Services.AddScoped<VisitFeeService>();
 builder.Services.AddScoped<ClinicalAccess>();
 builder.Services.AddScoped<LedgerService>();
 builder.Services.AddScoped<InvoiceService>();
