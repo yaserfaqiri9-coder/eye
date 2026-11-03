@@ -1461,6 +1461,9 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("varchar(20)");
 
+                    b.Property<int?>("SupplierId")
+                        .HasColumnType("int");
+
                     b.Property<string>("SupplierName")
                         .HasMaxLength(150)
                         .HasColumnType("varchar(150)");
@@ -1475,6 +1478,8 @@ namespace AlShifa.Api.Infrastructure.Migrations
 
                     b.HasIndex("PurchaseNumber")
                         .IsUnique();
+
+                    b.HasIndex("SupplierId");
 
                     b.ToTable("Purchases");
                 });
@@ -1711,6 +1716,40 @@ namespace AlShifa.Api.Infrastructure.Migrations
                     b.HasIndex("CreatedAt");
 
                     b.ToTable("StockMovements");
+                });
+
+            modelBuilder.Entity("AlShifa.Api.Features.Inventory.Supplier", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    b.Property<string>("Address")
+                        .HasMaxLength(300)
+                        .HasColumnType("varchar(300)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<string>("Phone")
+                        .HasMaxLength(30)
+                        .HasColumnType("varchar(30)");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("Suppliers");
                 });
 
             modelBuilder.Entity("AlShifa.Api.Features.Patients.Patient", b =>
@@ -1985,6 +2024,10 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("varchar(100)");
 
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Code")
@@ -1999,13 +2042,30 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("bigint");
 
+                    b.Property<int>("Avatar")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(12);
+
+                    b.Property<string>("Biography")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
                     b.Property<int?>("DepartmentId")
                         .HasColumnType("int");
+
+                    b.Property<string>("Facebook")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
 
                     b.Property<string>("FullName")
                         .IsRequired()
                         .HasMaxLength(150)
                         .HasColumnType("varchar(150)");
+
+                    b.Property<string>("Google")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("tinyint(1)");
@@ -2017,12 +2077,24 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("varchar(30)");
 
+                    b.Property<string>("Specialty")
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<string>("Twitter")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
                     b.Property<long?>("UserId")
                         .HasColumnType("bigint");
 
                     b.Property<int>("Version")
                         .IsConcurrencyToken()
                         .HasColumnType("int");
+
+                    b.Property<string>("Website")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
 
                     b.HasKey("Id");
 
@@ -2840,7 +2912,14 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("AlShifa.Api.Features.Inventory.Supplier", "Supplier")
+                        .WithMany()
+                        .HasForeignKey("SupplierId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.Navigation("Location");
+
+                    b.Navigation("Supplier");
                 });
 
             modelBuilder.Entity("AlShifa.Api.Features.Inventory.PurchaseItem", b =>

@@ -12,6 +12,9 @@ declare module 'vue-router' {
 }
 
 const appChildren: RouteRecordRaw[] = [
+  { path: 'departments', name: 'departments', component: pages.directories, props: { kind: 'departments' }, meta: { permission: 'settings.view', title: 'مدیریت بخش‌ها' } },
+  { path: 'suppliers', name: 'suppliers', component: pages.directories, props: { kind: 'suppliers' }, meta: { permission: 'inventory.view', title: 'تأمین‌کنندگان' } },
+  { path: 'doctors', name: 'doctors', component: pages.doctors, meta: { permission: 'users.view', title: 'فهرست داکتران' } },
   {
     path: '',
     name: 'home',

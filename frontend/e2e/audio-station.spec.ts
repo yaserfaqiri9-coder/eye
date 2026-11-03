@@ -103,6 +103,15 @@ test('calls play once, one at a time, survive a network outage without repeats, 
   if (await takeOver.isVisible()) await takeOver.click()
   await expect(active).toBeVisible()
 
+  // Navigating inside the app must keep the unlocked audio context and its heartbeat alive.
+  await page.getByRole('link', { name: 'صفحه اصلی', exact: true }).click()
+  await expect(page).not.toHaveURL(/audio-station/)
+  await page.getByRole('link', { name: 'مرکز پخش صوت', exact: true }).click()
+  await expect(active).toBeVisible()
+  await expect(page.getByRole('button', { name: 'فعال‌سازی صدا در این رایانه', exact: true })).toHaveCount(0)
+  // Desks opened before activation must clear the offline notice without a reload or a patient event.
+  await expect(nurse.page.getByRole('status').filter({ hasText: 'مرکز پخش صوت فعال نیست' })).toHaveCount(0, { timeout: 20_000 })
+
   // Two desks pressing at nearly the same moment: each is heard whole, one after the other.
   const colleague = await staff(browser, page, 'Triage')
   await colleague.page.goto('/triage')

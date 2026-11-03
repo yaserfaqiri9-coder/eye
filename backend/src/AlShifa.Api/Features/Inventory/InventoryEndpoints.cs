@@ -24,7 +24,7 @@ public sealed record BatchRow(long Id, int ProductId, string ProductName, string
 
 public sealed record PurchaseLineInput(int ProductId, [MaxLength(50)] string? LotNumber, DateOnly? ExpiryDate, [Range(0.001, 100000000)] decimal Quantity, [Range(0, 100000000)] decimal UnitCost);
 
-public sealed record CreatePurchaseRequest([MaxLength(150)] string? SupplierName, [Required, MaxLength(30)] string LocationCode, [Required, MinLength(1)] PurchaseLineInput[] Items);
+public sealed record CreatePurchaseRequest([MaxLength(150)] string? SupplierName, [Required, MaxLength(30)] string LocationCode, [Required, MinLength(1)] PurchaseLineInput[] Items, int? SupplierId = null);
 
 public sealed record AdjustStockRequest(long BatchId, decimal Quantity, MovementKind Kind, [Required, MinLength(3), MaxLength(300)] string Reason);
 
@@ -155,10 +155,18 @@ public static class InventoryEndpoints
                 var locationId = await db.StockLocations.Where(l => l.Code == request.LocationCode).Select(l => (int?)l.Id).SingleOrDefaultAsync(ct)
                     ?? throw new AppException(StatusCodes.Status400BadRequest, "unknown_location", "محل نگهداری معتبر نیست.");
 
+                var supplierName = Text.Clean(request.SupplierName);
+                if (request.SupplierId is { } supplierId)
+                {
+                    supplierName = await db.Suppliers.Where(s => s.Id == supplierId && s.IsActive).Select(s => s.Name).SingleOrDefaultAsync(ct)
+                        ?? throw new AppException(400, "unknown_supplier", "تأمین‌کننده انتخاب‌شده معتبر یا فعال نیست.");
+                }
+
                 var purchase = new Purchase
                 {
                     PurchaseNumber = $"PU-{await numbers.NextAsync("purchase", ct: ct):D6}",
-                    SupplierName = Text.Clean(request.SupplierName),
+                    SupplierName = supplierName,
+                    SupplierId = request.SupplierId,
                     LocationId = locationId,
                     CreatedByUserId = user.Id,
                 };

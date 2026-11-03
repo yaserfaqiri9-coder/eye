@@ -110,8 +110,21 @@ public class StockMovement
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
+public class Supplier
+{
+    public int Id { get; set; }
+    [Required, MaxLength(150)] public string Name { get; set; } = "";
+    [MaxLength(30)] public string? Phone { get; set; }
+    [MaxLength(300)] public string? Address { get; set; }
+    public bool IsActive { get; set; } = true;
+    public int Version { get; set; }
+}
+
 public class Purchase
 {
+    public int? SupplierId { get; set; }
+    public Supplier? Supplier { get; set; }
+
     public long Id { get; set; }
 
     [MaxLength(20)]

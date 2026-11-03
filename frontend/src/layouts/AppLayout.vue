@@ -100,7 +100,11 @@ onBeforeUnmount(() => {
         <div v-if="backupProblem" class="alert alert-danger" role="alert">
           پشتیبان‌گیری خودکار مشکل دارد. آخرین پشتیبان موفق: {{ formatDateTime(backupProblem.lastSuccessAt) }}. به مسئول سیستم اطلاع دهید.
         </div>
-        <RouterView />
+        <RouterView v-slot="{ Component }">
+          <KeepAlive include="AudioStationPage">
+            <component :is="Component" />
+          </KeepAlive>
+        </RouterView>
       </main>
       <AppFooter />
     </div>

@@ -22,6 +22,8 @@ public class AppRole : IdentityRole<long>
 
 public class Department
 {
+    public int Version { get; set; }
+
     public int Id { get; set; }
 
     [MaxLength(50)]
@@ -35,6 +37,14 @@ public class Department
 
 public class Staff
 {
+    [MaxLength(150)] public string? Specialty { get; set; }
+    [MaxLength(1000)] public string? Biography { get; set; }
+    [MaxLength(500)] public string? Website { get; set; }
+    [MaxLength(500)] public string? Facebook { get; set; }
+    [MaxLength(500)] public string? Twitter { get; set; }
+    [MaxLength(500)] public string? Google { get; set; }
+    public int Avatar { get; set; } = 12;
+
     public long Id { get; set; }
 
     [MaxLength(150)]

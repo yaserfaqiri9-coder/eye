@@ -7,6 +7,9 @@ import { formatTime } from '@/utils/date'
 import { quantity } from '@/utils/money'
 import { createClipPlayer, MissingClipError } from './clipPlayer'
 
+// Keep this one route alive while its owner uses another page in the same tab.
+defineOptions({ name: 'AudioStationPage' })
+
 interface NextCall {
   id: number
   queueNumber: number
@@ -286,7 +289,7 @@ onBeforeUnmount(() => {
           <button type="button" class="btn btn-soft" :disabled="testing || !status" @click="testSound">آزمایش صدا</button>
         </div>
       </div>
-      <p class="form-hint mt-3 mb-0">این صفحه باید روی رایانه اسپیکر باز بماند. پس از بازکردن دوباره صفحه یا مرورگر، یک بار دیگر صدا را فعال کنید.</p>
+      <p class="form-hint mt-3 mb-0">این زبانه روی رایانهٔ اسپیکر باز بماند. رفتن به صفحه‌های دیگر سیستم پخش را قطع نمی‌کند؛ پس از تازه‌کردن زبانه یا بازکردن دوبارهٔ مرورگر، صدا را دوباره فعال کنید.</p>
     </UiCard>
 
     <UiCard title="فراخوان‌های امروز">

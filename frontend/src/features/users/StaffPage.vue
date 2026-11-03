@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { clearLookups } from '@/api/lookups'
 import { api, errorMessage } from '@/api/http'
 import UiCard from '@/components/UiCard.vue'
 import UiModal from '@/components/UiModal.vue'
@@ -17,6 +18,13 @@ interface StaffRow {
   userId: number | null
   userName: string | null
   version: number
+  specialty: string | null
+  biography: string | null
+  website: string | null
+  facebook: string | null
+  twitter: string | null
+  google: string | null
+  avatar: number
 }
 
 const auth = useAuthStore()
@@ -31,6 +39,7 @@ const form = reactive({
   open: false,
   id: null as number | null,
   version: null as number | null,
+  specialty: '', biography: '', website: '', facebook: '', twitter: '', google: '', avatar: 12,
   fullName: '',
   phone: '',
   isDoctor: false,
@@ -55,6 +64,7 @@ async function load() {
 
 function open(row?: StaffRow) {
   Object.assign(form, {
+    specialty: row?.specialty ?? '', biography: row?.biography ?? '', website: row?.website ?? '', facebook: row?.facebook ?? '', twitter: row?.twitter ?? '', google: row?.google ?? '', avatar: row?.avatar ?? 12,
     open: true,
     id: row?.id ?? null,
     version: row?.version ?? null,
@@ -73,6 +83,7 @@ async function save() {
   form.saving = true
   form.error = ''
   const body = {
+    specialty: form.specialty, biography: form.biography, website: form.website, facebook: form.facebook, twitter: form.twitter, google: form.google, avatar: form.avatar,
     fullName: form.fullName,
     phone: form.phone,
     isDoctor: form.isDoctor,
@@ -87,6 +98,7 @@ async function save() {
     } else {
       await api('/staff', { method: 'POST', body })
     }
+    clearLookups()
     form.open = false
     await load()
   } catch (cause) {
@@ -168,6 +180,12 @@ onMounted(async () => {
         <label class="form-check-label"><input v-model="form.isDoctor" class="form-check-input ms-2" type="checkbox" />داکتر است</label>
         <label class="form-check-label"><input v-model="form.isActive" class="form-check-input ms-2" type="checkbox" />فعال</label>
       </div>
+      <template v-if="form.isDoctor">
+        <div class="mb-3"><label for="s-specialty" class="form-label">تخصص</label><input id="s-specialty" v-model="form.specialty" class="form-control" maxlength="150" /></div>
+        <div class="mb-3"><label for="s-bio" class="form-label">معرفی داکتر</label><textarea id="s-bio" v-model="form.biography" class="form-control" maxlength="1000"></textarea></div>
+        <div class="mb-3"><label for="s-avatar" class="form-label">تصویر نمایشی قالب</label><select id="s-avatar" v-model.number="form.avatar" class="form-select"><option v-for="n in 7" :key="n" :value="n + 11">تصویر {{ n }}</option></select><img :src="`/images/doctors/${form.avatar}.jpg`" width="80" height="80" alt="تصویر نمایشی انتخاب‌شده" class="rounded-circle mt-2" /></div>
+        <div v-for="link in ([['website', 'وب‌سایت'], ['facebook', 'Facebook'], ['twitter', 'Twitter'], ['google', 'Google']] as const)" :key="link[0]" class="mb-3"><label :for="`s-${link[0]}`" class="form-label">{{ link[1] }}</label><input :id="`s-${link[0]}`" v-model="form[link[0]]" type="url" dir="ltr" class="form-control" maxlength="500" placeholder="https://" /></div>
+      </template>
       <div v-if="form.error" class="alert alert-danger" role="alert">{{ form.error }}</div>
       <div class="xr-form-actions">
         <button type="submit" class="btn btn-primary" :disabled="form.saving">ذخیره</button>

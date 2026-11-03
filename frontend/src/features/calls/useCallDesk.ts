@@ -1,4 +1,4 @@
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api, errorMessage } from '@/api/http'
 import { useLiveRefresh } from '@/api/realtime'
 import { useAuthStore } from '@/stores/auth'
@@ -57,17 +57,24 @@ export function useCallDesk(desk: CallDeskName) {
   const rows = ref<CallQueueRow[]>([])
   const stationOnline = ref(true)
   const error = ref('')
+  const loadError = ref('')
   // Per row: a press on one patient must not swallow a press on the next.
   const sending = ref<CallQueueRow[]>([])
 
+  let loading = false
+
   async function load() {
-    if (!enabled) return
+    if (!enabled || loading) return
+    loading = true
     try {
       const view = await api<{ stationOnline: boolean; rows: CallQueueRow[] }>(`/calls/desk/${desk}`)
       rows.value = view.rows
       stationOnline.value = view.stationOnline
+      loadError.value = ''
     } catch (cause) {
-      error.value = errorMessage(cause)
+      loadError.value = errorMessage(cause)
+    } finally {
+      loading = false
     }
   }
 
@@ -93,10 +100,11 @@ export function useCallDesk(desk: CallDeskName) {
   const call = (row: CallQueueRow, recall: boolean) => act(row, '/calls', { desk, visitId: row.visitId, tokenId: row.tokenId, recall })
   const mark = (row: CallQueueRow, outcome: 'Attended' | 'NoShow') => act(row, `/calls/${row.lastCall!.id}/outcome`, { outcome })
 
-  useLiveRefresh(refreshOn, load)
+  // Station activation does not emit a patient event; poll its heartbeat as well as live queue changes.
+  useLiveRefresh(enabled ? refreshOn : [], () => { if (enabled) void load() }, 15_000)
   onMounted(load)
 
-  return { enabled, rows, stationOnline, error, isSending, load, entry, call, mark }
+  return { enabled, rows, stationOnline, error: computed(() => error.value || loadError.value), isSending, load, entry, call, mark }
 }
 
 export type CallDeskHandle = ReturnType<typeof useCallDesk>

@@ -28,6 +28,8 @@ export const pages = {
   settings: () => import('@/features/settings/SettingsPage.vue'),
   audit: () => import('@/features/users/AuditPage.vue'),
   audioStation: () => import('@/features/calls/AudioStationPage.vue'),
+  directories: () => import('@/features/directories/DirectoryPage.vue'),
+  doctors: () => import('@/features/users/DoctorsPage.vue'),
   staff: () => import('@/features/users/StaffPage.vue'),
   users: () => import('@/features/users/UsersPage.vue'),
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, ApiError, errorMessage, newIdempotencyKey } from '@/api/http'
 import ShamsiDateInput from '@/components/ShamsiDateInput.vue'
@@ -15,7 +15,9 @@ const router = useRouter()
 
 const blankLine = () => ({ productId: null as number | null, lot: '', expiry: null as string | null, quantity: 1, unitCost: 0 })
 
-const form = reactive({ supplier: '', location: 'central', lines: [blankLine()] })
+const suppliers = ref<{ value: number; label: string }[]>([])
+const suppliersLoading = ref(true)
+const form = reactive({ supplierId: null as number | null, location: 'central', lines: [blankLine()] })
 const { dirty, markSaved } = useUnsavedGuard(form)
 const saving = ref(false)
 const error = ref('')
@@ -25,6 +27,7 @@ const search = productSearch([], () => {}, false)
 const total = computed(() => form.lines.reduce((sum, line) => sum + (line.quantity || 0) * (line.unitCost || 0), 0))
 
 async function submit() {
+  if (!form.supplierId) { error.value = 'تأمین‌کننده را از فهرست انتخاب کنید.'; return }
   saving.value = true
   error.value = ''
   try {
@@ -32,7 +35,7 @@ async function submit() {
       method: 'POST',
       idempotencyKey: key,
       body: {
-        supplierName: form.supplier,
+        supplierId: form.supplierId,
         locationCode: form.location,
         items: form.lines.map((l) => ({ productId: l.productId, lotNumber: l.lot, expiryDate: l.expiry, quantity: l.quantity, unitCost: l.unitCost })),
       },
@@ -46,14 +49,18 @@ async function submit() {
     saving.value = false
   }
 }
+onMounted(async () => {
+  try { suppliers.value = (await api<{ id: number; name: string }[]>('/suppliers?activeOnly=true')).map(s => ({ value: s.id, label: s.name })) }
+  catch (e) { error.value = errorMessage(e) } finally { suppliersLoading.value = false }
+})
 </script>
 
 <template>
   <UiFormPage title="ثبت خرید" :back-to="{ name: 'inventory' }" back-label="بازگشت به گدام" :dirty="dirty" :saving="saving" :error="error" @submit="submit">
     <div class="row g-3 mb-4">
       <div class="col-md-6">
-        <label class="form-label" for="pu-supplier">تأمین‌کننده</label>
-        <input id="pu-supplier" v-model="form.supplier" class="form-control" maxlength="150" />
+        <UiComboBox v-model="form.supplierId" label="تأمین‌کننده" :options="suppliers" :loading="suppliersLoading" required empty-text="تأمین‌کننده فعالی ثبت نشده است." />
+        <RouterLink :to="{ name: 'suppliers' }" class="d-inline-block mt-2">مدیریت تأمین‌کنندگان</RouterLink>
       </div>
       <div class="col-md-3">
         <label class="form-label" for="pu-location">محل ورود</label>

@@ -58,6 +58,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<StockLocation> StockLocations => Set<StockLocation>();
     public DbSet<StockBatch> StockBatches => Set<StockBatch>();
     public DbSet<StockMovement> StockMovements => Set<StockMovement>();
+    public DbSet<Supplier> Suppliers => Set<Supplier>();
     public DbSet<Purchase> Purchases => Set<Purchase>();
     public DbSet<Sale> Sales => Set<Sale>();
     public DbSet<OpticalOrder> OpticalOrders => Set<OpticalOrder>();
@@ -95,9 +96,14 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
         }
 
         b.Entity<Department>().HasIndex(x => x.Code).IsUnique();
+        b.Entity<Department>().Property(x => x.Version).IsConcurrencyToken();
+        b.Entity<Supplier>().HasIndex(x => x.Name).IsUnique();
+        b.Entity<Supplier>().Property(x => x.Version).IsConcurrencyToken();
+        b.Entity<Purchase>().HasOne(x => x.Supplier).WithMany().HasForeignKey(x => x.SupplierId).OnDelete(DeleteBehavior.Restrict);
 
         b.Entity<Staff>(e =>
         {
+            e.Property(x => x.Avatar).HasDefaultValue(12);
             e.Property(x => x.Version).IsConcurrencyToken();
             e.HasIndex(x => x.UserId).IsUnique();
             e.HasIndex(x => x.FullName);

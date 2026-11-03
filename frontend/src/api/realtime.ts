@@ -60,7 +60,7 @@ export function disconnectRealtime() {
 }
 
 /** Reloads from the API when one of the events arrives; events only signal, the API stays the source of truth. */
-export function useLiveRefresh(eventTypes: string[], load: () => unknown) {
+export function useLiveRefresh(eventTypes: string[], load: () => unknown, refreshMs = SAFETY_REFRESH_MS) {
   let debounce: ReturnType<typeof setTimeout> | undefined
   let timer: ReturnType<typeof setInterval> | undefined
 
@@ -73,7 +73,7 @@ export function useLiveRefresh(eventTypes: string[], load: () => unknown) {
   onMounted(() => {
     listeners.add(listener)
     // Safety net: a lost event can delay a screen but never leave it stale for long.
-    timer = setInterval(load, SAFETY_REFRESH_MS)
+    timer = setInterval(load, refreshMs)
   })
 
   onBeforeUnmount(() => {

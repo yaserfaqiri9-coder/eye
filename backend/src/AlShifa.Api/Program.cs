@@ -241,6 +241,7 @@ app.MapHub<EventsHub>(EventsHub.Path);
 app.MapAuth();
 app.MapUsers();
 app.MapStaff();
+app.MapDirectories();
 app.MapPatients();
 app.MapVisits();
 app.MapCalls();

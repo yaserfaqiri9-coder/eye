@@ -118,6 +118,7 @@ onMounted(async () => {
   <UiModal :title="paid ? `شماره صف ${quantity(token!.queueNumber)}: ثبت مشخصات مریض` : 'پذیرش حضوری و دریافت فیس ویزیت'" @close="$emit('close')">
     <form v-if="!paid" @submit.prevent="collect">
       <template v-if="!token">
+        <div v-if="!listsLoading && !departments.length" class="alert alert-warning" role="alert">بخش فعالی موجود نیست. مدیر سیستم باید از «مدیریت ← مدیریت بخش‌ها» یک بخش فعال بسازد یا بخش موجود را فعال کند.</div>
         <div class="mb-3"><UiComboBox v-model="form.departmentId" label="بخش" :options="departments" :loading="listsLoading" required chip /></div>
         <div class="mb-3"><UiComboBox v-model="form.doctorStaffId" label="داکتر (اختیاری)" :options="doctors" :loading="listsLoading" chip placeholder="بدون انتخاب" /></div>
       </template>
