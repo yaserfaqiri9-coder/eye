@@ -67,6 +67,18 @@ h6, .h6 { font-size: 14px; }
   padding: 20px;
 }
 
+/* Filters in a card header sit level with the header's buttons. */
+.xr-card__header .form-control,
+.xr-card__header .form-select {
+  width: auto;
+  min-height: 35px;
+  padding-block: 4px;
+}
+
+fieldset.xr-card__body {
+  min-width: 0;
+}
+
 /* Buttons: gradient fill that reverses on hover */
 .btn {
   --bs-btn-border-radius: var(--xr-radius-button);
@@ -146,14 +158,17 @@ h6, .h6 { font-size: 14px; }
   --bs-btn-active-bg: var(--xr-red);
   --bs-btn-active-color: #fff;
   --bs-btn-active-border-color: transparent;
+  --bs-btn-disabled-bg: var(--xr-red-light);
+  --bs-btn-disabled-color: var(--xr-red);
+  --bs-btn-disabled-border-color: transparent;
 }
 
-/* Forms: light-teal filled inputs */
+/* Forms: white fields with a thin border, as in the template. Typed text keeps the template's focus colour, so values stay readable after leaving the field. */
 .form-control,
 .form-select {
   min-height: var(--xr-control-height);
   border-radius: var(--xr-radius-control);
-  border-color: transparent;
+  border-color: var(--xr-field-border);
   background-color: var(--xr-field-bg);
   color: var(--xr-text);
   font-size: var(--xr-fs-body);
@@ -171,10 +186,469 @@ h6, .h6 { font-size: 14px; }
   color: var(--xr-field-placeholder);
 }
 
+.form-control:disabled,
+.form-select:disabled,
+.form-control[readonly] {
+  background-color: var(--xr-field-disabled);
+  color: var(--xr-text);
+  opacity: 1;
+}
+
+/* Browser autofill would otherwise tint a field blue. */
+.form-control:-webkit-autofill,
+.form-control:-webkit-autofill:hover,
+.form-control:-webkit-autofill:focus {
+  box-shadow: 0 0 0 1000px var(--xr-field-bg) inset;
+  -webkit-text-fill-color: var(--xr-text);
+}
+
+.form-control-sm,
+.form-select-sm {
+  min-height: 31px;
+  border-radius: var(--xr-radius-button);
+}
+
+/* Marks a field the browser rejected, once the user has touched it or tried to submit. */
+.form-control:user-invalid,
+.form-select:user-invalid {
+  border-color: var(--xr-field-invalid);
+}
+
 .form-label {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
+  color: var(--xr-text);
+  font-size: var(--xr-fs-body);
+}
+
+/* Required mark, hidden from the field's accessible name. */
+.form-label:has(+ .form-control:required)::after,
+.form-label:has(+ .form-select:required)::after {
+  content: ' *' / '';
+  color: var(--xr-field-invalid);
+}
+
+.form-hint {
+  margin-top: 4px;
+  color: var(--xr-text-muted);
+  font-size: 12.25px;
+}
+
+.form-warning {
+  margin-top: 4px;
+  color: var(--xr-field-invalid);
+  font-size: 12.25px;
+}
+
+/* Marks a required field whose control is not the label's direct neighbour. */
+.form-label.xr-required::after {
+  content: ' *' / '';
+  color: var(--xr-field-invalid);
+}
+
+/* Floating panels live on the body, above dialogs, so nothing can clip them. */
+.xr-popover {
+  z-index: 1090;
+  overflow-y: auto;
+  border: 1px solid var(--xr-border-table);
+  border-radius: var(--xr-radius-control);
+  background: var(--xr-surface);
+  box-shadow: 0 8px 24px rgba(45, 69, 95, 0.12);
+  color: var(--xr-text);
+  font-size: var(--xr-fs-body);
+}
+
+/* Date field */
+.xr-date__field {
+  position: relative;
+}
+
+.xr-date__input {
+  padding-inline-end: 40px;
+  text-align: right;
+}
+
+.xr-date__icon {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  width: 40px;
+  border: 0;
+  background: transparent;
+  color: var(--xr-primary);
+  font-size: 18px;
+}
+
+.xr-date__icon:disabled {
+  color: var(--xr-text-muted);
+}
+
+.xr-calendar {
+  width: 296px;
+  padding: 12px;
+}
+
+.xr-calendar__head {
+  display: grid;
+  grid-template-columns: 32px 1fr 1fr 32px;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.xr-calendar__nav {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--xr-radius-button);
+  background: transparent;
+  color: var(--xr-primary);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.xr-calendar__nav:hover {
+  background: var(--xr-primary-light);
+}
+
+.xr-calendar__select {
+  height: 32px;
+  min-width: 0;
+  padding: 0 4px;
+  border: 1px solid var(--xr-field-border);
+  border-radius: var(--xr-radius-button);
+  background: var(--xr-surface);
   color: var(--xr-text);
   font-size: 13px;
+}
+
+.xr-calendar__grid {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.xr-calendar__grid th {
+  padding-block: 4px;
+  color: var(--xr-text-muted);
+  font-size: 12.25px;
+  font-weight: 400;
+  text-align: center;
+}
+
+.xr-calendar__grid td {
+  padding: 1px;
+  text-align: center;
+}
+
+.xr-calendar__day {
+  width: 100%;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: var(--xr-radius-button);
+  background: transparent;
+  color: var(--xr-text);
+  font-size: 13px;
+}
+
+.xr-calendar__day:hover:not(:disabled) {
+  background: var(--xr-primary-light);
+}
+
+.xr-calendar__day:disabled {
+  color: var(--xr-field-border);
+  cursor: not-allowed;
+}
+
+.xr-calendar__day--today {
+  border-color: var(--xr-primary);
+  color: var(--xr-primary);
+}
+
+.xr-calendar__day--selected,
+.xr-calendar__day--selected:hover:not(:disabled) {
+  background: var(--xr-primary);
+  color: #fff;
+}
+
+.xr-calendar__foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.xr-calendar__clear {
+  color: var(--xr-text);
+}
+
+.xr-calendar select:focus-visible,
+.xr-calendar button:focus-visible,
+.xr-combo__clear:focus-visible {
+  outline: 2px solid var(--xr-primary);
+  outline-offset: 1px;
+}
+
+/* Searchable selection field */
+.xr-combo__field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--xr-control-height);
+  padding: 4px 12px;
+  border: 1px solid var(--xr-field-border);
+  border-radius: var(--xr-radius-control);
+  background: var(--xr-field-bg);
+  cursor: text;
+  transition: border-color 0.15s ease-in-out;
+}
+
+.xr-combo__field:focus-within,
+.xr-combo__field--open {
+  border-color: var(--xr-field-focus);
+}
+
+.xr-combo__field--disabled {
+  background: var(--xr-field-disabled);
+  cursor: not-allowed;
+}
+
+fieldset:disabled .xr-combo__field {
+  background: var(--xr-field-disabled);
+}
+
+.xr-combo__input {
+  flex: 1 1 40px;
+  min-width: 40px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--xr-text);
+  font-size: var(--xr-fs-body);
+}
+
+.xr-combo__input::placeholder {
+  color: var(--xr-field-placeholder);
+}
+
+.xr-combo__input:user-invalid {
+  color: var(--xr-text);
+}
+
+.xr-combo__field:has(.xr-combo__input:user-invalid) {
+  border-color: var(--xr-field-invalid);
+}
+
+.xr-combo__caret {
+  color: var(--xr-text-muted);
+  font-size: 18px;
+}
+
+.xr-combo__clear {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--xr-text-muted);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.xr-combo__clear:hover {
+  color: var(--xr-red);
+}
+
+.xr-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 85%;
+  padding: 2px 10px;
+  border-radius: var(--xr-radius-button);
+  background: var(--xr-primary-light);
+  color: var(--xr-primary);
+  font-size: 13px;
+}
+
+.xr-chip__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.xr-combo__panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.xr-combo__list {
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+}
+
+.xr-combo__list:empty {
+  display: none;
+}
+
+.xr-combo__option {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  border-radius: var(--xr-radius-button);
+  cursor: pointer;
+}
+
+.xr-combo__option--active {
+  background: var(--xr-primary-light);
+}
+
+.xr-combo__option--selected {
+  color: var(--xr-primary);
+  font-weight: 500;
+}
+
+.xr-combo__option[aria-disabled='true'] {
+  color: var(--xr-text-muted);
+  cursor: not-allowed;
+}
+
+.xr-combo__hint {
+  color: var(--xr-text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.xr-combo__note {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--xr-text-muted);
+  font-size: 12.25px;
+}
+
+.xr-combo__note--error {
+  color: var(--xr-field-invalid);
+}
+
+/* Paints where data is still on its way, so a page opens at once and does not jump when it arrives. */
+.xr-skeleton {
+  display: block;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--xr-track);
+}
+
+.xr-skeleton--title {
+  width: 180px;
+  height: 22px;
+}
+
+.xr-skeleton--wide {
+  width: 70%;
+}
+
+/* A thin line while a page's code is on its way over a slow connection. */
+.xr-route-progress {
+  position: fixed;
+  inset-block-start: 0;
+  inset-inline: 0;
+  z-index: 1100;
+  height: 3px;
+  overflow: hidden;
+  background: var(--xr-primary-light);
+}
+
+.xr-route-progress::after {
+  content: '';
+  display: block;
+  width: 35%;
+  height: 100%;
+  background: var(--xr-primary);
+  animation: xr-progress 1s linear infinite;
+}
+
+@keyframes xr-progress {
+  from { transform: translateX(120%); }
+  to { transform: translateX(-320%); }
+}
+
+/* Line items on a standalone form: one row per item, each field sized for what it holds. */
+.xr-lines {
+  width: 100%;
+  color: var(--xr-text);
+}
+
+.xr-lines th {
+  padding: 0 6px 8px;
+  border-bottom: 1px solid var(--xr-border-table);
+  font-weight: 600;
+  white-space: nowrap;
+  text-align: start;
+}
+
+.xr-lines td {
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--xr-row-border);
+  vertical-align: top;
+}
+
+.xr-lines__total {
+  padding-top: 12px;
+  color: var(--xr-text);
+  font-size: 16px;
+  text-align: end;
+}
+
+.xr-lines__money {
+  padding-top: 11px !important;
+  white-space: nowrap;
+}
+
+/* A titled group of fields on a long form. */
+.xr-group {
+  margin-bottom: 24px;
+}
+
+.xr-group__title {
+  margin-bottom: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--xr-border);
+  color: var(--xr-primary);
+  font-size: var(--xr-fs-body);
+  font-weight: 500;
+}
+
+/* Yes / no answers in the medical history grid. */
+.xr-yesno {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.xr-yesno__btn {
+  width: 34px;
+  height: 30px;
+  border: 1px solid var(--xr-field-border);
+  border-radius: var(--xr-radius-button);
+  background: var(--xr-surface);
+  color: var(--xr-text);
+  font-size: 13px;
+}
+
+.xr-yesno__btn:hover {
+  border-color: var(--xr-primary);
+}
+
+.xr-yesno__btn[aria-pressed='true'] {
+  border-color: var(--xr-primary);
+  background: var(--xr-primary);
+  color: #fff;
+}
+
+.xr-yesno__btn:focus-visible {
+  outline: 2px solid var(--xr-primary);
+  outline-offset: 1px;
+}
+
+/* Actions end every form the same way: the one main action first, then cancel. */
+.xr-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .form-check-label {
@@ -189,6 +663,61 @@ h6, .h6 { font-size: 14px; }
 .form-check-input:focus {
   border-color: var(--xr-primary);
   box-shadow: none;
+}
+
+/* Keeps a button level with the fields beside it. */
+.xr-field-height {
+  min-height: var(--xr-control-height);
+}
+
+/* A square button holding only an icon. */
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 35px;
+  height: 35px;
+  padding: 0;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--xr-primary);
+  outline-offset: 2px;
+}
+
+/* A disabled submit button means that form is saving: its forms disable it for nothing else. */
+.btn[type='submit']:disabled:not(fieldset:disabled *) {
+  position: relative;
+  color: transparent;
+}
+
+.btn[type='submit']:disabled:not(fieldset:disabled *)::after {
+  content: '' / '';
+  position: absolute;
+  inset: 0;
+  width: 16px;
+  height: 16px;
+  margin: auto;
+  border: 2px solid #fff;
+  border-inline-end-color: transparent;
+  border-radius: 50%;
+  animation: xr-spin 0.7s linear infinite;
+}
+
+.btn-soft[type='submit']:disabled:not(fieldset:disabled *)::after {
+  border-color: var(--xr-primary);
+  border-inline-end-color: transparent;
+}
+
+@keyframes xr-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Loading and empty messages inside a card. */
+.xr-state {
+  padding: 32px 16px;
+  color: var(--xr-text-muted);
+  text-align: center;
 }
 
 /* Tables */
@@ -218,7 +747,40 @@ h6, .h6 { font-size: 14px; }
 
 .xr-table a:not(.btn) {
   color: var(--xr-row-link);
-  text-decoration: underline;
+  font-weight: 500;
+  text-decoration: none;
+  text-underline-offset: 3px;
+}
+
+.xr-table a:not(.btn):hover {
+  text-decoration: none;
+}
+
+.xr-table a:not(.btn):focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--xr-primary);
+  outline-offset: 2px;
+  text-decoration: none;
+}
+
+/* Keep list actions quiet and compact without changing small buttons elsewhere. */
+.xr-table .btn-sm {
+  --bs-btn-font-size: 12.25px;
+  --bs-btn-padding-y: 3px;
+  --bs-btn-padding-x: 8px;
+  min-height: 30px;
+}
+
+/* Row buttons and selects stay on one line without breaking the cell's table layout. */
+.xr-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.xr-row-actions .form-select {
+  width: auto;
+  min-width: 130px;
 }
 
 /* Tabs: soft pill on the active tab */
@@ -240,6 +802,153 @@ h6, .h6 { font-size: 14px; }
 .xr-tab--active {
   background: var(--xr-primary-light);
   color: var(--xr-primary);
+}
+
+/* Eye identity: the same two tones everywhere, so right and left are never confused. */
+.xr-eye {
+  display: inline-block;
+  min-width: 34px;
+  padding: 1px 8px;
+  border-radius: var(--xr-radius-button);
+  font-size: 12.25px;
+  font-weight: 700;
+  line-height: 1.6;
+  text-align: center;
+  unicode-bidi: isolate;
+  direction: ltr;
+}
+
+.xr-eye--od { background: var(--xr-primary-light); color: var(--xr-primary); }
+.xr-eye--os { background: var(--xr-orange-light); color: #b4601f; }
+
+/* Clinical grids: one row per eye or per structure, with OD always before OS. */
+.xr-clinical-table {
+  width: 100%;
+  margin: 0;
+  color: var(--xr-text);
+  line-height: 1.5;
+}
+
+.xr-clinical-table th {
+  padding: 8px;
+  border-bottom: 1px solid var(--xr-border-table);
+  font-weight: 600;
+  white-space: nowrap;
+  text-align: start;
+}
+
+.xr-clinical-table td,
+.xr-clinical-table tbody th {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--xr-row-border);
+  vertical-align: middle;
+}
+
+.xr-clinical-table tbody tr:last-child td,
+.xr-clinical-table tbody tr:last-child th {
+  border-bottom: 0;
+}
+
+/* Left-to-right values still line up under their right-aligned column titles. */
+.xr-table td.ltr-num,
+.xr-clinical-table td.ltr-num {
+  text-align: right;
+}
+
+.xr-clinical-table .form-control,
+.xr-clinical-table .form-select {
+  min-width: 72px;
+}
+
+/* A sticky bar keeps the main action in reach on a long clinical page. */
+.xr-action-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--xr-border);
+  border-radius: 0 0 var(--xr-radius-card) var(--xr-radius-card);
+  background: var(--xr-surface);
+}
+
+.xr-action-bar__status {
+  margin-inline-start: auto;
+  color: var(--xr-text-muted);
+  font-size: 12.25px;
+}
+
+/* Collapsible sections. */
+.xr-section {
+  border: 1px solid var(--xr-border);
+  border-radius: var(--xr-radius-control);
+}
+
+.xr-section + .xr-section {
+  margin-top: 12px;
+}
+
+.xr-section > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  color: var(--xr-text);
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+
+.xr-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.xr-section > summary::before {
+  content: '\ea4e' / '';
+  color: var(--xr-primary);
+  font-family: remixicon;
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.xr-section[open] > summary::before {
+  transform: rotate(180deg);
+}
+
+.xr-section__hint {
+  margin-inline-start: auto;
+  color: var(--xr-text-muted);
+  font-size: 12.25px;
+  font-weight: 400;
+}
+
+.xr-section__body {
+  padding: 0 16px 16px;
+}
+
+/* Read-only label and value pairs. */
+.xr-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px 24px;
+  margin: 0;
+}
+
+.xr-facts dt {
+  color: var(--xr-text-muted);
+  font-size: 12.25px;
+  font-weight: 400;
+}
+
+.xr-facts dd {
+  margin: 0;
+  color: var(--xr-text);
+  overflow-wrap: anywhere;
 }
 
 /* Small status badges */
@@ -269,8 +978,9 @@ h6, .h6 { font-size: 14px; }
 .alert-primary { --bs-alert-color: var(--xr-primary); --bs-alert-bg: var(--xr-page-bg); --bs-alert-border-color: var(--xr-primary); }
 .alert-danger { --bs-alert-color: #f14336; --bs-alert-bg: #fff5f4; --bs-alert-border-color: #f7c6c6; }
 .alert-success { --bs-alert-color: #27b345; --bs-alert-bg: #eefff2; --bs-alert-border-color: #b2efb2; }
-.alert-warning { --bs-alert-color: var(--xr-yellow); --bs-alert-bg: #fffcf3; --bs-alert-border-color: #fff2b2; }
-.alert-info { --bs-alert-color: #6ce6f4; --bs-alert-bg: #e5fafc; --bs-alert-border-color: #b2f1ff; }
+/* The template's yellow and cyan text is unreadable on these fills, so these two keep its fills with the body text colour. */
+.alert-warning { --bs-alert-color: var(--xr-text); --bs-alert-bg: #fffcf3; --bs-alert-border-color: #fff2b2; }
+.alert-info { --bs-alert-color: var(--xr-text); --bs-alert-bg: #e5fafc; --bs-alert-border-color: #b2f1ff; }
 
 .list-group {
   --bs-list-group-color: var(--xr-text);

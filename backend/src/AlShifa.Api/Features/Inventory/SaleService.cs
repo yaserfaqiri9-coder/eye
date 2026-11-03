@@ -87,8 +87,10 @@ public sealed class SaleService(AppDbContext db, NumberService numbers, StockSer
         MedicalPrescription? prescription = null;
         if (prescriptionId is { } rxId)
         {
-            prescription = await db.MedicalPrescriptions.Include(p => p.Items).SingleOrDefaultAsync(p => p.Id == rxId, ct)
+            // Locking reads: pharmacists dispensing one prescription take turns, and each sees what the previous one dispensed.
+            prescription = (await db.MedicalPrescriptions.FromSqlInterpolated($"SELECT * FROM MedicalPrescriptions WHERE Id = {rxId} FOR UPDATE").ToListAsync(ct)).SingleOrDefault()
                 ?? throw new AppException(StatusCodes.Status400BadRequest, "unknown_prescription", "نسخه پیدا نشد.");
+            await db.Set<MedicalPrescriptionItem>().FromSqlInterpolated($"SELECT * FROM MedicalPrescriptionItem WHERE PrescriptionId = {rxId} FOR UPDATE").ToListAsync(ct);
             if (prescription.Status is PrescriptionStatus.Cancelled or PrescriptionStatus.Dispensed)
             {
                 throw new AppException(StatusCodes.Status409Conflict, "prescription_closed", "این نسخه لغو یا کامل تحویل شده است.");
@@ -180,7 +182,7 @@ public sealed class SaleService(AppDbContext db, NumberService numbers, StockSer
         return sale;
     }
 
-    /// <summary>Whole-sale return of an unpaid sale. A paid sale needs an approved refund through finance first.</summary>
+    /// <summary>Whole-sale return of a sale that was never paid. Returning goods after a payment awaits a finance decision (FINANCE-DECISIONS.md).</summary>
     public async Task ReturnAsync(long saleId, int version, string reason, CancellationToken ct)
     {
         var sale = await db.Sales.Include(s => s.Items).SingleOrDefaultAsync(s => s.Id == saleId, ct) ?? throw AppException.NotFound();
@@ -191,9 +193,9 @@ public sealed class SaleService(AppDbContext db, NumberService numbers, StockSer
         }
 
         var invoice = await invoices.LockAsync(sale.InvoiceId, ct);
-        if (invoice.Paid - invoice.Refunded > 0)
+        if (invoice.Paid > 0)
         {
-            throw new AppException(StatusCodes.Status409Conflict, "sale_is_paid", "این فروش پرداخت شده است. ابتدا برگشت وجه توسط حسابداری ثبت شود.");
+            throw new AppException(StatusCodes.Status409Conflict, "sale_is_paid", "این فروش پرداخت شده است و از اینجا برگشت نمی‌شود. به حسابداری مراجعه کنید.");
         }
 
         foreach (var item in sale.Items.OrderBy(i => i.BatchId))
@@ -204,7 +206,7 @@ public sealed class SaleService(AppDbContext db, NumberService numbers, StockSer
 
             if (item.PrescriptionItemId is { } rxItemId)
             {
-                var rxItem = await db.Set<MedicalPrescriptionItem>().SingleAsync(i => i.Id == rxItemId, ct);
+                var rxItem = await db.Set<MedicalPrescriptionItem>().FromSqlInterpolated($"SELECT * FROM MedicalPrescriptionItem WHERE Id = {rxItemId} FOR UPDATE").SingleAsync(ct);
                 rxItem.DispensedQuantity -= item.Quantity;
             }
         }

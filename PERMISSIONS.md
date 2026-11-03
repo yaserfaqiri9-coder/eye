@@ -15,7 +15,7 @@
 | `patients` | هویت مریض، جستجو، کارت |
 | `visits` | مراجعه، صف، ارجاع |
 | `appointments` | نوبت |
-| `preexam` | معاینه ابتدایی |
+| `preexam` | معاینه ابتدایی و بینایی‌سنجی |
 | `consultation` | معاینه داکتر، تشخیص، پلان درمان، پیگیری |
 | `clinicalrecord` | خلاصه و سوابق پرونده طبی |
 | `prescriptions` | نسخه دوا |
@@ -28,12 +28,15 @@
 | `invoices` | فاکتور |
 | `payments` | دریافت و برگشت وجه |
 | `cash` | صندوق و جلسه صندوق |
+| `visitfees` | نوبت و دریافت کامل فیس ویزیت، رفرکشن و عکس‌برداری در پذیرش؛ نه فاکتورهای دیگر |
 | `ledger` | دفتر مالی |
 | `expenses` | مصارف |
 | `reports` | گزارش عملیاتی (`reports.view`) و مالی (`reports.manage`) |
 | `users` | کاربران، نقش‌ها |
 | `settings` | تنظیمات |
+| `services` | ثبت قیمت خدمات (`services.edit`). هر تغییر با قیمت قبلی و جدید در Audit ثبت می‌شود |
 | `audit` | مشاهده Audit |
+| `calls` | فقط `calls.manage`: اجرای مرکز پخش صوت. عدد و مقصد می‌بیند، نه داده مریض |
 
 ## ماتریس نقش‌ها
 
@@ -42,7 +45,7 @@
 | ماژول | SuperAdmin | Manager | Reception | Triage | Doctor | Lab | Surgery | Pharmacist | Optical | Cashier | Accountant | Inventory |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | patients | V | V | VCEP | V | V | V | V | V | V | V | | |
-| visits | V | V | VCEXP | VE | VE | V | V | | V | V | | |
+| visits | V | VM | VCEXP | VE | VE | V | V | | V | V | | |
 | appointments | | V | VCEXP | | V | | V | | | | | |
 | preexam | | | | VCE | V | | V | | | | | |
 | consultation | | | | | VCEAP | | V | | | | | |
@@ -56,26 +59,45 @@
 | inventory | | V | | | | | | VC | VC | | V | VCEAXPO |
 | invoices | | VO | | | | | | VC | VC | VCXP | VAO | |
 | payments | | VO | | | | | | | | VCP | VAR | |
-| cash | | V | | | | | | | | VCE | V | |
+| cash | | V | VCE | | | | | | | VCE | V | |
+| visitfees | | | VC | | | | | | | | | |
 | ledger | | V | | | | | | | | | VCAO | |
 | expenses | | V | | | | | | | | | VCEAX | |
 | reports | | VPO | V | | V | V | V | V | V | V | VPOM | V |
 | users | VCEM | V | | | | | | | | | | |
 | settings | VEM | V | | | | | | | | | V | |
+| services | E | | | | | | | | | | E | |
 | audit | V | V | | | | | | | | | V | |
+
+نقش `AudioStation` (مرکز پخش صوت) فقط `calls.manage` دارد و برای رایانه اسپیکر است. `SuperAdmin` هم برای راه‌اندازی همین صلاحیت را دارد.
 
 توضیح: `Manager` برای نظارت فقط آمار و گزارش می‌بیند و داده طبی جزئی را نمی‌بیند؛ `diagnostics` و `surgery` برای او فقط در سطح وضعیت و شمارش است.
 
 ## کنترل سطح داده
 
 - **پرونده طبی:** داشتن `clinicalrecord.view` کافی نیست. کاربر باید به مریض مربوط باشد: داکتر تعیین‌شده در یکی از مراجعات آن مریض، نویسنده یکی از معاینات او، یا مریض امروز مراجعه باز داشته باشد. فرض فعلی این است که هر دارنده این صلاحیت به مراجعه باز دسترسی دارد (نیازمند تأیید M-5).
-- **Break-glass:** در صورت نیاز اضطراری، کاربر دارای `clinicalrecord.view` با ثبت دلیل، دسترسی موقت ۴ ساعته می‌گیرد. هر مشاهده در `AuditLogs` ثبت می‌شود و برای مدیر قابل بررسی است. مدت و قواعد این سازوکار نیازمند تأیید مسئول طبی است.
+- **تغییر پرونده:** داکتر فقط پرونده مریض خود را تغییر می‌دهد: حساب داکتر تعیین‌شده، و اگر حسابی نباشد، کسی که معاینه را شروع کرده است. مریضی که هنوز داکتری نگرفته آزاد است. این شامل معاینه، نهایی‌سازی، اصلاحیه، نسخه‌ها، درخواست‌ها، عملیات، پیگیری و وضعیت مراجعه است.
+- **انتقال مریض:** `POST /api/visits/{id}/transfer-doctor` با دلیل، توسط داکتر مسئول یا دارنده `visits.manage`. پرونده همان می‌ماند، داکتر مقصد باید حساب کاربری داشته باشد و داکتر قبلی، دلیل و کاربر در Audit (`VisitDoctorTransferred`) ثبت می‌شود. `visits.manage` داده طبی باز نمی‌کند. نیازمند تأیید M-18.
+- **Break-glass:** فقط برای خواندن است، نه تغییر. در صورت نیاز اضطراری، کاربر دارای `clinicalrecord.view` با ثبت دلیل، دسترسی موقت ۴ ساعته می‌گیرد. هر مشاهده در `AuditLogs` ثبت می‌شود و برای مدیر قابل بررسی است. مدت و قواعد این سازوکار نیازمند تأیید مسئول طبی است.
 - **یادداشت محرمانه داکتر:** فقط برای داکتر همان مراجعه و کاربران دارای دسترسی طبی مرتبط برگردانده می‌شود؛ در DTO آزمایشگاه، صندوق و دواخانه وجود ندارد.
 - **DTO جدا برای هر بخش:** آزمایشگاه فقط درخواست و مشخصات لازم را می‌بیند، صندوق فقط نام خدمت و مبلغ را.
 
+## فراخوان مریض
+
+دکمه فراخوان صلاحیت تازه‌ای ندارد و از صلاحیت کاری همان بخش می‌آید. Backend هر فراخوان را بررسی می‌کند و مریض باید همان لحظه در صف همان بخش باشد.
+
+| بخش | صلاحیت لازم |
+|---|---|
+| پذیرش | `visitfees.create` |
+| Vision و رفرکشن | `preexam.edit` |
+| داکتر | `consultation.edit` و داکتر مسئول همان مریض |
+| عکس‌برداری و آزمایشگاه | `diagnostics.edit` |
+| دواخانه | `pharmacy.create` |
+| عینک | `optical.create` |
+
 ## SignalR
 
-- Groupها سمت سرور و از روی صلاحیت کاربر ساخته می‌شوند: `dept:reception`، `dept:triage`، `dept:doctor`، `dept:lab`، `dept:surgery`، `dept:pharmacy`، `dept:optical`، `dept:cashier`، `dept:finance`، `dept:inventory`، `dept:management` و `user:{id}`.
+- Groupها سمت سرور و از روی صلاحیت کاربر ساخته می‌شوند: `dept:reception`، `dept:triage`، `dept:doctor`، `dept:lab`، `dept:surgery`، `dept:pharmacy`، `dept:optical`، `dept:cashier`، `dept:finance`، `dept:inventory`، `dept:management`، `dept:audio` و `user:{id}`.
 - Client نمی‌تواند خودش عضو Group شود.
 - رویدادها فقط نوع رویداد و شناسه دارند (بدون نام، تشخیص، یا مبلغ). داده واقعی با API و بررسی صلاحیت خوانده می‌شود.
 

@@ -159,8 +159,14 @@ public sealed class ReceptionTests(ApiFixture api)
         var department = await DepartmentAsync(reception, "معاینه ابتدایی");
         var patients = await Task.WhenAll(Enumerable.Range(0, 10).Select(_ => CreatePatientAsync(reception)));
 
-        var responses = await Task.WhenAll(patients.Select(p =>
-            reception.SendAsync(Post("/api/visits", new CreateVisitRequest(p.Id, department, null, "درد چشم")))));
+        var tokens = new List<long>();
+        foreach (var _ in patients)
+        {
+            tokens.Add(await api.PaidTokenAsync());
+        }
+
+        var responses = await Task.WhenAll(patients.Zip(tokens).Select(p =>
+            reception.SendAsync(Post("/api/visits", new CreateVisitRequest(p.First.Id, department, null, "درد چشم", null, p.Second)))));
 
         var created = responses.Where(r => r.StatusCode == HttpStatusCode.Created).ToList();
         foreach (var response in responses.Except(created))
@@ -183,8 +189,14 @@ public sealed class ReceptionTests(ApiFixture api)
         var department = await DepartmentAsync(reception);
         var patient = await CreatePatientAsync(reception);
 
-        var responses = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ =>
-            reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, department, null, null)))));
+        var tokens = new List<long>();
+        for (var i = 0; i < 6; i++)
+        {
+            tokens.Add(await api.PaidTokenAsync());
+        }
+
+        var responses = await Task.WhenAll(tokens.Select(token =>
+            reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, department, null, null, null, token)))));
 
         Assert.Single(responses, r => r.StatusCode == HttpStatusCode.Created);
         Assert.All(responses.Where(r => r.StatusCode != HttpStatusCode.Created), r => Assert.Equal(HttpStatusCode.Conflict, r.StatusCode));
@@ -197,7 +209,7 @@ public sealed class ReceptionTests(ApiFixture api)
         var department = await DepartmentAsync(reception);
         var patient = await CreatePatientAsync(reception);
 
-        var created = await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, department, null, null)));
+        var created = await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, department, null, null, null, await api.PaidTokenAsync())));
         var visit = (await created.Content.ReadFromJsonAsync<VisitRow>())!;
         Assert.Equal(nameof(VisitStatus.Registered), visit.Status);
 
@@ -210,7 +222,7 @@ public sealed class ReceptionTests(ApiFixture api)
         Assert.Contains("invalid_transition", await reopen.Content.ReadAsStringAsync());
 
         // Closed visit no longer blocks a new one the same day.
-        var again = await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, department, null, null)));
+        var again = await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, department, null, null, null, await api.PaidTokenAsync())));
         Assert.Equal(HttpStatusCode.Created, again.StatusCode);
     }
 
@@ -220,7 +232,7 @@ public sealed class ReceptionTests(ApiFixture api)
         var reception = await UserAsync(Roles.Receptionist);
         var department = await DepartmentAsync(reception);
         var patient = await CreatePatientAsync(reception);
-        var created = await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, department, null, null)));
+        var created = await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, department, null, null, null, await api.PaidTokenAsync())));
         var visit = (await created.Content.ReadFromJsonAsync<VisitRow>())!;
 
         var triage = await UserAsync(Roles.Triage);
@@ -237,7 +249,7 @@ public sealed class ReceptionTests(ApiFixture api)
         var reception = await UserAsync(Roles.Receptionist);
         var department = await DepartmentAsync(reception);
         var patient = await CreatePatientAsync(reception, NewPatient("محرمانه" + Guid.NewGuid().ToString("N")[..8]));
-        var created = await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, department, null, "علت خصوصی")));
+        var created = await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, department, null, "علت خصوصی", null, await api.PaidTokenAsync())));
         var visit = (await created.Content.ReadFromJsonAsync<VisitRow>())!;
 
         using var scope = api.Services.CreateScope();
@@ -275,7 +287,7 @@ public sealed class ReceptionTests(ApiFixture api)
         var list = await reception.GetFromJsonAsync<List<AppointmentRow>>($"/api/appointments?date={day:yyyy-MM-dd}");
         var appointment = list!.Single(a => a.DoctorStaffId == doctorId);
 
-        var checkIn = await reception.SendAsync(Post($"/api/appointments/{appointment.Id}/check-in", new CheckInRequest(department, appointment.Version)));
+        var checkIn = await reception.SendAsync(Post($"/api/appointments/{appointment.Id}/check-in", new CheckInRequest(department, appointment.Version, await api.PaidTokenAsync())));
         Assert.True(checkIn.StatusCode == HttpStatusCode.Created, await checkIn.Content.ReadAsStringAsync());
         var visit = (await checkIn.Content.ReadFromJsonAsync<VisitRow>())!;
         Assert.Equal(appointment.PatientId, visit.PatientId);

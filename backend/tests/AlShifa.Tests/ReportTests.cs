@@ -92,10 +92,10 @@ public sealed class ReportTests(ApiFixture api)
         var before = (await reception.GetFromJsonAsync<DashboardReport>("/api/reports/dashboard", JsonOptions))!;
 
         var female = await Created<PatientDto>(await reception.SendAsync(Post("/api/patients", new SavePatientRequest(Name("مریض"), null, null, Gender.Female, null, 30, null, null))));
-        await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(female.Id, departmentId, null, null))));
+        await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(female.Id, departmentId, null, null, null, await api.PaidTokenAsync()))));
 
         var male = await Created<PatientDto>(await reception.SendAsync(Post("/api/patients", new SavePatientRequest(Name("مریض"), null, null, Gender.Male, null, 30, null, null))));
-        var cancelled = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(male.Id, departmentId, null, null))));
+        var cancelled = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(male.Id, departmentId, null, null, null, await api.PaidTokenAsync()))));
         var change = await reception.PostAsJsonAsync($"/api/visits/{cancelled.Id}/status", new ChangeVisitStatusRequest(VisitStatus.Cancelled, cancelled.Version));
         Assert.Equal(HttpStatusCode.OK, change.StatusCode);
 

@@ -106,7 +106,10 @@ async function logout() {
       <label class="form-label" for="pw-next">رمز جدید (حداقل ۱۰ حرف)</label>
       <input id="pw-next" v-model="password.next" class="form-control mb-3" type="password" dir="ltr" minlength="10" autocomplete="new-password" required />
       <div v-if="password.error" class="alert alert-danger" role="alert">{{ password.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="password.saving">تغییر رمز</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="password.saving">تغییر رمز</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 </template>

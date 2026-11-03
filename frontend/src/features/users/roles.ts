@@ -11,6 +11,7 @@ export const roles = [
   { value: 'Cashier', label: 'صندوق‌دار' },
   { value: 'Accountant', label: 'حسابدار' },
   { value: 'Inventory', label: 'مسئول گدام' },
+  { value: 'AudioStation', label: 'مرکز پخش صوت' },
 ]
 
 export function roleLabel(value: string) {

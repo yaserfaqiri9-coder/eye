@@ -26,6 +26,7 @@ public static class Groups
     public const string Finance = "dept:finance";
     public const string Inventory = "dept:inventory";
     public const string Management = "dept:management";
+    public const string Audio = "dept:audio";
 }
 
 /// <summary>Queues an event in the same transaction as the change, so it is sent only if the change commits.</summary>

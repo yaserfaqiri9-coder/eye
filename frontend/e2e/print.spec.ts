@@ -1,3 +1,4 @@
+import { collectFee, ensureTariffs, openDesk, pick } from './helpers'
 import { expect, test, type Page } from '@playwright/test'
 
 const adminUser = process.env.ALSHIFA_E2E_USER!
@@ -54,19 +55,19 @@ test('admin configures the hospital, a charged visit prints a slip and an A4 inv
   const receptionContext = await browser.newContext()
   const reception = await receptionContext.newPage()
   await login(reception, `prr_${stamp}`, password)
+  await ensureTariffs(page)
+  await openDesk(page, reception)
   const firstName = `چاپ${stamp}`
   await reception.goto('/patients')
-  await reception.getByRole('button', { name: 'مریض جدید' }).click()
-  const pd = reception.getByRole('dialog')
-  await pd.getByLabel('نام', { exact: true }).fill(firstName)
-  await pd.getByRole('button', { name: 'ذخیره' }).click()
+  await reception.getByRole('link', { name: 'مریض جدید' }).click()
+  await reception.getByLabel('نام', { exact: true }).fill(firstName)
+  await reception.getByRole('button', { name: 'ذخیره' }).click()
   await expect(reception).toHaveURL(/\/patients\/\d+$/)
   await reception.getByRole('button', { name: 'مراجعه جدید' }).click()
   const vd = reception.getByRole('dialog')
-  await vd.getByLabel('بخش').selectOption({ label: 'داکتر' })
-  await vd.getByLabel(/خدمت قابل پرداخت/).selectOption({ index: 1 })
-  const option = await vd.getByLabel(/خدمت قابل پرداخت/).locator('option', { hasText: serviceName }).getAttribute('value')
-  await vd.getByLabel(/خدمت قابل پرداخت/).selectOption(option!)
+  await pick(reception, vd, 'بخش', 'داکتر')
+  await collectFee(vd)
+  await pick(reception, vd, 'خدمت اضافی قابل پرداخت (اختیاری)', serviceName)
   await vd.getByRole('button', { name: 'ثبت مراجعه' }).click()
   await expect(vd).toBeHidden()
 

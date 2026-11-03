@@ -14,6 +14,7 @@ public static class Roles
     public const string Cashier = "Cashier";
     public const string Accountant = "Accountant";
     public const string Inventory = "Inventory";
+    public const string AudioStation = "AudioStation";
 }
 
 /// <summary>Default role permissions; mirrors the matrix in PERMISSIONS.md.</summary>
@@ -38,11 +39,12 @@ public static class RolePermissions
     {
         [Roles.SuperAdmin] = new()
         {
-            ["patients"] = "V", ["visits"] = "V", ["users"] = "VCEM", ["settings"] = "VEM", ["audit"] = "V",
+            ["patients"] = "V", ["visits"] = "V", ["users"] = "VCEM", ["settings"] = "VEM", ["services"] = "E", ["audit"] = "V", ["calls"] = "M",
         },
         [Roles.Manager] = new()
         {
-            ["patients"] = "V", ["visits"] = "V", ["appointments"] = "V", ["diagnostics"] = "V", ["surgery"] = "V",
+            // visits.manage moves a patient to another doctor when the responsible one cannot. It opens no clinical data.
+            ["patients"] = "V", ["visits"] = "VM", ["appointments"] = "V", ["diagnostics"] = "V", ["surgery"] = "V",
             ["pharmacy"] = "V", ["optical"] = "V", ["inventory"] = "V", ["invoices"] = "VO", ["payments"] = "VO",
             ["cash"] = "V", ["ledger"] = "V", ["expenses"] = "V", ["reports"] = "VPO", ["users"] = "V",
             ["settings"] = "V", ["audit"] = "V",
@@ -50,6 +52,9 @@ public static class RolePermissions
         [Roles.Receptionist] = new()
         {
             ["patients"] = "VCEP", ["visits"] = "VCEXP", ["appointments"] = "VCEXP", ["reports"] = "V",
+
+            // Limited finance: visit, refraction and imaging fees and their own cash session, nothing else.
+            ["visitfees"] = "VC", ["cash"] = "VCE",
         },
         [Roles.Triage] = new()
         {
@@ -89,11 +94,17 @@ public static class RolePermissions
         {
             ["pharmacy"] = "V", ["optical"] = "V", ["inventory"] = "V", ["invoices"] = "VAO", ["payments"] = "VAR",
             ["cash"] = "V", ["ledger"] = "VCAO", ["expenses"] = "VCEAX", ["reports"] = "VPOM", ["settings"] = "V",
-            ["audit"] = "V",
+            ["services"] = "E", ["audit"] = "V",
         },
         [Roles.Inventory] = new()
         {
             ["pharmacy"] = "V", ["inventory"] = "VCEAXPO", ["reports"] = "V",
+        },
+
+        // For the computer with the speaker: numbers and destinations only, no patient data.
+        [Roles.AudioStation] = new()
+        {
+            ["calls"] = "M",
         },
     };
 

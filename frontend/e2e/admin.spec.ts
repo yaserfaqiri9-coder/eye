@@ -1,3 +1,4 @@
+import { pick } from './helpers'
 import { expect, test, type Page } from '@playwright/test'
 
 const adminUser = process.env.ALSHIFA_E2E_USER!
@@ -67,7 +68,7 @@ test('a user changes their password from the header, and the admin can reset it 
 
   await page.getByRole('link', { name: 'ثبت فعالیت‌ها' }).click()
   await page.getByLabel('فیلتر فعالیت').selectOption({ label: 'بازنشانی رمز' })
-  await expect(page.getByRole('row', { name: /PasswordReset/ }).first()).toBeVisible()
+  await expect(page.getByRole('row', { name: /بازنشانی رمز/ }).first()).toBeVisible()
 })
 
 test('lab uploads a result file, refuses a disguised one, and the doctor sees the empty queue dashboard', async ({ page, browser }) => {
@@ -90,23 +91,22 @@ test('lab uploads a result file, refuses a disguised one, and the doctor sees th
   await login(reception, `arc_${stamp}`, password)
   const firstName = `فایل${stamp}`
   await reception.goto('/patients')
-  await reception.getByRole('button', { name: 'مریض جدید' }).click()
-  await reception.getByRole('dialog').getByLabel('نام', { exact: true }).fill(firstName)
-  await reception.getByRole('dialog').getByRole('button', { name: 'ذخیره' }).click()
+  await reception.getByRole('link', { name: 'مریض جدید' }).click()
+  await reception.getByLabel('نام', { exact: true }).fill(firstName)
+  await reception.getByRole('button', { name: 'ذخیره' }).click()
   await expect(reception).toHaveURL(/\/patients\/\d+$/)
 
   const lab = await (await browser.newContext()).newPage()
   await login(lab, `alb_${stamp}`, password)
   await lab.getByRole('button', { name: 'درخواست مستقل' }).click()
   const order = lab.getByRole('dialog')
-  await order.getByLabel('جستجوی مریض').fill(firstName)
-  await order.getByRole('button', { name: new RegExp(firstName) }).click()
-  await order.getByLabel('آزمایش', { exact: true }).selectOption({ label: testName })
+  await pick(lab, order, 'مریض', firstName)
+  await pick(lab, order, 'آزمایش', testName)
   await order.getByRole('button', { name: 'ثبت درخواست' }).click()
   await expect(order).toBeHidden()
 
-  await lab.getByRole('row', { name: new RegExp(testName) }).getByRole('button', { name: 'ثبت نتیجه' }).click()
-  const result = lab.getByRole('dialog')
+  await lab.getByRole('row', { name: new RegExp(testName) }).getByRole('link', { name: 'ثبت نتیجه' }).click()
+  const result = lab.locator('form.xr-card')
   const input = result.getByLabel(/بارگذاری فایل/)
 
   await input.setInputFiles({ name: 'fake.pdf', mimeType: 'application/pdf', buffer: Buffer.from('<script>alert(1)</script>') })

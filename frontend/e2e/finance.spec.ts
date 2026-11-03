@@ -1,3 +1,4 @@
+import { pick } from './helpers'
 import { expect, test, type Browser, type Page } from '@playwright/test'
 
 const adminUser = process.env.ALSHIFA_E2E_USER!
@@ -54,39 +55,42 @@ test('stock is bought, sold at the pharmacy, paid at the cashier and reconciled 
   await pd.getByRole('button', { name: 'ذخیره' }).click()
   await expect(pd).toBeHidden()
 
+  await inventory.getByRole('link', { name: 'ثبت خرید' }).click()
+  await pick(inventory, inventory.locator('body'), 'جنس ردیف 1', drug)
+  await inventory.getByLabel('محل ورود').selectOption({ label: 'دواخانه' })
+  await inventory.getByLabel('مقدار ردیف 1').fill('5')
+  await inventory.getByLabel('قیمت خرید واحد ردیف 1').fill('100')
   await inventory.getByRole('button', { name: 'ثبت خرید' }).click()
-  const bd = inventory.getByRole('dialog')
-  await bd.getByLabel('جنس', { exact: true }).selectOption({ label: drug })
-  await bd.getByLabel('محل ورود').selectOption({ label: 'دواخانه' })
-  await bd.getByLabel('مقدار').fill('5')
-  await bd.getByLabel('قیمت خرید واحد').fill('100')
-  await bd.getByRole('button', { name: 'ثبت خرید' }).click()
-  await expect(bd).toBeHidden()
+  await expect(inventory).toHaveURL(/\/inventory$/)
   await expect(inventory.getByRole('row', { name: new RegExp(drug) })).toContainText('۵')
 
   const pharmacy = await staffPage(browser, `pha_${stamp}`, errors)
   await expect(pharmacy).toHaveURL(/\/pharmacy$/)
-  await pharmacy.getByRole('button', { name: 'فروش مستقل' }).click()
-  const sd = pharmacy.getByRole('dialog')
-  await sd.getByLabel('جنس', { exact: true }).selectOption({ index: 1 })
-  const option = await sd.getByLabel('جنس', { exact: true }).locator('option', { hasText: drug }).getAttribute('value')
-  await sd.getByLabel('جنس', { exact: true }).selectOption(option!)
-  await sd.getByLabel('مقدار').fill('2')
-  await expect(sd).toContainText('۵۰۰')
-  await sd.getByRole('button', { name: 'ثبت فروش' }).click()
-  await expect(sd.getByRole('status')).toContainText('در صندوق قابل پرداخت است')
-  const invoiceNumber = (await sd.getByRole('status').locator('.ltr-num').nth(1).innerText()).trim()
-  await sd.getByRole('button', { name: 'بستن' }).click()
+  await pharmacy.getByRole('link', { name: 'فروش مستقل' }).click()
+  await pick(pharmacy, pharmacy.locator('body'), 'جنس', drug)
+  await pharmacy.getByLabel('مقدار ردیف 1').fill('2')
+  await expect(pharmacy.locator('form.xr-card')).toContainText('۵۰۰')
+  await pharmacy.getByRole('button', { name: 'ثبت فروش' }).click()
+  const saleDone = pharmacy.locator('.alert-success')
+  await expect(saleDone).toContainText('در صندوق قابل پرداخت است')
+  const invoiceNumber = (await saleDone.locator('.ltr-num').nth(1).innerText()).trim()
+  await pharmacy.getByRole('link', { name: 'بازگشت به دواخانه' }).click()
 
   // Requesting more than is left is refused with a clear message.
-  await pharmacy.getByRole('button', { name: 'فروش مستقل' }).click()
-  const over = pharmacy.getByRole('dialog')
-  await expect(over.getByLabel('جنس', { exact: true }).locator('option', { hasText: drug })).toHaveCount(1)
-  await over.getByLabel('جنس', { exact: true }).selectOption(option!)
-  await over.getByLabel('مقدار').fill('4')
-  await over.getByRole('button', { name: 'ثبت فروش' }).click()
-  await expect(over.getByRole('alert')).toContainText('موجودی این جنس کافی نیست')
-  await over.getByRole('button', { name: 'بستن' }).click()
+  await pharmacy.getByRole('link', { name: 'فروش مستقل' }).click()
+  await pick(pharmacy, pharmacy.locator('body'), 'جنس', drug)
+  await pharmacy.getByLabel('مقدار ردیف 1').fill('4')
+  await pharmacy.getByRole('button', { name: 'ثبت فروش' }).click()
+  await expect(pharmacy.getByRole('alert')).toContainText('موجودی این جنس کافی نیست')
+  // The typed sale is still open, so leaving asks first.
+  const asked: string[] = []
+  pharmacy.once('dialog', (dialog) => {
+    asked.push(dialog.message())
+    dialog.accept()
+  })
+  await pharmacy.getByRole('link', { name: 'بازگشت به دواخانه' }).click()
+  await expect(pharmacy).toHaveURL(/\/pharmacy$/)
+  expect(asked[0]).toContain('ذخیره نشده')
 
   // Cashier has to open a session first, then takes a partial payment.
   const cashier = await staffPage(browser, `cas_${stamp}`, errors)

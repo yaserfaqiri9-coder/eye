@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using AlShifa.Api.Features.Auth;
 using AlShifa.Api.Features.Finance;
+using AlShifa.Api.Features.Visits;
 using AlShifa.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
@@ -64,10 +65,29 @@ public static class SurgeryEndpoints
             return Results.Ok(new SurgeryDetail(ToRow(row), surgery.PreOpChecks, surgery.ConsentRecorded, surgery.OperationReport, surgery.PostOpStatus));
         }).RequirePermission("surgery.edit");
 
-        group.MapPost("/", async (CreateSurgeryRequest request, AppDbContext db, Idempotency idempotency, NumberService numbers, InvoiceService invoices, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
+        group.MapPost("/", async (CreateSurgeryRequest request, AppDbContext db, ClinicalAccess access, Idempotency idempotency, NumberService numbers, InvoiceService invoices, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
             await idempotency.RunAsync(request, async () =>
             {
                 var patientId = await ClinicalEndpoints.PatientOfVisitAsync(db, request.VisitId, ct);
+                await access.EnsureResponsibleAsync(request.VisitId, ct);
+
+                // Left without a fee, the case would have nothing to check before it starts. A waiver goes through an approved discount.
+                if (request.ServiceId is not { } serviceId)
+                {
+                    throw new AppException(StatusCodes.Status400BadRequest, "service_required", "برای عملیات باید خدمت قابل پرداخت انتخاب شود.");
+                }
+
+                if (!await db.Services.AnyAsync(s => s.Id == serviceId && s.IsActive, ct))
+                {
+                    throw new AppException(StatusCodes.Status400BadRequest, "unknown_service", "خدمت انتخاب‌شده معتبر نیست.");
+                }
+
+                var price = await FinanceEndpoints.CurrentPriceAsync(db, serviceId, ct);
+                if (price <= 0)
+                {
+                    throw new AppException(StatusCodes.Status409Conflict, "no_price", "برای این خدمت قیمت تعیین نشده است.");
+                }
+
                 var surgery = new SurgeryCase
                 {
                     CaseNumber = $"SG-{await numbers.NextAsync("surgery", ct: ct):D6}",
@@ -84,23 +104,28 @@ public static class SurgeryEndpoints
                 outbox.Add("SurgeryScheduled", new { surgeryId = surgery.Id }, Groups.Surgery, Groups.Doctor);
                 await db.SaveChangesAsync(ct);
 
-                if (request.ServiceId is { } serviceId)
-                {
-                    var price = await FinanceEndpoints.CurrentPriceAsync(db, serviceId, ct);
-                    await invoices.ChargeVisitAsync(patientId, request.VisitId, new ChargeLine(surgery.SurgeryType, 1, price, Accounts.ServiceRevenue, serviceId, nameof(SurgeryCase), surgery.Id), ct);
-                }
+                // Its own invoice, so its payment can be checked on its own.
+                var invoice = await invoices.CreateAsync(patientId, request.VisitId, ct);
+                await invoices.AddLineAsync(invoice, new ChargeLine(surgery.SurgeryType, 1, price, Accounts.ServiceRevenue, serviceId, nameof(SurgeryCase), surgery.Id), ct);
 
                 var row = await Project(db.SurgeryCases.Where(c => c.Id == surgery.Id)).SingleAsync(ct);
                 return (StatusCodes.Status201Created, ToRow(row));
             }, ct)).RequirePermission("surgery.create");
 
-        group.MapPut("/{id:long}", async (long id, SaveSurgeryRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        group.MapPut("/{id:long}", async (long id, SaveSurgeryRequest request, AppDbContext db, ClinicalAccess access, AuditService audit, CancellationToken ct) =>
         {
             var surgery = await db.SurgeryCases.SingleOrDefaultAsync(c => c.Id == id, ct) ?? throw AppException.NotFound();
             db.Entry(surgery).Property(c => c.Version).OriginalValue = request.Version;
+            await access.EnsureResponsibleAsync(surgery.VisitId, ct, surgery.ResponsibleUserId);
             if (surgery.Status is SurgeryStatus.Closed or SurgeryStatus.Cancelled)
             {
                 throw new AppException(StatusCodes.Status409Conflict, "case_closed", "این پرونده بسته شده است.");
+            }
+
+            // Reporting an operation before it started skips the start step, so the same check applies.
+            if (surgery.Status is SurgeryStatus.Proposed or SurgeryStatus.Scheduled && (Text.Clean(request.OperationReport) ?? Text.Clean(request.PostOpStatus)) is not null)
+            {
+                await DiagnosticGate.EnsureChargePaidAsync(db, nameof(SurgeryCase), id, ct);
             }
 
             surgery.ScheduledAt = request.ScheduledAt;
@@ -113,7 +138,7 @@ public static class SurgeryEndpoints
             return Results.NoContent();
         }).RequirePermission("surgery.edit");
 
-        group.MapPost("/{id:long}/status", async (long id, ChangeSurgeryStatusRequest request, AppDbContext db, AuditService audit, Outbox outbox, HttpContext http, CancellationToken ct) =>
+        group.MapPost("/{id:long}/status", async (long id, ChangeSurgeryStatusRequest request, AppDbContext db, ClinicalAccess access, InvoiceService invoices, AuditService audit, Outbox outbox, HttpContext http, CancellationToken ct) =>
         {
             var needed = request.Status == SurgeryStatus.Cancelled ? "surgery.cancel" : "surgery.approve";
             if (!http.User.HasClaim(RolePermissions.ClaimType, needed))
@@ -121,8 +146,14 @@ public static class SurgeryEndpoints
                 throw new AppException(StatusCodes.Status403Forbidden, "forbidden", "شما اجازه این عملیات را ندارید.");
             }
 
+            // Read before the transaction, so it does not fix the snapshot ahead of the visit lock. A case never changes visit.
+            var caseRow = await db.SurgeryCases.AsNoTracking().Where(c => c.Id == id).Select(c => new { c.VisitId }).SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var visit = await VisitService.LockAsync(db, caseRow.VisitId, ct);
+
             var surgery = await db.SurgeryCases.SingleOrDefaultAsync(c => c.Id == id, ct) ?? throw AppException.NotFound();
             db.Entry(surgery).Property(c => c.Version).OriginalValue = request.Version;
+            await access.EnsureResponsibleAsync(surgery.VisitId, ct, surgery.ResponsibleUserId);
             if (!Allowed[surgery.Status].Contains(request.Status))
             {
                 throw new AppException(StatusCodes.Status409Conflict, "invalid_transition", "این تغییر وضعیت مجاز نیست.");
@@ -133,10 +164,22 @@ public static class SurgeryEndpoints
                 throw new AppException(StatusCodes.Status409Conflict, "schedule_required", "ابتدا تاریخ عملیات را ثبت کنید.");
             }
 
+            if (request.Status == SurgeryStatus.InProgress)
+            {
+                ClinicalEndpoints.EnsureNotCancelled(visit);
+                await DiagnosticGate.EnsureChargePaidAsync(db, nameof(SurgeryCase), id, ct);
+            }
+            else if (request.Status == SurgeryStatus.Cancelled)
+            {
+                // Otherwise the fee of a cancelled case stays on the unpaid list and can still be charged.
+                await invoices.CancelChargeAsync(nameof(SurgeryCase), id, ct);
+            }
+
             surgery.Status = request.Status;
             audit.Add("SurgeryStatusChanged", "SurgeryCase", id.ToString(), request.Status.ToString());
             outbox.Add("SurgeryScheduled", new { surgeryId = id }, Groups.Surgery, Groups.Doctor);
             await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
             return Results.NoContent();
         }).RequireAuthorization();
     }

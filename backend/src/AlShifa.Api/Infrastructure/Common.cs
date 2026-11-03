@@ -52,8 +52,15 @@ public sealed class AuditService(AppDbContext db, CurrentUser user)
 
 public sealed class DatabaseHealthCheck(AppDbContext db) : IHealthCheck
 {
-    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken ct = default) =>
-        await db.Database.CanConnectAsync(ct) ? HealthCheckResult.Healthy() : HealthCheckResult.Unhealthy();
+    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken ct = default)
+    {
+        if (!await db.Database.CanConnectAsync(ct))
+        {
+            return HealthCheckResult.Unhealthy();
+        }
+
+        return await DatabaseSafety.SchemaProblemAsync(db, ct) is { } problem ? HealthCheckResult.Unhealthy(problem) : HealthCheckResult.Healthy();
+    }
 }
 
 public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger, IProblemDetailsService problems)

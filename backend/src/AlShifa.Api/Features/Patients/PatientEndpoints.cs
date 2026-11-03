@@ -112,7 +112,11 @@ public static class PatientEndpoints
                 throw new AppException(StatusCodes.Status400BadRequest, "version_required", "نسخه رکورد ارسال نشده است.");
             }
 
-            var patient = await db.Patients.SingleOrDefaultAsync(p => p.Id == id, ct) ?? throw AppException.NotFound();
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+            // The change log's foreign key takes a shared lock on this row. Without locking it first, two editors deadlock
+            // and the loser hears "busy" instead of being told that the record changed.
+            var patient = await db.Patients.FromSqlInterpolated($"SELECT * FROM Patients WHERE Id = {id} FOR UPDATE").SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
             db.Entry(patient).Property(p => p.Version).OriginalValue = request.Version.Value;
 
             var before = Snapshot(patient);
@@ -128,6 +132,7 @@ public static class PatientEndpoints
 
             audit.Add("PatientEdited", "Patient", id.ToString());
             await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
             return Results.Ok(ToDto(patient));
         }).RequirePermission("patients.edit");
     }

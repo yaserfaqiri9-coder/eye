@@ -1,7 +1,9 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using AlShifa.Api.Features.Auth;
+using AlShifa.Api.Features.Finance;
 using AlShifa.Api.Features.Users;
+using AlShifa.Api.Features.Visits;
 using AlShifa.Api.Infrastructure;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
@@ -24,7 +26,8 @@ public sealed class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
             var fromEnv = Environment.GetEnvironmentVariable("ALSHIFA_TEST_DB");
             if (!string.IsNullOrEmpty(fromEnv))
             {
-                return fromEnv;
+                // This fixture drops the database, so a mistaken value must never reach a real one.
+                return DatabaseSafety.IsDisposable(fromEnv) ? fromEnv : throw new InvalidOperationException("ALSHIFA_TEST_DB must name a database ending in _test, _dev or _load.");
             }
 
             var dir = new DirectoryInfo(AppContext.BaseDirectory);
@@ -62,6 +65,101 @@ public sealed class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
         }
 
         _ = Services;
+
+        using var scope = Services.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        foreach (var (code, price) in new[] { (ServiceCodes.VisitFee, 100m), (ServiceCodes.Refraction, 50m), (ServiceCodes.Imaging, 70m) })
+        {
+            var serviceId = await context.Services.Where(s => s.Code == code).Select(s => s.Id).SingleAsync();
+            context.ServicePrices.Add(new ServicePrice { ServiceId = serviceId, Price = price, EffectiveFrom = DateTime.UtcNow.AddMinutes(-1) });
+        }
+
+        await context.SaveChangesAsync();
+    }
+
+    private readonly SemaphoreSlim deskLock = new(1, 1);
+    private HttpClient? feeDesk;
+
+    /// <summary>A receptionist with an open cash session on a register of their own.</summary>
+    public async Task<HttpClient> FeeDeskAsync()
+    {
+        await deskLock.WaitAsync();
+        try
+        {
+            if (feeDesk is not null)
+            {
+                return feeDesk;
+            }
+
+            var name = $"desk_{Guid.NewGuid():N}"[..20];
+            await CreateUserAsync(name, Roles.Receptionist);
+            var desk = await LoginAsync(name);
+
+            using var scope = Services.CreateScope();
+            var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var register = new CashRegister { Name = name };
+            context.CashRegisters.Add(register);
+            await context.SaveChangesAsync();
+
+            var opened = await desk.PostAsJsonAsync("/api/cash/sessions", new OpenSessionRequest(register.Id, 0));
+            Assert.True(opened.IsSuccessStatusCode, await opened.Content.ReadAsStringAsync());
+            return feeDesk = desk;
+        }
+        finally
+        {
+            deskLock.Release();
+        }
+    }
+
+    public static HttpRequestMessage Keyed(string url, object body, string? key = null)
+    {
+        var message = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonContent.Create(body) };
+        message.Headers.Add("Idempotency-Key", key ?? Guid.NewGuid().ToString("N"));
+        return message;
+    }
+
+    public async Task<int> DepartmentIdAsync(string code)
+    {
+        using var scope = Services.CreateScope();
+        return await scope.ServiceProvider.GetRequiredService<AppDbContext>().Departments.Where(d => d.Code == code).Select(d => d.Id).SingleAsync();
+    }
+
+    public async Task<VisitTokenRow> NewTokenAsync(string department = "triage")
+    {
+        var desk = await FeeDeskAsync();
+        var response = await desk.SendAsync(Keyed("/api/visit-tokens", new CreateVisitTokenRequest(await DepartmentIdAsync(department), null)));
+        var text = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, text);
+        return JsonSerializer.Deserialize<VisitTokenRow>(text, JsonSerializerOptions.Web)!;
+    }
+
+    /// <summary>What reception does before a visit can exist: a token with its visit fee fully paid.</summary>
+    public async Task<long> PaidTokenAsync(string department = "triage")
+    {
+        var token = await NewTokenAsync(department);
+        var desk = await FeeDeskAsync();
+        var paid = await desk.SendAsync(Keyed("/api/reception-fees/pay", new PaymentRequest(token.InvoiceId, token.Balance, PaymentMethod.Cash, null, token.InvoiceVersion)));
+        Assert.True(paid.IsSuccessStatusCode, await paid.Content.ReadAsStringAsync());
+        return token.Id;
+    }
+
+    private HttpClient? visionDesk;
+
+    /// <summary>What Triage does before any doctor may start: Vision saved and completed.</summary>
+    public async Task CompleteVisionAsync(long visitId)
+    {
+        if (visionDesk is null)
+        {
+            var name = $"vision_{Guid.NewGuid():N}"[..20];
+            await CreateUserAsync(name, Roles.Triage);
+            visionDesk = await LoginAsync(name);
+        }
+
+        var saved = await visionDesk.PutAsJsonAsync($"/api/pre-examinations/{visitId}", new AlShifa.Api.Features.Clinical.SavePreExamRequest(null, null, "6/9", "6/9", null, null, null, null, null));
+        Assert.True(saved.IsSuccessStatusCode, await saved.Content.ReadAsStringAsync());
+
+        var completed = await visionDesk.PostAsync($"/api/pre-examinations/{visitId}/complete", null);
+        Assert.True(completed.IsSuccessStatusCode, await completed.Content.ReadAsStringAsync());
     }
 
     Task IAsyncLifetime.InitializeAsync() => InitializeAsync().AsTask();

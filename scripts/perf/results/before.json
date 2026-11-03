@@ -1,0 +1,88 @@
+{
+  "label": "before",
+  "at": "2026-11-03T10:14:53.976Z",
+  "conditions": {
+    "offline": false,
+    "latency": 20,
+    "downloadThroughput": 13107200,
+    "uploadThroughput": 13107200,
+    "cpuRate": 4,
+    "viewport": "1366x768",
+    "repeats": 5
+  },
+  "bundle": {
+    "jsFiles": 50,
+    "jsTotalKb": 453,
+    "entryJsKb": 115,
+    "cssTotalKb": 399,
+    "largestJs": [
+      "runtime-core.esm-bundler: 62KB",
+      "realtime: 55KB",
+      "index: 53KB",
+      "PatientDetailPage: 33KB",
+      "ChartPage: 33KB"
+    ]
+  },
+  "results": [
+    {
+      "name": "ثبت مریض جدید",
+      "coldPaintMs": 160,
+      "coldReadyMs": 160,
+      "warmPaintMs": 55,
+      "warmReadyMs": 55,
+      "warmReadyWorstMs": 69,
+      "apiRequests": 0,
+      "coldAssets": 0
+    },
+    {
+      "name": "مراجعه جدید (مودال)",
+      "coldPaintMs": 106,
+      "coldReadyMs": 106,
+      "warmPaintMs": 68,
+      "warmReadyMs": 68,
+      "warmReadyWorstMs": 72,
+      "apiRequests": 3,
+      "coldAssets": 0
+    },
+    {
+      "name": "شروع معاینه ابتدایی",
+      "coldPaintMs": 515,
+      "coldReadyMs": 515,
+      "warmPaintMs": 99,
+      "warmReadyMs": 99,
+      "warmReadyWorstMs": 161,
+      "apiRequests": 3,
+      "coldAssets": 5
+    },
+    {
+      "name": "ثبت بینایی‌سنجی",
+      "coldPaintMs": 689,
+      "coldReadyMs": 689,
+      "warmPaintMs": 170,
+      "warmReadyMs": 170,
+      "warmReadyWorstMs": 259,
+      "apiRequests": 4,
+      "coldAssets": 9
+    },
+    {
+      "name": "شروع معاینه داکتر",
+      "coldPaintMs": 783,
+      "coldReadyMs": 783,
+      "warmPaintMs": 148,
+      "warmReadyMs": 148,
+      "warmReadyWorstMs": 160,
+      "apiRequests": 3,
+      "coldAssets": 11
+    },
+    {
+      "name": "فروش مستقل دواخانه",
+      "coldPaintMs": 129,
+      "coldReadyMs": 129,
+      "warmPaintMs": 50,
+      "warmReadyMs": 50,
+      "warmReadyWorstMs": 128,
+      "apiRequests": 1,
+      "coldAssets": 0
+    }
+  ]
+}

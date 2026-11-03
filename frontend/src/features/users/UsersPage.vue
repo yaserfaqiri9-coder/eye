@@ -153,8 +153,8 @@ onMounted(load)
 
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
 
-    <div v-if="loading" class="py-4 text-center text-muted" role="status">در حال بارگذاری...</div>
-    <div v-else-if="rows.length === 0" class="py-4 text-center text-muted">کاربری پیدا نشد.</div>
+    <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
+    <div v-else-if="rows.length === 0" class="xr-state">کاربری پیدا نشد.</div>
     <div v-else class="xr-table-wrap">
       <table class="xr-table">
         <thead>
@@ -182,7 +182,8 @@ onMounted(load)
               <button
                 v-if="user.id !== auth.user?.id"
                 type="button"
-                class="btn btn-soft btn-sm ms-2"
+                class="btn btn-sm ms-2"
+                :class="user.isActive ? 'btn-soft-danger' : 'btn-soft'"
                 @click="setActive(user, !user.isActive)"
               >
                 {{ user.isActive ? 'غیرفعال‌سازی' : 'فعال‌سازی' }}
@@ -219,7 +220,10 @@ onMounted(load)
         </div>
       </fieldset>
       <div v-if="form.error" class="alert alert-danger" role="alert">{{ form.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="form.saving">ذخیره</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="form.saving">ذخیره</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 
@@ -229,7 +233,10 @@ onMounted(load)
       <label class="form-label" for="reset-password">رمز جدید (حداقل ۱۰ حرف)</label>
       <input id="reset-password" v-model="reset.password" class="form-control mb-3" type="password" dir="ltr" minlength="10" autocomplete="new-password" required />
       <div v-if="reset.error" class="alert alert-danger" role="alert">{{ reset.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="reset.saving">بازنشانی رمز</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="reset.saving">بازنشانی رمز</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 
@@ -242,7 +249,10 @@ onMounted(load)
         </div>
       </div>
       <div v-if="roleForm.error" class="alert alert-danger" role="alert">{{ roleForm.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="roleForm.saving">ذخیره</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="roleForm.saving">ذخیره</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 </template>

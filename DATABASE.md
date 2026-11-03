@@ -21,6 +21,8 @@
 | `ProductCategories`, `Units` | متن در `Products` |
 | `Currencies`, `ExchangeRates` | ساخته نشده، منتظر F-1 |
 | `Notifications` | ساخته نشده؛ اعلان فقط از SignalR |
+| `PatientCalls` | تازه: صف پخش و سابقه فراخوان در یک جدول. شماره اتاق‌ها و مرکز پخش فعال در `Settings` با کلیدهای `calls.*` |
+| شماره نوبت | `NumberSequences` با Scope مشترک `queue` برای هر روز؛ Migration ادامه شماره‌های همان روز را از بیشترین شماره بخش‌ها می‌گیرد |
 | Unique روی `StockBatches` | Unique نیست؛ `FindOrCreateBatch` با قفل سطر و تفکیک قیمت خرید |
 | یک جلسه باز برای هر صندوق | ستون تولیدی `OpenRegisterKey` با Unique |
 | `NumberSequences` | داخل تراکنش فراخوان؛ با Rollback شماره برمی‌گردد و بی‌فاصله می‌ماند |
@@ -34,6 +36,8 @@ erDiagram
   Departments ||--o{ Visits : routes
   Staff ||--o{ Visits : doctor
   Visits ||--o| PreExaminations : has
+  Visits ||--o| Refractions : has
+  Refractions ||--o{ RefractionLines : has
   Visits ||--o| Consultations : has
   Consultations ||--o{ EyeExaminations : records
   Consultations ||--o{ Diagnoses : records
@@ -71,7 +75,7 @@ erDiagram
 | `PatientChangeLogs` | تاریخچه تغییر هویت (ستون، قدیم، جدید، کاربر، زمان) |
 | `Departments` | بخش‌ها |
 | `Staff` | مشخصات، بخش، فعال/غیرفعال؛ `UserId` اختیاری و Unique |
-| `Visits` | `VisitNumber` Unique؛ `PatientId`، `DepartmentId`، `DoctorStaffId`، وضعیت، علت، `VisitDate`؛ Unique روی (`VisitDate`,`QueueScope`,`QueueNumber`)؛ `Version` |
+| `Visits` | `VisitNumber` Unique؛ `PatientId`، `DepartmentId`، `DoctorStaffId` (کلید خارجی به `Staff`؛ صف هر داکتر از `Staff.UserId` همین ردیف ساخته می‌شود)، وضعیت، علت، `VisitDate`؛ Unique روی (`VisitDate`,`QueueScope`,`QueueNumber`)؛ `Version` |
 | `VisitStatusHistory` | هر انتقال وضعیت با کاربر و زمان |
 | `Appointments` | مریض، داکتر، تاریخ/زمان، وضعیت؛ Unique روی (`DoctorStaffId`,`ScheduledAt`) برای نوبت‌های فعال با ستون تولیدی |
 | `NumberSequences` | شمارنده اتمیک شماره اسناد و صف: (`Scope`,`Period`) Unique |
@@ -81,7 +85,9 @@ Identity: جدول‌های استاندارد `AspNetUsers`، `AspNetRoles`، `
 ### Clinical
 | جدول | نکات کلیدی |
 |---|---|
-| `PreExaminations` | Unique روی `VisitId`؛ شکایت اصلی، سابقه، VA/IOP برای OD و OS، یادداشت؛ `Version` |
+| `PreExaminations` | Unique روی `VisitId`؛ شکایت اصلی، سابقه، VA/IOP برای OD و OS، یادداشت؛ `Version`. چشم مربوط، مدت، Pinhole، GL، NV، BP، Syringing، سوابق Y/N (`Hx Diabetes: Y 7`) و حساسیت به‌صورت خط‌های برچسب‌دار در `Measurements` ذخیره می‌شوند. خط‌های ناشناخته دست نمی‌خورند |
+| `Refractions` | Unique روی `VisitId`؛ دید بدون اصلاح، Pinhole و دید نزدیک برای OD و OS، PD، اندازه‌گیری‌ها، یادداشت، `CompletedAt`؛ `Version`. Retinoscopy، Color vision، K1/K2، AL، IOL، RBS، JCC و نوع عدسی خط‌های برچسب‌دار در `Measurements` هستند. وضعیت مراجعه را تغییر نمی‌دهد |
+| `RefractionLines` | Unique روی (`RefractionId`, `Stage`, `Eye`)؛ مرحله `Current`/`Auto`/`Subjective`/`Final` با SPH، CYL، AXIS، ADD و VA. ردیف خالی ذخیره نمی‌شود |
 | `Consultations` | Unique روی `VisitId`؛ داکتر، پلان، یادداشت محرمانه، `FinalizedAt`؛ `Version` |
 | `EyeExaminations` | Unique روی (`ConsultationId`,`Eye`) با Eye=OD/OS |
 | `Diagnoses` | تشخیص‌ها؛ `Eye` اختیاری |

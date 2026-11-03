@@ -129,8 +129,9 @@ public sealed class HospitalReadinessTests(ApiFixture api)
     {
         var reception = await UserAsync(Roles.Receptionist);
         var patient = await Created<PatientDto>(await reception.SendAsync(Post("/api/patients", NewPatient())));
-        var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, await DepartmentAsync(reception, "داکتر"), null, null))));
+        var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, await DepartmentAsync(reception, "داکتر"), null, null, null, await api.PaidTokenAsync()))));
 
+        await api.CompleteVisionAsync(visit.Id);
         var doctor = await UserAsync(Roles.Doctor);
         var seen = await doctor.GetFromJsonAsync<PatientDto>($"/api/patients/{patient.Id}", JsonOptions);
         Assert.Equal(patient, seen);
@@ -144,7 +145,7 @@ public sealed class HospitalReadinessTests(ApiFixture api)
     {
         var reception = await UserAsync(Roles.Receptionist);
         var patient = await Created<PatientDto>(await reception.SendAsync(Post("/api/patients", NewPatient())));
-        var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, await DepartmentAsync(reception, "داکتر"), null, null))));
+        var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, await DepartmentAsync(reception, "داکتر"), null, null, null, await api.PaidTokenAsync()))));
 
         var doctor = await UserAsync(Roles.Doctor);
         var rx = await Created<PrescriptionDto>(await doctor.SendAsync(Post("/api/prescriptions",
@@ -239,7 +240,7 @@ public sealed class HospitalReadinessTests(ApiFixture api)
         var productId = await NewProductAsync(100);
         var reception = await UserAsync(Roles.Receptionist);
         var patient = await Created<PatientDto>(await reception.SendAsync(Post("/api/patients", NewPatient())));
-        var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, await DepartmentAsync(reception, "داکتر"), null, null))));
+        var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, await DepartmentAsync(reception, "داکتر"), null, null, null, await api.PaidTokenAsync()))));
 
         // Two items, one already started: the status stays PartiallyDispensed, so no version check catches a lost update.
         var doctor = await UserAsync(Roles.Doctor);
@@ -351,19 +352,28 @@ public sealed class HospitalReadinessTests(ApiFixture api)
         async Task<(long VisitId, int Queue)> OnePatientAsync()
         {
             var patient = await Created<PatientDto>(await reception.SendAsync(Post("/api/patients", NewPatient())));
-            var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, department, null, "معاینه", serviceId))));
+            var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, department, null, "معاینه", serviceId, await api.PaidTokenAsync()))));
 
+            async Task PayOpenAsync()
+            {
+                var unpaid = await cashier.GetFromJsonAsync<PagedResult<InvoiceRow>>($"/api/invoices?unpaid=true&q={patient.FileNumber}", JsonOptions);
+                foreach (var invoice in unpaid!.Items)
+                {
+                    await Created<PaymentRow>(await cashier.SendAsync(Post("/api/payments", new PaymentRequest(invoice.Id, invoice.Balance, PaymentMethod.Cash, null, invoice.Version))));
+                }
+            }
+
+            await api.CompleteVisionAsync(visit.Id);
+
+            // The extra service chosen at registration is paid before the doctor starts.
+            await PayOpenAsync();
             var saved = await doctor.PutAsJsonAsync($"/api/consultations/{visit.Id}", new SaveConsultationRequest("یافته OD", "یافته OS", "درمان", null, [new DiagnosisInput(EyeSide.OD, "تشخیص")], null));
             Assert.True(saved.IsSuccessStatusCode, await saved.Content.ReadAsStringAsync());
             var rx = await Created<PrescriptionDto>(await doctor.SendAsync(Post("/api/prescriptions", new CreatePrescriptionRequest(visit.Id, null, [new RxItemInput("قطره", null, null, null, null, 2)]))));
 
             var sale = await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(patient.Id, rx.Id, [new SaleLineInput(productId, 2, rx.Items[0].Id)]))));
 
-            var unpaid = await cashier.GetFromJsonAsync<PagedResult<InvoiceRow>>($"/api/invoices?unpaid=true&q={patient.FileNumber}", JsonOptions);
-            foreach (var invoice in unpaid!.Items)
-            {
-                await Created<PaymentRow>(await cashier.SendAsync(Post("/api/payments", new PaymentRequest(invoice.Id, invoice.Balance, PaymentMethod.Cash, null, invoice.Version))));
-            }
+            await PayOpenAsync();
 
             var settled = await cashier.GetFromJsonAsync<PagedResult<InvoiceRow>>($"/api/invoices?unpaid=true&q={patient.FileNumber}", JsonOptions);
             Assert.Empty(settled!.Items);

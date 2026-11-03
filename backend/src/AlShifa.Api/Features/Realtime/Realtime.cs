@@ -47,6 +47,7 @@ public sealed class EventsHub(ConnectionTracker tracker) : Hub
         (Dept.Finance, "ledger.view"),
         (Dept.Inventory, "inventory.approve"),
         (Dept.Management, "reports.print"),
+        (Dept.Audio, "calls.manage"),
     ];
 
     public override async Task OnConnectedAsync()

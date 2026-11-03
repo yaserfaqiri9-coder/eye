@@ -1,3 +1,4 @@
+import { pick } from './helpers'
 import { expect, test, type Browser, type Page } from '@playwright/test'
 
 const adminUser = process.env.ALSHIFA_E2E_USER!
@@ -33,14 +34,13 @@ async function staffPage(browser: Browser, userName: string) {
 
 async function registerVisit(reception: Page, firstName: string) {
   await reception.goto('/patients')
-  await reception.getByRole('button', { name: 'مریض جدید' }).click()
-  const pd = reception.getByRole('dialog')
-  await pd.getByLabel('نام', { exact: true }).fill(firstName)
-  await pd.getByRole('button', { name: 'ذخیره' }).click()
+  await reception.getByRole('link', { name: 'مریض جدید' }).click()
+  await reception.getByLabel('نام', { exact: true }).fill(firstName)
+  await reception.getByRole('button', { name: 'ذخیره' }).click()
   await expect(reception).toHaveURL(/\/patients\/\d+$/)
   await reception.getByRole('button', { name: 'مراجعه جدید' }).click()
   const vd = reception.getByRole('dialog')
-  await vd.getByLabel('بخش').selectOption({ label: 'معاینه ابتدایی' })
+  await pick(reception, vd, 'بخش', 'معاینه ابتدایی')
   await vd.getByRole('button', { name: 'ثبت مراجعه' }).click()
   await expect(vd).toBeHidden()
 }

@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { menu } from './menu'
+import { isMenuParent, menu, type MenuEntry, type MenuItem, type MenuParent } from './menu'
 
 const props = defineProps<{ open: boolean; mini: boolean }>()
 const emit = defineEmits<{ close: []; 'toggle-mini': []; 'collapse-change': [collapsed: boolean] }>()
 
 const auth = useAuthStore()
+const route = useRoute()
 
 const hovered = ref(false)
 const focused = ref(false)
@@ -41,6 +43,7 @@ const RAIL_HEIGHT = 88
 const MIN_THUMB = 22
 
 const scroller = ref<HTMLElement | null>(null)
+const list = ref<HTMLElement | null>(null)
 const thumb = ref({ show: false, height: MIN_THUMB, top: 0 })
 let observer: ResizeObserver | null = null
 
@@ -82,27 +85,63 @@ onMounted(() => {
   measure()
   observer = new ResizeObserver(measure)
   if (scroller.value) observer.observe(scroller.value)
+  // A submenu sliding open changes the list's height, not the scroller's.
+  if (list.value) observer.observe(list.value)
 })
 
 onBeforeUnmount(() => observer?.disconnect())
+
+const allowed = (item: MenuItem) => !item.permission || auth.can(item.permission)
 
 const sections = computed(() =>
   menu
     .map((section) => ({
       ...section,
-      items: section.items.filter((item) => !item.permission || auth.can(item.permission)),
+      items: section.items.flatMap((entry): MenuEntry[] => {
+        if (!isMenuParent(entry)) return allowed(entry) ? [entry] : []
+        const children = entry.children.filter(allowed)
+        // A single page left for this role needs no submenu to open first.
+        return children.length > 1 ? [{ ...entry, children }] : children
+      }),
     }))
     .filter((section) => section.items.length > 0),
 )
 
-watch(sections, () => nextTick(measure))
+function isItemActive(item: MenuItem) {
+  if (item.activeOn?.includes(String(route.name ?? ''))) return true
+  if (item.to === '/') return route.path === '/'
+  return route.path === item.to || route.path.startsWith(`${item.to}/`)
+}
+
+function isParentActive(parent: MenuParent) {
+  return parent.children.some(isItemActive)
+}
+
+const openParents = ref(new Set<string>())
+
+function toggleParent(label: string) {
+  const next = new Set(openParents.value)
+  if (next.has(label)) next.delete(label)
+  else next.add(label)
+  openParents.value = next
+}
+
+/** Like the template after a page load: arriving on a page leaves only its own submenu open. */
+watch(
+  [sections, () => route.path],
+  () => {
+    const parents = sections.value.flatMap((section) => section.items.filter(isMenuParent))
+    openParents.value = new Set(parents.filter(isParentActive).map((parent) => parent.label))
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
   <div v-if="open" class="sidebar-backdrop" @click="$emit('close')"></div>
   <aside
     class="sidebar"
-    :class="{ 'sidebar--open': open, 'sidebar--mini': collapsed }"
+    :class="{ 'sidebar--open': open, 'sidebar--mini': collapsed, 'sidebar--dash-titles': mini }"
     @pointerenter="onPointerEnter"
     @pointerleave="hovered = false"
     @focusin="onFocusIn"
@@ -118,26 +157,75 @@ watch(sections, () => nextTick(measure))
         :title="mini ? 'باز نگه داشتن منو' : 'جمع کردن منو'"
         @click="toggleMini"
       >
-        <i :class="mini ? 'ri-pushpin-line' : 'ri-more-fill'" aria-hidden="true"></i>
+        <i :class="mini ? 'ri-more-2-fill' : 'ri-more-fill'" aria-hidden="true"></i>
       </button>
     </div>
     <div ref="scroller" class="sidebar__scroll" @scroll.passive="measure">
-      <nav>
-        <template v-for="section in sections" :key="section.title">
-          <div class="sidebar__section"><span>{{ section.title }}</span></div>
-          <RouterLink
-            v-for="item in section.items"
-            :key="item.to"
-            :to="item.to"
-            class="sidebar__link"
-            exact-active-class="sidebar__link--active"
-            :title="collapsed ? item.label : undefined"
-            @click="$emit('close')"
-          >
-            <i :class="item.icon" aria-hidden="true"></i>
-            <span>{{ item.label }}</span>
-          </RouterLink>
-        </template>
+      <nav ref="list" aria-label="منوی اصلی">
+        <ul class="sidebar__menu">
+          <template v-for="section in sections" :key="section.title">
+            <li class="sidebar__title" :title="mini ? section.title : undefined">
+              <i class="ri-subtract-line" aria-hidden="true"></i>
+              <span>{{ section.title }}</span>
+            </li>
+            <template v-for="entry in section.items" :key="entry.label">
+              <li
+                v-if="isMenuParent(entry)"
+                class="sidebar__item"
+                :class="{
+                  'sidebar__item--active': isParentActive(entry),
+                  'sidebar__item--open': openParents.has(entry.label),
+                }"
+              >
+                <button
+                  type="button"
+                  class="sidebar__link"
+                  :aria-expanded="openParents.has(entry.label)"
+                  :aria-controls="`sidebar-submenu-${entry.label}`"
+                  :title="collapsed ? entry.label : undefined"
+                  @click="toggleParent(entry.label)"
+                >
+                  <i :class="entry.icon" aria-hidden="true"></i>
+                  <span>{{ entry.label }}</span>
+                  <i class="ri-arrow-left-s-line sidebar__arrow" aria-hidden="true"></i>
+                </button>
+                <div :id="`sidebar-submenu-${entry.label}`" class="sidebar__submenu">
+                  <ul class="sidebar__submenu-list">
+                    <li
+                      v-for="child in entry.children"
+                      :key="child.to"
+                      class="sidebar__child"
+                      :class="{ 'sidebar__child--active': isItemActive(child) }"
+                    >
+                      <RouterLink
+                        :to="child.to"
+                        class="sidebar__link"
+                        :aria-current="isItemActive(child) ? 'page' : undefined"
+                        :title="collapsed ? child.label : undefined"
+                        @click="$emit('close')"
+                      >
+                        <i :class="child.icon" aria-hidden="true"></i>
+                        <span>{{ child.label }}</span>
+                      </RouterLink>
+                    </li>
+                  </ul>
+                </div>
+              </li>
+              <li v-else class="sidebar__item" :class="{ 'sidebar__item--active': isItemActive(entry) }">
+                <RouterLink
+                  :to="entry.to"
+                  class="sidebar__link"
+                  :aria-current="isItemActive(entry) ? 'page' : undefined"
+                  :title="collapsed ? entry.label : undefined"
+                  @click="$emit('close')"
+                >
+                  <i :class="entry.icon" aria-hidden="true"></i>
+                  <span>{{ entry.label }}</span>
+                </RouterLink>
+              </li>
+            </template>
+          </template>
+        </ul>
       </nav>
     </div>
     <div v-if="thumb.show" class="sidebar__rail" aria-hidden="true">
@@ -263,57 +351,134 @@ watch(sections, () => nextTick(measure))
   line-height: 41px;
 }
 
-/* Small dark label with a rule running to the edge, so a group title cannot be read as one more white link. */
-.sidebar__section {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 48px;
-  padding: 20px 15px 8px;
-  color: #03404a;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 20px;
+.sidebar__menu,
+.sidebar__submenu-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sidebar__title {
+  padding: 15px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 18px;
   white-space: nowrap;
 }
 
-.sidebar__section::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: rgba(255, 255, 255, 0.35);
+.sidebar__title i {
+  display: none;
+  font-size: 20px;
+}
+
+/* A white card holds the active row, or an open row together with its whole submenu. */
+.sidebar__item {
+  overflow: hidden;
+  border-radius: var(--xr-radius-card);
+  transition: background-color 0.5s ease-out, box-shadow 0.5s ease-out;
+}
+
+.sidebar__item--active,
+.sidebar__item--open {
+  margin-bottom: 10px;
+  background: #fff;
+  box-shadow: var(--xr-shadow-active);
 }
 
 .sidebar__link {
   display: flex;
   align-items: center;
+  width: 100%;
   min-height: 47px;
   padding: 15px;
+  border: 0;
   border-radius: var(--xr-radius-link);
+  background: transparent;
   color: #fff;
+  font-family: var(--xr-font);
   font-size: 14px;
   line-height: 17px;
+  text-align: start;
   white-space: nowrap;
-}
-
-.sidebar__link i {
-  flex: none;
-  margin-inline-end: 10px;
-  font-size: 20px;
-  line-height: 17px;
+  cursor: pointer;
+  transition: color 0.5s ease-out;
 }
 
 .sidebar__link:hover {
   color: #fff;
 }
 
-.sidebar__link--active,
-.sidebar__link--active:hover {
-  margin-bottom: 10px;
-  border-radius: var(--xr-radius-card);
-  background: #fff;
+.sidebar__link i {
+  flex: none;
+  width: 20px;
+  margin-inline-end: 10px;
+  font-size: 20px;
+  line-height: 17px;
+}
+
+.sidebar__item--active > .sidebar__link,
+.sidebar__item--open > .sidebar__link {
   color: var(--xr-primary);
-  box-shadow: var(--xr-shadow-active);
+}
+
+.sidebar__link .sidebar__arrow {
+  margin-inline: auto 0;
+  transition: transform 0.3s ease-in-out;
+}
+
+.sidebar__item--open .sidebar__arrow {
+  transform: rotate(-90deg);
+}
+
+.sidebar__submenu {
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  transition: grid-template-rows 0.3s ease-in-out, visibility 0.3s;
+}
+
+.sidebar__item--open > .sidebar__submenu {
+  grid-template-rows: 1fr;
+  visibility: visible;
+}
+
+.sidebar__submenu-list {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar__child .sidebar__link {
+  min-height: 41px;
+  padding: 12px 15px;
+  color: var(--xr-sidebar-child);
+}
+
+.sidebar__child .sidebar__link i {
+  font-size: 16px;
+}
+
+.sidebar__child .sidebar__link:hover {
+  color: var(--xr-primary);
+}
+
+.sidebar__child--active .sidebar__link,
+.sidebar__child--active .sidebar__link:hover {
+  border-radius: 0;
+  background: var(--xr-primary-light);
+  color: var(--xr-primary);
+}
+
+.sidebar__link:focus-visible,
+.sidebar__toggle:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: -3px;
+}
+
+/* White would disappear on the white card. */
+.sidebar__item--active .sidebar__link:focus-visible,
+.sidebar__item--open .sidebar__link:focus-visible {
+  outline-color: var(--xr-primary);
 }
 
 /* Collapsed: icons only, and the full menu slides back out while the pointer or keyboard focus is in it. */
@@ -325,13 +490,21 @@ watch(sections, () => nextTick(measure))
   .sidebar--mini .sidebar__name,
   .sidebar--mini .sidebar__toggle,
   .sidebar--mini .sidebar__link span,
-  .sidebar--mini .sidebar__section span {
+  .sidebar--mini .sidebar__arrow {
     display: none;
   }
 
-  /* With the title hidden only its rule is left, at the same height, so icons do not jump on hover. */
-  .sidebar--mini .sidebar__section:first-child::after {
+  .sidebar--mini .sidebar__link i {
+    margin-inline: 0;
+  }
+
+  /* The dash stays while the pointer slides the menu out; titles return only when the menu is kept open. */
+  .sidebar--dash-titles .sidebar__title span {
     display: none;
+  }
+
+  .sidebar--dash-titles .sidebar__title i {
+    display: block;
   }
 }
 
@@ -366,6 +539,15 @@ watch(sections, () => nextTick(measure))
     inset: 0;
     z-index: 1029;
     background: rgba(0, 0, 0, 0.35);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar__submenu,
+  .sidebar__arrow,
+  .sidebar__item,
+  .sidebar__link {
+    transition: none;
   }
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { api, errorMessage } from '@/api/http'
 import UiCard from '@/components/UiCard.vue'
 import UiModal from '@/components/UiModal.vue'
@@ -25,6 +25,7 @@ const departments = ref<LookupItem[]>([])
 const users = ref<{ id: number; userName: string; fullName: string }[]>([])
 const loading = ref(true)
 const error = ref('')
+const unlinkedDoctors = computed(() => rows.value.filter((r) => r.isDoctor && r.isActive && !r.userId).map((r) => r.fullName))
 
 const form = reactive({
   open: false,
@@ -114,8 +115,11 @@ onMounted(async () => {
       <button v-if="auth.can('users.create')" type="button" class="btn btn-primary" @click="open()">کارمند جدید</button>
     </template>
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
-    <div v-if="loading" class="py-4 text-center text-muted" role="status">در حال بارگذاری...</div>
-    <div v-else-if="rows.length === 0" class="py-4 text-center text-muted">کارمندی ثبت نشده است.</div>
+    <div v-if="unlinkedDoctors.length" class="alert alert-warning" role="alert">
+      این داکتران حساب کاربری وصل‌شده ندارند و مریضان‌شان در صف مشترک داکتران دیده می‌شوند، نه صف خودشان: {{ unlinkedDoctors.join('، ') }}.
+    </div>
+    <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
+    <div v-else-if="rows.length === 0" class="xr-state">کارمندی ثبت نشده است.</div>
     <div v-else class="xr-table-wrap">
       <table class="xr-table">
         <thead>
@@ -165,7 +169,10 @@ onMounted(async () => {
         <label class="form-check-label"><input v-model="form.isActive" class="form-check-input ms-2" type="checkbox" />فعال</label>
       </div>
       <div v-if="form.error" class="alert alert-danger" role="alert">{{ form.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="form.saving">ذخیره</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="form.saving">ذخیره</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 </template>

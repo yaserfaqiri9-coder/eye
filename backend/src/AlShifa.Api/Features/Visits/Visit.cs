@@ -53,6 +53,41 @@ public class Visit
     public int Version { get; set; }
 }
 
+/// <summary>
+/// The paid queue number reception issues before a patient's details are taken. It holds the visit fee's invoice
+/// and becomes a Visit once, so no placeholder patient is ever needed.
+/// </summary>
+public class VisitToken
+{
+    public long Id { get; set; }
+
+    public int QueueNumber { get; set; }
+
+    public DateOnly TokenDate { get; set; }
+
+    public int DepartmentId { get; set; }
+
+    public Department? Department { get; set; }
+
+    public long? DoctorStaffId { get; set; }
+
+    public Staff? Doctor { get; set; }
+
+    public long InvoiceId { get; set; }
+
+    public Finance.Invoice? Invoice { get; set; }
+
+    public long? VisitId { get; set; }
+
+    public Visit? Visit { get; set; }
+
+    public long CreatedByUserId { get; set; }
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    public int Version { get; set; }
+}
+
 public class VisitStatusHistory
 {
     public long Id { get; set; }

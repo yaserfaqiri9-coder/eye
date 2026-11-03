@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Security.Cryptography;
 using AlShifa.Api.Features.Auth;
+using AlShifa.Api.Features.Clinical;
 using AlShifa.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
@@ -81,6 +82,9 @@ public static class SettingsEndpoints
             return Results.Ok(await LoadAsync(db, ct));
         }).RequirePermission("settings.edit");
 
+        settings.MapGet("/backup-status", (IConfiguration config) => Results.Ok(BackupStatus.Read(config["Backup:StatusFile"], DateTime.UtcNow)))
+            .RequirePermission("settings.view");
+
         app.MapPost("/api/cash/registers", async (SaveRegisterRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
         {
             var register = new Finance.CashRegister { Name = request.Name.Trim() };
@@ -125,7 +129,7 @@ public static class SettingsEndpoints
         }).RequireAuthorization();
 
         // Protected by the CSRF middleware in Program.cs, which validates the header before this runs.
-        attachments.MapPost("/", async (HttpContext http, AppDbContext db, CurrentUser user, AuditService audit, IConfiguration config, IHostEnvironment env, CancellationToken ct) =>
+        attachments.MapPost("/", async (HttpContext http, AppDbContext db, ClinicalAccess access, CurrentUser user, AuditService audit, IConfiguration config, IHostEnvironment env, CancellationToken ct) =>
         {
             var form = await http.Request.ReadFormAsync(ct);
             var ownerType = form["ownerType"].ToString();
@@ -136,6 +140,11 @@ public static class SettingsEndpoints
 
             EnsureAllowed(http, ownerType, write: true);
             await EnsureOwnerExistsAsync(db, ownerType, ownerId, ct);
+            if (ownerType == "SurgeryCase")
+            {
+                var surgery = await db.SurgeryCases.AsNoTracking().Where(c => c.Id == ownerId).Select(c => new { c.VisitId, c.ResponsibleUserId }).SingleAsync(ct);
+                await access.EnsureResponsibleAsync(surgery.VisitId, ct, surgery.ResponsibleUserId);
+            }
 
             var file = form.Files["file"];
             if (file is null || file.Length == 0)
@@ -189,7 +198,7 @@ public static class SettingsEndpoints
         return new SettingsDto(values.GetValueOrDefault(HospitalNameKey), values.GetValueOrDefault(AddressKey), values.GetValueOrDefault(PhoneKey), values.GetValueOrDefault(FooterKey), logo);
     }
 
-    private static async Task UpsertAsync(AppDbContext db, string key, string? value, CancellationToken ct)
+    public static async Task UpsertAsync(AppDbContext db, string key, string? value, CancellationToken ct)
     {
         var setting = await db.Settings.SingleOrDefaultAsync(s => s.Key == key, ct);
         if (setting is null)
@@ -230,7 +239,7 @@ public static class SettingsEndpoints
         }
     }
 
-    private static string StorageRoot(IConfiguration config, IHostEnvironment env) =>
+    public static string StorageRoot(IConfiguration config, IHostEnvironment env) =>
         config["Storage:Path"] ?? Path.Combine(env.ContentRootPath, "storage");
 
     /// <summary>Judges the file by its first bytes; the claimed name and content type are not trusted.</summary>

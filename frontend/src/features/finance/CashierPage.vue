@@ -8,7 +8,7 @@ import UiModal from '@/components/UiModal.vue'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/date'
 import { money } from '@/utils/money'
-import { invoiceStatusLabels, invoiceStatusTones, type InvoiceDetail, type InvoiceRow, type PaymentRow, type ServiceRow, type SessionRow } from './types'
+import { invoiceStatusLabels, invoiceStatusTones, type InvoiceDetail, type InvoiceRow, type PaymentRow, type SessionRow } from './types'
 
 const auth = useAuthStore()
 const invoices = ref<InvoiceRow[]>([])
@@ -99,13 +99,17 @@ async function submitPayment() {
     pay.receipt = await api<PaymentRow>('/payments', {
       method: 'POST',
       idempotencyKey: pay.key,
-      body: { invoiceId: pay.detail!.invoice.id, amount: pay.amount, method: pay.method, reference: pay.reference },
+      body: { invoiceId: pay.detail!.invoice.id, amount: pay.amount, method: pay.method, reference: pay.reference, invoiceVersion: pay.detail!.invoice.version },
     })
     await refresh()
   } catch (cause) {
     pay.error = errorMessage(cause)
     // A definite refusal may be retried with new values; an unknown outcome keeps the key so a retry cannot double-charge.
     if (cause instanceof ApiError && !cause.outcomeUnknown) pay.key = newIdempotencyKey()
+    if (cause instanceof ApiError && cause.code === 'invoice_changed') {
+      pay.detail = await api<InvoiceDetail>(`/invoices/${pay.detail!.invoice.id}`)
+      pay.amount = pay.detail.invoice.balance
+    }
   } finally {
     pay.saving = false
   }
@@ -124,33 +128,6 @@ async function submitVoid() {
     voiding.error = errorMessage(cause)
   } finally {
     voiding.saving = false
-  }
-}
-
-const services = ref<ServiceRow[]>([])
-const fresh = reactive({ open: false, serviceId: null as number | null, quantity: 1, saving: false, error: '', key: '' })
-
-async function openNew() {
-  Object.assign(fresh, { open: true, serviceId: null, quantity: 1, saving: false, error: '', key: newIdempotencyKey() })
-  try {
-    services.value = (await api<ServiceRow[]>('/services')).filter((s) => s.isActive && s.currentPrice !== null)
-  } catch (cause) {
-    fresh.error = errorMessage(cause)
-  }
-}
-
-async function submitNew() {
-  fresh.saving = true
-  fresh.error = ''
-  try {
-    await api('/invoices', { method: 'POST', idempotencyKey: fresh.key, body: { items: [{ serviceId: fresh.serviceId, quantity: fresh.quantity }] } })
-    fresh.open = false
-    await loadInvoices()
-  } catch (cause) {
-    fresh.error = errorMessage(cause)
-    if (cause instanceof ApiError && !cause.outcomeUnknown) fresh.key = newIdempotencyKey()
-  } finally {
-    fresh.saving = false
   }
 }
 
@@ -185,10 +162,14 @@ onBeforeUnmount(() => clearTimeout(debounce))
 
     <UiCard title="صندوق">
       <template v-if="openSession">
-        <p class="mb-3">
-          {{ openSession.registerName }} باز است — موجودی شروع: {{ money(openSession.openingAmount) }} — زمان: {{ formatDateTime(openSession.openedAt) }}
-        </p>
-        <button v-if="auth.can('cash.edit')" type="button" class="btn btn-soft" @click="closing.open = true; closing.counted = 0; closing.error = ''">بستن صندوق</button>
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+          <dl class="xr-facts flex-grow-1">
+            <div><dt>صندوق باز</dt><dd>{{ openSession.registerName }}</dd></div>
+            <div><dt>موجودی شروع</dt><dd>{{ money(openSession.openingAmount) }}</dd></div>
+            <div><dt>زمان باز شدن</dt><dd>{{ formatDateTime(openSession.openedAt) }}</dd></div>
+          </dl>
+          <button v-if="auth.can('cash.edit')" type="button" class="btn btn-soft" @click="closing.open = true; closing.counted = 0; closing.error = ''">بستن صندوق</button>
+        </div>
       </template>
       <form v-else-if="auth.can('cash.create')" class="row g-3 align-items-end" @submit.prevent="open">
         <div class="col-md-4">
@@ -201,7 +182,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
           <label class="form-label" for="c-opening">موجودی شروع</label>
           <input id="c-opening" v-model.number="opening.amount" class="form-control" type="number" min="0" step="0.01" required />
         </div>
-        <div class="col-md-4"><button type="submit" class="btn btn-primary" :disabled="opening.saving">باز کردن صندوق</button></div>
+        <div class="col-md-4"><button type="submit" class="btn btn-primary xr-field-height" :disabled="opening.saving">باز کردن صندوق</button></div>
       </form>
     </UiCard>
 
@@ -209,11 +190,11 @@ onBeforeUnmount(() => clearTimeout(debounce))
       <template #actions>
         <div class="d-flex gap-2">
           <input v-model="q" type="search" class="form-control" placeholder="شماره فاکتور، پرونده یا نام" aria-label="جستجوی فاکتور" />
-          <button v-if="auth.can('invoices.create')" type="button" class="btn btn-soft text-nowrap" @click="openNew">فاکتور مستقل</button>
+          <RouterLink v-if="auth.can('invoices.create')" :to="{ name: 'invoice-new' }" class="btn btn-soft text-nowrap">فاکتور مستقل</RouterLink>
         </div>
       </template>
-      <div v-if="loading" class="py-4 text-center text-muted" role="status">در حال بارگذاری...</div>
-      <div v-else-if="invoices.length === 0" class="py-4 text-center text-muted">فاکتور قابل دریافتی نیست.</div>
+      <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
+      <div v-else-if="invoices.length === 0" class="xr-state">فاکتور قابل دریافتی نیست.</div>
       <div v-else class="xr-table-wrap">
         <table class="xr-table">
           <thead>
@@ -230,7 +211,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
               <td class="text-nowrap">
                 <button v-if="auth.can('payments.create')" type="button" class="btn btn-soft btn-sm" :disabled="!openSession" @click="openPayment(row)">دریافت</button>
                 <RouterLink v-if="auth.can('invoices.print')" :to="`/print/invoice/${row.id}`" target="_blank" class="btn btn-soft btn-sm ms-2">فاکتور</RouterLink>
-                <button v-if="row.paid === 0 && row.discount === 0 && auth.can('invoices.cancel')" type="button" class="btn btn-soft btn-sm ms-2" @click="Object.assign(voiding, { row, reason: '', error: '' })">باطل</button>
+                <button v-if="row.paid === 0 && row.discount === 0 && auth.can('invoices.cancel')" type="button" class="btn btn-soft-danger btn-sm ms-2" @click="Object.assign(voiding, { row, reason: '', error: '' })">باطل</button>
               </td>
             </tr>
           </tbody>
@@ -267,17 +248,24 @@ onBeforeUnmount(() => clearTimeout(debounce))
         </div>
       </div>
       <div v-if="pay.error" class="alert alert-danger" role="alert">{{ pay.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="pay.saving">ثبت دریافت</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="pay.saving">ثبت دریافت</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 
   <UiModal v-if="closing.open && openSession" title="بستن صندوق" @close="closing.open = false">
     <form @submit.prevent="close">
       <p>دریافت نقدی این جلسه: {{ money(openSession.cashCollected) }}<br />مبلغ مورد انتظار: {{ money(openSession.openingAmount + openSession.cashCollected) }}</p>
+      <p class="small text-muted">این مبلغ فقط موجودی آغاز و دریافت نقدی این جلسه است. برگشت وجه و مصارف از آن کم نشده است.</p>
       <label class="form-label" for="c-counted">مبلغ شمارش‌شده</label>
       <input id="c-counted" v-model.number="closing.counted" class="form-control mb-3" type="number" min="0" step="0.01" required />
       <div v-if="closing.error" class="alert alert-danger" role="alert">{{ closing.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="closing.saving">بستن صندوق</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="closing.saving">بستن صندوق</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 
@@ -286,27 +274,13 @@ onBeforeUnmount(() => clearTimeout(debounce))
       <label class="form-label" for="v-reason">دلیل</label>
       <input id="v-reason" v-model="voiding.reason" class="form-control mb-3" maxlength="300" required />
       <div v-if="voiding.error" class="alert alert-danger" role="alert">{{ voiding.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="voiding.saving">باطل کردن فاکتور</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="voiding.saving">باطل کردن فاکتور</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 
-  <UiModal v-if="fresh.open" title="فاکتور مستقل" @close="fresh.open = false">
-    <form @submit.prevent="submitNew">
-      <div class="mb-3">
-        <label class="form-label" for="f-service">خدمت</label>
-        <select id="f-service" v-model.number="fresh.serviceId" class="form-select" required>
-          <option :value="null" disabled>انتخاب کنید</option>
-          <option v-for="s in services" :key="s.id" :value="s.id">{{ s.name }} — {{ money(s.currentPrice) }}</option>
-        </select>
-      </div>
-      <div class="mb-3">
-        <label class="form-label" for="f-qty">تعداد</label>
-        <input id="f-qty" v-model.number="fresh.quantity" class="form-control" type="number" min="1" step="1" required />
-      </div>
-      <div v-if="fresh.error" class="alert alert-danger" role="alert">{{ fresh.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="fresh.saving">صدور فاکتور</button>
-    </form>
-  </UiModal>
 </template>
 
 <style scoped>

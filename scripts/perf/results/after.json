@@ -1,0 +1,108 @@
+{
+  "label": "after",
+  "at": "2026-11-03T10:19:47.913Z",
+  "conditions": {
+    "offline": false,
+    "latency": 20,
+    "downloadThroughput": 13107200,
+    "uploadThroughput": 13107200,
+    "cpuRate": 4,
+    "viewport": "1366x768",
+    "repeats": 5
+  },
+  "bundle": {
+    "jsFiles": 68,
+    "jsTotalKb": 530,
+    "entryJsKb": 120,
+    "cssTotalKb": 420,
+    "largestJs": [
+      "runtime-core.esm-bundler: 62KB",
+      "index: 58KB",
+      "realtime: 55KB",
+      "ChartPage: 36KB",
+      "PatientDetailPage: 28KB"
+    ]
+  },
+  "results": [
+    {
+      "name": "ثبت مریض جدید",
+      "coldPaintMs": 199,
+      "coldReadyMs": 199,
+      "warmPaintMs": 69,
+      "warmReadyMs": 69,
+      "warmReadyWorstMs": 84,
+      "apiRequests": 0,
+      "coldAssets": 0
+    },
+    {
+      "name": "مراجعه جدید (مودال)",
+      "coldPaintMs": 106,
+      "coldReadyMs": 106,
+      "warmPaintMs": 59,
+      "warmReadyMs": 59,
+      "warmReadyWorstMs": 61,
+      "apiRequests": 1,
+      "coldAssets": 0
+    },
+    {
+      "name": "شروع معاینه ابتدایی",
+      "coldPaintMs": 296,
+      "coldReadyMs": 496,
+      "warmPaintMs": 114,
+      "warmReadyMs": 249,
+      "warmReadyWorstMs": 261,
+      "apiRequests": 3,
+      "coldAssets": 0
+    },
+    {
+      "name": "ثبت بینایی‌سنجی",
+      "coldPaintMs": 324,
+      "coldReadyMs": 606,
+      "warmPaintMs": 150,
+      "warmReadyMs": 295,
+      "warmReadyWorstMs": 299,
+      "apiRequests": 4,
+      "coldAssets": 0
+    },
+    {
+      "name": "شروع معاینه داکتر",
+      "coldPaintMs": 146,
+      "coldReadyMs": 407,
+      "warmPaintMs": 51,
+      "warmReadyMs": 235,
+      "warmReadyWorstMs": 254,
+      "apiRequests": 3,
+      "coldAssets": 0
+    },
+    {
+      "name": "فروش مستقل دواخانه",
+      "coldPaintMs": 128,
+      "coldReadyMs": 128,
+      "warmPaintMs": 74,
+      "warmReadyMs": 74,
+      "warmReadyWorstMs": 89,
+      "apiRequests": 0,
+      "coldAssets": 0
+    },
+    {
+      "name": "باز شدن تقویم شمسی",
+      "coldPaintMs": 180,
+      "coldReadyMs": 180,
+      "warmPaintMs": 118,
+      "warmReadyMs": 118,
+      "warmReadyWorstMs": 164,
+      "apiRequests": 0,
+      "coldAssets": 0
+    },
+    {
+      "name": "باز شدن ComboBox بخش",
+      "coldPaintMs": 45,
+      "coldReadyMs": 45,
+      "warmPaintMs": 27,
+      "warmReadyMs": 27,
+      "warmReadyWorstMs": 30,
+      "apiRequests": 0,
+      "coldAssets": 0
+    }
+  ]
+}

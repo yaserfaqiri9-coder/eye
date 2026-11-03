@@ -1,3 +1,4 @@
+import { collectFee, ensureTariffs, openDesk, pick } from './helpers'
 import { expect, test, type Page } from '@playwright/test'
 
 const adminUser = process.env.ALSHIFA_E2E_USER!
@@ -41,32 +42,35 @@ test('receptionist registers a patient, duplicate is caught, visit reaches the q
 
   // Role lands on its own workspace.
   await expect(reception).toHaveURL(/\/reception$/)
+  await ensureTariffs(page)
+  await openDesk(page, reception)
   await expect(reception.getByRole('link', { name: 'کاربران' })).toHaveCount(0)
 
   const firstName = `احمد${stamp}`
   const phone = `07${String(stamp).slice(-8)}`
 
   async function fillPatient() {
-    const dialog = reception.getByRole('dialog')
-    await dialog.getByLabel('نام', { exact: true }).fill(firstName)
-    await dialog.getByLabel('نام پدر').fill('محمود')
-    await dialog.getByLabel('یا سن تخمینی').fill('40')
-    await dialog.getByLabel('شماره تماس').fill(phone)
-    await dialog.getByRole('button', { name: 'ذخیره' }).click()
+    await reception.getByLabel('نام', { exact: true }).fill(firstName)
+    await reception.getByLabel('نام پدر').fill('محمود')
+    await reception.getByLabel('یا سن تخمینی').fill('40')
+    await reception.getByLabel('شماره تماس').fill(phone)
+    await reception.getByRole('button', { name: 'ذخیره' }).click()
   }
 
   await reception.getByRole('link', { name: 'مریضان' }).click()
-  await reception.getByRole('button', { name: 'مریض جدید' }).click()
+  await reception.getByRole('link', { name: 'مریض جدید' }).click()
   await fillPatient()
   await expect(reception).toHaveURL(/\/patients\/\d+$/)
   await expect(reception.getByText('P-', { exact: false }).first()).toBeVisible()
 
   // Same person again: the system warns before creating a second record.
   await reception.goto('/patients')
-  await reception.getByRole('button', { name: 'مریض جدید' }).click()
+  await reception.getByRole('link', { name: 'مریض جدید' }).click()
   await fillPatient()
   await expect(reception.getByText('مریض مشابه پیدا شد')).toBeVisible()
-  await reception.getByRole('dialog').getByRole('button', { name: 'بستن' }).click()
+  reception.once('dialog', (dialog) => dialog.accept())
+  await reception.getByRole('link', { name: 'بازگشت به مریضان' }).click()
+  await expect(reception).toHaveURL(/\/patients$/)
 
   // Header search finds the patient.
   await reception.getByLabel('جستجوی مریض در هدر').fill(firstName)
@@ -78,7 +82,8 @@ test('receptionist registers a patient, duplicate is caught, visit reaches the q
   await reception.getByRole('link', { name: new RegExp(firstName) }).first().click()
   await reception.getByRole('button', { name: 'مراجعه جدید' }).click()
   const visitDialog = reception.getByRole('dialog')
-  await visitDialog.getByLabel('بخش').selectOption({ label: 'معاینه ابتدایی' })
+  await pick(reception, visitDialog, 'بخش', 'معاینه ابتدایی')
+  await collectFee(visitDialog)
   await visitDialog.getByLabel('علت مراجعه').fill('تاری دید')
   await visitDialog.getByRole('button', { name: 'ثبت مراجعه' }).click()
   await expect(visitDialog).toBeHidden()

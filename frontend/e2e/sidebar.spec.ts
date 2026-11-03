@@ -106,6 +106,131 @@ test('a clicked link does not hold the collapsed menu open', async ({ page }) =>
   await sidebarWidth(page, 80)
 })
 
+/** Everyone who works in several departments, so the submenus are not reduced to single links. */
+const allPermissions = [
+  'visits.view', 'patients.view', 'preexam.edit', 'consultation.edit', 'diagnostics.edit', 'surgery.view',
+  'pharmacy.create', 'optical.view', 'inventory.view', 'payments.create', 'invoices.view',
+  'reports.view', 'settings.view', 'users.view', 'audit.view',
+]
+
+async function openAs(page: Page, path: string, granted: string[], mini = false) {
+  await page.addInitScript((value) => localStorage.setItem('alshifa.sidebar.mini', value), mini ? '1' : '0')
+  await page.route(/^https?:\/\/[^/]+\/api\//, (route) =>
+    route.request().url().includes('/auth/me')
+      ? route.fulfill({ json: { id: 1, userName: 'admin', fullName: 'مدیر', roles: ['Admin'], permissions: granted } })
+      : route.fulfill({ json: { items: [], total: 0, page: 1, pageSize: 20 } }),
+  )
+  await page.route(/^https?:\/\/[^/]+\/hubs\//, (route) => route.abort())
+  await page.setViewportSize({ width: 1600, height: 900 })
+  await page.goto(path)
+  await page.locator('.sidebar__link').first().waitFor()
+  await page.mouse.move(900, 500)
+}
+
+const item = (page: Page, label: string) => page.locator('.sidebar__item', { hasText: label })
+const parentButton = (page: Page, label: string) => page.getByRole('button', { name: label, exact: true })
+
+test('section titles are plain labels, and the rows match the template measurements', async ({ page }) => {
+  await openAs(page, '/patients', allPermissions)
+
+  const title = page.locator('.sidebar__title', { hasText: 'مدیریت' })
+  await expect(title).toBeVisible()
+  await expect(title.getByRole('button')).toHaveCount(0)
+  await expect(title).toHaveCSS('font-size', '15px')
+  await expect(title).toHaveCSS('font-weight', '500')
+  await expect(title).toHaveCSS('color', 'rgb(255, 255, 255)')
+
+  const link = page.getByRole('link', { name: 'گزارش‌ها' })
+  await expect(link).toHaveCSS('height', '47px')
+  await expect(link).toHaveCSS('font-size', '14px')
+  await expect(link).toHaveCSS('color', 'rgb(255, 255, 255)')
+  await link.hover()
+  await expect(link).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+})
+
+test('the active row is a white card with teal text', async ({ page }) => {
+  await openAs(page, '/patients', allPermissions)
+
+  const active = item(page, 'مریضان').last()
+  await expect(active).toHaveCSS('background-color', 'rgb(255, 255, 255)')
+  await expect(active).toHaveCSS('border-radius', '25px')
+  await expect(active).toHaveCSS('margin-bottom', '10px')
+  await expect(page.getByRole('link', { name: 'مریضان' })).toHaveCSS('color', 'rgb(8, 155, 171)')
+  await expect(page.getByRole('link', { name: 'مریضان' })).toHaveAttribute('aria-current', 'page')
+})
+
+test('an active child sits on a light band inside its parent card', async ({ page }) => {
+  await openAs(page, '/lab', allPermissions)
+
+  await expect(parentButton(page, 'بخش‌های طبی')).toHaveAttribute('aria-expanded', 'true')
+  await expect(parentButton(page, 'بخش‌های طبی')).toHaveCSS('color', 'rgb(8, 155, 171)')
+  await expect(item(page, 'بخش‌های طبی')).toHaveCSS('background-color', 'rgb(255, 255, 255)')
+
+  const activeChild = page.getByRole('link', { name: 'آزمایشگاه' })
+  await expect(activeChild).toHaveCSS('height', '41px')
+  await expect(activeChild).toHaveCSS('background-color', 'rgb(206, 235, 238)')
+  await expect(activeChild).toHaveCSS('color', 'rgb(8, 155, 171)')
+  await expect(activeChild).toHaveCSS('border-radius', '0px')
+
+  await expect(page.getByRole('link', { name: 'عملیات' })).toHaveCSS('color', 'rgb(119, 125, 116)')
+  await expect(page.getByRole('link', { name: 'عملیات' }).locator('i')).toHaveCSS('font-size', '16px')
+})
+
+test('submenus open independently, and the active one can still be closed', async ({ page }) => {
+  await openAs(page, '/lab', allPermissions)
+
+  await parentButton(page, 'مالی').click()
+  await expect(page.getByRole('link', { name: 'صندوق' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'آزمایشگاه' })).toBeVisible()
+
+  await parentButton(page, 'بخش‌های طبی').click()
+  await expect(page.getByRole('link', { name: 'آزمایشگاه' })).toBeHidden()
+  // Closed, it still marks where the user is.
+  await expect(item(page, 'بخش‌های طبی')).toHaveCSS('background-color', 'rgb(255, 255, 255)')
+})
+
+test('going to a page leaves only its own submenu open', async ({ page }) => {
+  await openAs(page, '/lab', allPermissions)
+
+  await parentButton(page, 'مالی').click()
+  await page.getByRole('link', { name: 'صندوق' }).click()
+
+  await expect(parentButton(page, 'مالی')).toHaveAttribute('aria-expanded', 'true')
+  await expect(parentButton(page, 'بخش‌های طبی')).toHaveAttribute('aria-expanded', 'false')
+})
+
+test('the keyboard skips the links of a closed submenu', async ({ page }) => {
+  await openAs(page, '/', allPermissions)
+
+  await parentButton(page, 'مالی').focus()
+  await page.keyboard.press('Tab')
+
+  await expect(page.getByRole('link', { name: 'گزارش‌ها' })).toBeFocused()
+})
+
+test('a role with one page in a submenu gets a direct link', async ({ page }) => {
+  await openAs(page, '/', ['diagnostics.edit', 'visits.view'])
+
+  await expect(page.getByRole('link', { name: 'آزمایشگاه' })).toBeVisible()
+  await expect(parentButton(page, 'بخش‌های طبی')).toHaveCount(0)
+  await expect(page.locator('.sidebar__title', { hasText: 'مدیریت' })).toHaveCount(0)
+})
+
+test('collapsed, titles become dashes and the open submenu shows icons only', async ({ page }) => {
+  await openAs(page, '/lab', allPermissions, true)
+  await sidebarWidth(page, 80)
+
+  const title = page.locator('.sidebar__title').first()
+  await expect(title.locator('i')).toBeVisible()
+  await expect(title.locator('span')).toBeHidden()
+
+  const activeChild = page.getByRole('link', { name: 'آزمایشگاه' })
+  await expect(activeChild.locator('i')).toBeVisible()
+  await expect(activeChild.locator('span')).toBeHidden()
+  await expect(activeChild).toHaveCSS('background-color', 'rgb(206, 235, 238)')
+  await expect(item(page, 'بخش‌های طبی')).toHaveCSS('width', '50px')
+})
+
 test('touch screens keep the full menu even when collapsing was saved earlier', async ({ browser }) => {
   const context = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 1600, height: 900 } })
   const page = await context.newPage()

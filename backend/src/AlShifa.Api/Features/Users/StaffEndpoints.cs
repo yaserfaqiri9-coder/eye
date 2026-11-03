@@ -46,6 +46,7 @@ public static class StaffEndpoints
 
         group.MapPost("/", async (SaveStaffRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
         {
+            await EnsureUserExistsAsync(db, request, ct);
             var staff = new Staff();
             Apply(staff, request);
             db.Staff.Add(staff);
@@ -62,6 +63,7 @@ public static class StaffEndpoints
                 throw new AppException(StatusCodes.Status400BadRequest, "version_required", "نسخه رکورد ارسال نشده است.");
             }
 
+            await EnsureUserExistsAsync(db, request, ct);
             var staff = await db.Staff.SingleOrDefaultAsync(s => s.Id == id, ct) ?? throw AppException.NotFound();
             db.Entry(staff).Property(s => s.Version).OriginalValue = request.Version.Value;
             Apply(staff, request);
@@ -69,6 +71,15 @@ public static class StaffEndpoints
             await db.SaveChangesAsync(ct);
             return Results.NoContent();
         }).RequirePermission("users.manage");
+    }
+
+    /// <summary>The link decides whose queue a doctor's patients appear in, so a wrong one must fail clearly.</summary>
+    private static async Task EnsureUserExistsAsync(AppDbContext db, SaveStaffRequest r, CancellationToken ct)
+    {
+        if (r.UserId is { } userId && !await db.Users.AnyAsync(u => u.Id == userId, ct))
+        {
+            throw new AppException(StatusCodes.Status400BadRequest, "unknown_user", "کاربر انتخاب‌شده پیدا نشد.");
+        }
     }
 
     private static void Apply(Staff staff, SaveStaffRequest r)

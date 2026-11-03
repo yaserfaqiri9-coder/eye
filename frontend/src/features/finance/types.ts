@@ -41,6 +41,7 @@ export interface InvoiceDetail {
   invoice: InvoiceRow
   items: InvoiceItemRow[]
   payments: PaymentRow[]
+  discounts: { details: string | null; byUser: string | null; createdAt: string }[]
 }
 
 export interface SessionRow {

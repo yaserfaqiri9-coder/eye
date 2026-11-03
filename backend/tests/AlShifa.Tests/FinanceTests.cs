@@ -116,7 +116,7 @@ public sealed class FinanceTests(ApiFixture api)
         var patient = await NewPatientAsync();
         var reception = await UserAsync(Roles.Receptionist);
         var departments = await reception.GetFromJsonAsync<List<LookupItem>>("/api/lookups/departments");
-        var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, (int)departments![0].Id, null, null, serviceId))));
+        var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, (int)departments![0].Id, null, null, serviceId, await api.PaidTokenAsync()))));
 
         var cashier = await UserAsync(Roles.Cashier);
         var unpaid = await cashier.GetFromJsonAsync<PagedResult<InvoiceRow>>($"/api/invoices?unpaid=true&q={patient.FileNumber}", JsonOptions);
@@ -139,7 +139,7 @@ public sealed class FinanceTests(ApiFixture api)
         var patient = await NewPatientAsync();
         var reception = await UserAsync(Roles.Receptionist);
         var departments = await reception.GetFromJsonAsync<List<LookupItem>>("/api/lookups/departments");
-        var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, (int)departments![0].Id, null, null, serviceId))));
+        var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, (int)departments![0].Id, null, null, serviceId, await api.PaidTokenAsync()))));
 
         using var scope = api.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -308,7 +308,7 @@ public sealed class FinanceTests(ApiFixture api)
         var patient = await NewPatientAsync();
         var reception = await UserAsync(Roles.Receptionist);
         var departments = await reception.GetFromJsonAsync<List<LookupItem>>("/api/lookups/departments");
-        var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, (int)departments![0].Id, null, null))));
+        var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, (int)departments![0].Id, null, null, null, await api.PaidTokenAsync()))));
 
         var doctor = await UserAsync(Roles.Doctor);
         var rx = await Created<PrescriptionDto>(await doctor.SendAsync(Post("/api/prescriptions", new CreatePrescriptionRequest(visit.Id, null, [new RxItemInput("دوا", null, null, null, null, 2)]))));

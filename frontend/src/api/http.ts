@@ -79,6 +79,8 @@ async function send(path: string, options: RequestOptions) {
 async function toApiError(response: Response) {
   const problem = await response.json().catch(() => null)
   if (response.status === 403) {
+    // A refusal from a rule says what to do next, such as handing a patient over or asking for emergency access.
+    if (problem?.code && problem.code !== 'forbidden') return new ApiError(403, problem.code, problem.title, problem)
     return new ApiError(403, 'forbidden', 'شما اجازه این عملیات را ندارید.', problem)
   }
   if (response.status === 429) {

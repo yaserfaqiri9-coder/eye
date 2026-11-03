@@ -8,6 +8,7 @@ export interface VisitRow {
   departmentId: number
   departmentName: string
   doctorName: string | null
+  doctorStaffId?: number | null
   status: string
   reason: string | null
   visitDate: string
@@ -15,6 +16,36 @@ export interface VisitRow {
   version: number
   nextStatuses: string[]
   patientGender: string
+}
+
+export interface VisitToken {
+  id: number
+  queueNumber: number
+  tokenDate: string
+  departmentId: number
+  departmentName: string
+  doctorStaffId: number | null
+  doctorName: string | null
+  invoiceId: number
+  invoiceNumber: string
+  total: number
+  discount: number
+  balance: number
+  invoiceVersion: number
+  paid: boolean
+  version: number
+}
+
+export interface ReceptionFee {
+  invoiceId: number
+  invoiceNumber: string
+  patientName: string | null
+  patientFileNumber: string | null
+  description: string
+  total: number
+  discount: number
+  balance: number
+  invoiceVersion: number
 }
 
 export interface LookupItem {
@@ -28,7 +59,7 @@ export const visitStatusLabels: Record<string, string> = {
   InPreExam: 'معاینه ابتدایی',
   ReadyForDoctor: 'آماده برای داکتر',
   InConsultation: 'نزد داکتر',
-  AwaitingDiagnostic: 'منتظر آزمایش',
+  AwaitingDiagnostic: 'منتظر رفرکشن یا عکس‌برداری',
   FollowUpRequired: 'نیازمند پیگیری',
   Completed: 'تکمیل',
   Cancelled: 'لغو شده',

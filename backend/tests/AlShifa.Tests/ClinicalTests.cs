@@ -48,8 +48,22 @@ public sealed class ClinicalTests(ApiFixture api)
             new SavePatientRequest(Name("احمد"), null, "محمود", Gender.Male, null, 30, null, null))));
         var departments = await reception.GetFromJsonAsync<List<LookupItem>>("/api/lookups/departments");
         var visit = await ReadCreated<VisitRow>(await reception.SendAsync(Post("/api/visits",
-            new CreateVisitRequest(patient.Id, (int)departments!.Single(d => d.Name == department).Id, null, null))));
+            new CreateVisitRequest(patient.Id, (int)departments!.Single(d => d.Name == department).Id, null, null, null, await api.PaidTokenAsync()))));
+        if (department != "معاینه ابتدایی")
+        {
+            await api.CompleteVisionAsync(visit.Id);
+            visit = (await reception.GetFromJsonAsync<VisitRow>($"/api/visits/{visit.Id}", JsonOptions))!;
+        }
+
         return (patient, visit);
+    }
+
+    private async Task<int> NewSurgeryServiceAsync()
+    {
+        var admin = await UserAsync(Roles.SuperAdmin);
+        var response = await admin.PostAsJsonAsync("/api/services", new AlShifa.Api.Features.Finance.SaveServiceRequest(Name("S"), Name("عملیات"), null, true, 1000));
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
     }
 
     private async Task<int> NewTestAsync()
@@ -195,7 +209,7 @@ public sealed class ClinicalTests(ApiFixture api)
     {
         var (_, visit) = await NewVisitAsync();
         var doctor = await UserAsync(Roles.Doctor);
-        var surgery = await ReadCreated<SurgeryRow>(await doctor.SendAsync(Post("/api/surgeries", new CreateSurgeryRequest(visit.Id, "نوع نمونه", EyeSide.OD))));
+        var surgery = await ReadCreated<SurgeryRow>(await doctor.SendAsync(Post("/api/surgeries", new CreateSurgeryRequest(visit.Id, "نوع نمونه", EyeSide.OD, await NewSurgeryServiceAsync()))));
 
         var team = await UserAsync(Roles.Surgery);
         var list = await team.GetFromJsonAsync<PagedResult<SurgeryRow>>("/api/surgeries");
@@ -248,7 +262,6 @@ public sealed class ClinicalTests(ApiFixture api)
     {
         var (_, visit) = await NewVisitAsync();
         var doctorA = await UserAsync(Roles.Doctor);
-        var doctorB = await UserAsync(Roles.Doctor);
 
         var created = await doctorA.PutAsJsonAsync($"/api/consultations/{visit.Id}", new SaveConsultationRequest("اول", null, null, null, null, null));
         var dto = (await created.Content.ReadFromJsonAsync<ConsultationDto>())!;
@@ -256,7 +269,7 @@ public sealed class ClinicalTests(ApiFixture api)
         var first = await doctorA.PutAsJsonAsync($"/api/consultations/{visit.Id}", new SaveConsultationRequest("تغییر داکتر الف", null, null, null, null, dto.Version));
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
 
-        var second = await doctorB.PutAsJsonAsync($"/api/consultations/{visit.Id}", new SaveConsultationRequest("تغییر داکتر ب", null, null, null, null, dto.Version));
+        var second = await doctorA.PutAsJsonAsync($"/api/consultations/{visit.Id}", new SaveConsultationRequest("تغییر از صفحه کهنه", null, null, null, null, dto.Version));
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
     }
 

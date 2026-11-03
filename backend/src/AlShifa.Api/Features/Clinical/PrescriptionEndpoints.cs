@@ -26,10 +26,11 @@ public static class PrescriptionEndpoints
             return Results.Ok(await QueryAsync(db, query.OrderByDescending(p => p.Id).Take(100), ct));
         }).RequirePermission("prescriptions.view");
 
-        medical.MapPost("/", async (CreatePrescriptionRequest request, AppDbContext db, Idempotency idempotency, NumberService numbers, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
+        medical.MapPost("/", async (CreatePrescriptionRequest request, AppDbContext db, ClinicalAccess access, Idempotency idempotency, NumberService numbers, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
             await idempotency.RunAsync(request, async () =>
             {
                 var patientId = await ClinicalEndpoints.PatientOfVisitAsync(db, request.VisitId, ct);
+                await access.EnsureResponsibleAsync(request.VisitId, ct);
                 var rx = new MedicalPrescription
                 {
                     RxNumber = $"RX-{await numbers.NextAsync("rx", ct: ct):D7}",
@@ -58,9 +59,10 @@ public static class PrescriptionEndpoints
                 return (StatusCodes.Status201Created, dto.Single());
             }, ct)).RequirePermission("prescriptions.create");
 
-        medical.MapPost("/{id:long}/cancel", async (long id, int version, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        medical.MapPost("/{id:long}/cancel", async (long id, int version, AppDbContext db, ClinicalAccess access, AuditService audit, CancellationToken ct) =>
         {
             var rx = await db.MedicalPrescriptions.SingleOrDefaultAsync(p => p.Id == id, ct) ?? throw AppException.NotFound();
+            await access.EnsureResponsibleAsync(rx.VisitId, ct);
             db.Entry(rx).Property(p => p.Version).OriginalValue = version;
             if (rx.Status != PrescriptionStatus.Issued)
             {
@@ -86,10 +88,11 @@ public static class PrescriptionEndpoints
             return Results.Ok(await QueryOpticalAsync(query.OrderByDescending(p => p.Id).Take(100), ct));
         }).RequirePermission("opticalrx.view");
 
-        optical.MapPost("/", async (CreateOpticalRxRequest request, AppDbContext db, Idempotency idempotency, NumberService numbers, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
+        optical.MapPost("/", async (CreateOpticalRxRequest request, AppDbContext db, ClinicalAccess access, Idempotency idempotency, NumberService numbers, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
             await idempotency.RunAsync(request, async () =>
             {
                 var patientId = await ClinicalEndpoints.PatientOfVisitAsync(db, request.VisitId, ct);
+                await access.EnsureResponsibleAsync(request.VisitId, ct);
                 var rx = new OpticalPrescription
                 {
                     RxNumber = $"OP-{await numbers.NextAsync("optical-rx", ct: ct):D7}",
@@ -118,9 +121,10 @@ public static class PrescriptionEndpoints
                 return (StatusCodes.Status201Created, dto.Single());
             }, ct)).RequirePermission("opticalrx.create");
 
-        optical.MapPost("/{id:long}/cancel", async (long id, int version, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        optical.MapPost("/{id:long}/cancel", async (long id, int version, AppDbContext db, ClinicalAccess access, AuditService audit, CancellationToken ct) =>
         {
             var rx = await db.OpticalPrescriptions.SingleOrDefaultAsync(p => p.Id == id, ct) ?? throw AppException.NotFound();
+            await access.EnsureResponsibleAsync(rx.VisitId, ct);
             db.Entry(rx).Property(p => p.Version).OriginalValue = version;
             rx.IsCancelled = true;
             audit.Add("OpticalPrescriptionCancelled", "OpticalPrescription", id.ToString());

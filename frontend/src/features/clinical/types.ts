@@ -16,6 +16,44 @@ export interface PreExam {
   version: number
 }
 
+export type RefractionStage = 'Current' | 'Auto' | 'Subjective' | 'Final'
+
+export interface RefractionLine {
+  stage: RefractionStage
+  eye: 'OD' | 'OS'
+  sphere: string | null
+  cylinder: string | null
+  axis: string | null
+  add: string | null
+  va: string | null
+}
+
+export interface Refraction {
+  id: number
+  visitId: number
+  visitDate: string
+  unaidedVaOd: string | null
+  unaidedVaOs: string | null
+  pinholeVaOd: string | null
+  pinholeVaOs: string | null
+  nearVaOd: string | null
+  nearVaOs: string | null
+  pd: string | null
+  measurements: string | null
+  notes: string | null
+  recordedAt: string
+  completedAt: string | null
+  version: number
+  lines: RefractionLine[]
+}
+
+export const refractionStageLabels: Record<RefractionStage, string> = {
+  Current: 'عینک فعلی (present GL)',
+  Auto: 'Auto Refraction (AR، نتیجه دستگاه)',
+  Subjective: 'Subjective Refraction (ST، اندازه‌گیری متخصص)',
+  Final: 'Final Refraction (نسخه نهایی)',
+}
+
 export interface Diagnosis {
   eye: string
   text: string
@@ -104,6 +142,10 @@ export interface DiagnosticOrder {
   version: number
   resultText: string | null
   performedAt: string | null
+  kind: string
+  returnToDoctor: boolean
+  /** Null for a lab test, which has no pay-first rule. */
+  paid: boolean | null
 }
 
 export interface FollowUp {

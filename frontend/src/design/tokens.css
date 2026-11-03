@@ -35,10 +35,15 @@
   --xr-gradient-light: linear-gradient(to right, #e9eef4 0%, #eef5fd 100%);
   --xr-gradient-dark: linear-gradient(to right, #374949 0%, #455d5d 100%);
 
-  /* Fields, list rows and status colours deliberately keep the system's earlier design, not the template's. */
-  --xr-field-bg: #ceecee;
-  --xr-field-focus: #089eaf;
-  --xr-field-placeholder: #6f8a8e;
+  /* Fields as measured on the template's form-layout and form-validation pages. */
+  --xr-field-bg: #ffffff;
+  --xr-field-border: #d7dbda;
+  --xr-field-focus: #089bab;
+  --xr-field-placeholder: rgba(33, 37, 41, 0.75);
+  --xr-field-disabled: #e9ecef;
+  --xr-field-invalid: #dc3545;
+
+  /* List rows and status colours deliberately keep the system's earlier design, not the template's. */
   --xr-row-border: #eef0f4;
   --xr-row-link: #089eaf;
   --xr-status-primary: #089eaf;
@@ -56,6 +61,7 @@
 
   --xr-sidebar-width: 260px;
   --xr-sidebar-mini: 80px;
+  --xr-sidebar-child: #777d74;
   --xr-header-height: 75px;
   --xr-gap-x: 24px;
   --xr-gap-y: 30px;
@@ -70,7 +76,7 @@
   --xr-shadow-footer: 0 0 12px 0 rgba(55, 73, 72, 0.06);
   --xr-shadow-active: 3px 2px 20px 1px rgba(0, 0, 0, 0.1);
   --xr-shadow-table: 0 0 12px 0 rgba(120, 146, 141, 0.06);
-  --xr-control-height: 42px;
+  --xr-control-height: 45px;
 
   /* Poppins draws Latin letters and digits as in the template; Dari text falls through to Vazirmatn. */
   --xr-font: 'Poppins', 'Vazirmatn', system-ui, sans-serif;

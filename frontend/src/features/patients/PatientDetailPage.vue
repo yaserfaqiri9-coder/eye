@@ -6,11 +6,11 @@ import UiCard from '@/components/UiCard.vue'
 import { eyeLabels, type Chart } from '@/features/clinical/types'
 import type { InvoiceRow } from '@/features/finance/types'
 import NewVisitModal from '@/features/visits/NewVisitModal.vue'
-import { visitStatusLabels, visitStatusTones, type VisitRow } from '@/features/visits/types'
+import { visitStatusLabels, type VisitRow } from '@/features/visits/types'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime } from '@/utils/date'
 import { money, quantity } from '@/utils/money'
-import PatientFormModal from './PatientFormModal.vue'
+import PatientRecord from './PatientRecord.vue'
 import ProgressRing from './ProgressRing.vue'
 import VisitsChart from './VisitsChart.vue'
 import { genderLabels, patientName, type Patient } from './types'
@@ -44,7 +44,6 @@ const changes = ref<ChangeRow[]>([])
 const invoices = ref<InvoiceRow[]>([])
 const chart = ref<Chart | null>(null)
 const error = ref('')
-const editing = ref(false)
 const addingVisit = ref(false)
 
 const canSeeMoney = computed(() => auth.can('invoices.view'))
@@ -82,11 +81,6 @@ async function load() {
   } catch (cause) {
     error.value = errorMessage(cause)
   }
-}
-
-function onSaved() {
-  editing.value = false
-  load()
 }
 
 function onVisitSaved() {
@@ -173,7 +167,7 @@ const followUp = computed(() => chart.value?.followUps[0] ?? null)
             </ul>
             <div class="profile__actions">
               <button v-if="auth.can('visits.create')" type="button" class="btn btn-primary" @click="addingVisit = true">مراجعه جدید</button>
-              <button v-if="auth.can('patients.edit')" type="button" class="btn btn-soft" @click="editing = true">ویرایش</button>
+              <RouterLink v-if="auth.can('patients.edit')" :to="`/patients/${patient.id}/edit`" class="btn btn-soft">ویرایش</RouterLink>
               <RouterLink v-if="auth.can('patients.print')" :to="`/print/patient/${patient.id}`" target="_blank" class="btn btn-soft">چاپ کارت</RouterLink>
             </div>
           </div>
@@ -303,29 +297,7 @@ const followUp = computed(() => chart.value?.followUps[0] ?? null)
       </section>
     </div>
 
-    <UiCard v-if="auth.can('visits.view')" title="تاریخچه مراجعات">
-      <div v-if="visits.length === 0" class="py-3 text-center text-muted">مراجعه‌ای ثبت نشده است.</div>
-      <div v-else class="xr-table-wrap">
-        <table class="xr-table">
-          <thead>
-            <tr><th>شماره مراجعه</th><th>تاریخ</th><th>بخش</th><th>داکتر</th><th>علت</th><th>وضعیت</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="visit in visits" :key="visit.id">
-              <td>
-                <RouterLink v-if="auth.can('consultation.view')" :to="`/chart/${visit.id}`"><span class="ltr-num">{{ visit.visitNumber }}</span></RouterLink>
-                <span v-else class="ltr-num">{{ visit.visitNumber }}</span>
-              </td>
-              <td>{{ formatDate(visit.visitDate) }}</td>
-              <td>{{ visit.departmentName }}</td>
-              <td>{{ visit.doctorName ?? '—' }}</td>
-              <td>{{ visit.reason ?? '—' }}</td>
-              <td><span class="xr-badge" :class="`xr-badge--${visitStatusTones[visit.status]}`">{{ visitStatusLabels[visit.status] }}</span></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </UiCard>
+    <PatientRecord :key="patient.id" :patient="patient" :visits="visits" :invoices="invoices" />
 
     <UiCard v-if="auth.can('patients.edit') && changes.length" title="تاریخچه تغییرات">
       <div class="xr-table-wrap">
@@ -347,7 +319,6 @@ const followUp = computed(() => chart.value?.followUps[0] ?? null)
     </UiCard>
   </div>
 
-  <PatientFormModal v-if="editing && patient" :patient="patient" @close="editing = false" @saved="onSaved" />
   <NewVisitModal
     v-if="addingVisit && patient"
     :patient="{ id: patient.id, label: `${patient.fileNumber} — ${patientName(patient)}` }"

@@ -70,9 +70,31 @@ public sealed class LedgerService(AppDbContext db, CurrentUser user)
     }
 }
 
+/// <summary>Services the reception flow charges by code; their prices are set by finance.</summary>
+public static class ServiceCodes
+{
+    public const string VisitFee = "VISIT-FEE";
+    public const string Refraction = "REFRACTION";
+    public const string Imaging = "IMAGING";
+
+    public static readonly string[] PaidFlow = [VisitFee, Refraction, Imaging];
+}
+
+public static class Money
+{
+    /// <summary>Amounts are stored to two places. Anything finer would be rounded differently in the invoice, payment and ledger rows.</summary>
+    public static void EnsureCents(decimal amount)
+    {
+        if (decimal.Round(amount, 2) != amount)
+        {
+            throw new AppException(StatusCodes.Status400BadRequest, "invalid_amount", "مبلغ می‌تواند حداکثر دو رقم اعشار داشته باشد.");
+        }
+    }
+}
+
 public sealed record ChargeLine(string Description, decimal Quantity, decimal UnitPrice, string RevenueAccount, int? ServiceId, string? SourceType, long? SourceId);
 
-public sealed class InvoiceService(AppDbContext db, NumberService numbers, LedgerService ledger, CurrentUser user, Outbox outbox)
+public sealed class InvoiceService(AppDbContext db, NumberService numbers, LedgerService ledger, CurrentUser user, AuditService audit, Outbox outbox)
 {
     /// <summary>Row lock serialises concurrent payments and charges on one invoice.</summary>
     public async Task<Invoice> LockAsync(long id, CancellationToken ct) =>
@@ -97,7 +119,9 @@ public sealed class InvoiceService(AppDbContext db, NumberService numbers, Ledge
     public async Task<InvoiceItem> ChargeVisitAsync(long patientId, long visitId, ChargeLine line, CancellationToken ct)
     {
         var existingId = await db.Invoices
-            .Where(i => i.VisitId == visitId && i.Status != InvoiceStatus.Void)
+            // A visit fee and a prepaid request each keep their own invoice; a later charge must not reopen it.
+            .Where(i => i.VisitId == visitId && i.Status != InvoiceStatus.Void
+                && !db.VisitTokens.Any(t => t.InvoiceId == i.Id) && !db.DiagnosticOrders.Any(o => o.InvoiceId == i.Id))
             .OrderByDescending(i => i.Id)
             .Select(i => (long?)i.Id)
             .FirstOrDefaultAsync(ct);
@@ -139,7 +163,7 @@ public sealed class InvoiceService(AppDbContext db, NumberService numbers, Ledge
         ledger.Post("Charge", "InvoiceItem", item.Id, item.Description,
             (Accounts.Receivable, item.LineTotal, 0),
             (item.RevenueAccount, 0, item.LineTotal));
-        outbox.Add("InvoiceIssued", new { invoiceId = invoice.Id }, Groups.Cashier, Groups.Finance);
+        outbox.Add("InvoiceIssued", new { invoiceId = invoice.Id }, Groups.Cashier, Groups.Finance, Groups.Reception);
         await db.SaveChangesAsync(ct);
         return item;
     }
@@ -159,7 +183,115 @@ public sealed class InvoiceService(AppDbContext db, NumberService numbers, Ledge
         await db.SaveChangesAsync(ct);
     }
 
+    /// <summary>Closes the single-line invoice of a cancelled prepaid item. A refunded one stays: the refund already balances it.</summary>
+    public async Task ClosePrepaidAsync(InvoiceItem item, CancellationToken ct)
+    {
+        var invoice = await LockAsync(item.InvoiceId, ct);
+        if (invoice.Paid - invoice.Refunded > 0)
+        {
+            throw new AppException(StatusCodes.Status409Conflict, "line_already_paid", "مبلغ این آیتم پرداخت شده است. ابتدا برگشت وجه ثبت شود.");
+        }
+
+        if (invoice.Paid > 0)
+        {
+            return;
+        }
+
+        if (invoice.Discount > 0)
+        {
+            ledger.Post("DiscountCancelled", "Invoice", invoice.Id, null,
+                (Accounts.Receivable, invoice.Discount, 0),
+                (Accounts.Discounts, 0, invoice.Discount));
+            invoice.Discount = 0;
+        }
+
+        await VoidLineAsync(item, ct);
+        invoice.Status = InvoiceStatus.Void;
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>Takes back the charge of a cancelled service: its own invoice closes with it; a line on a shared invoice goes alone.</summary>
+    public async Task CancelChargeAsync(string sourceType, long sourceId, CancellationToken ct)
+    {
+        var charge = await db.InvoiceItems.SingleOrDefaultAsync(i => i.SourceType == sourceType && i.SourceId == sourceId && !i.IsVoid, ct);
+        if (charge is null)
+        {
+            return;
+        }
+
+        if (await db.InvoiceItems.AnyAsync(i => i.InvoiceId == charge.InvoiceId && i.Id != charge.Id && !i.IsVoid, ct))
+        {
+            await VoidLineAsync(charge, ct);
+        }
+        else
+        {
+            await ClosePrepaidAsync(charge, ct);
+        }
+    }
+
+    /// <summary>Must run inside a transaction. A duplicate stops on the invoice lock: the second one finds no balance left.</summary>
+    public async Task<Payment> ReceiveAsync(PaymentRequest request, bool fullOnly, CancellationToken ct)
+    {
+        Money.EnsureCents(request.Amount);
+        var userId = user.Id;
+
+        // A shared lock lets payments run side by side, but makes closing the session wait until they commit,
+        // so the amount calculated at closing can never miss one.
+        var sessions = await db.CashSessions
+            .FromSqlInterpolated($"SELECT * FROM CashSessions WHERE OpenedByUserId = {userId} AND ClosedAt IS NULL ORDER BY Id LIMIT 1 FOR SHARE")
+            .AsNoTracking().ToListAsync(ct);
+        var session = sessions.FirstOrDefault()?.Id
+            ?? throw new AppException(StatusCodes.Status409Conflict, "no_open_session", "ابتدا صندوق را باز کنید.");
+
+        var invoice = await LockAsync(request.InvoiceId, ct);
+        if (invoice.Status == InvoiceStatus.Void)
+        {
+            throw new AppException(StatusCodes.Status409Conflict, "invoice_void", "این فاکتور باطل شده است.");
+        }
+
+        if (request.InvoiceVersion is { } seen && seen != invoice.Version)
+        {
+            throw new AppException(StatusCodes.Status409Conflict, "invoice_changed", "این فاکتور همین حالا تغییر کرده یا پرداخت شده است. مانده تازه را ببینید و دوباره تصمیم بگیرید.");
+        }
+
+        if (request.Amount > Balance(invoice))
+        {
+            throw new AppException(StatusCodes.Status409Conflict, "overpayment", "مبلغ پرداخت از مانده فاکتور بیشتر است.");
+        }
+
+        if (fullOnly && request.Amount != Balance(invoice))
+        {
+            throw new AppException(StatusCodes.Status409Conflict, "full_payment_required", "این فیس باید کامل پرداخت شود.");
+        }
+
+        var payment = new Payment
+        {
+            ReceiptNumber = $"RC-{await numbers.NextAsync("receipt", ct: ct):D7}",
+            InvoiceId = invoice.Id,
+            Amount = request.Amount,
+            Method = request.Method,
+            Reference = Text.Clean(request.Reference),
+            CashSessionId = session,
+            ReceivedByUserId = userId,
+        };
+        db.Payments.Add(payment);
+        invoice.Paid += request.Amount;
+        UpdateStatus(invoice);
+        await db.SaveChangesAsync(ct);
+
+        ledger.Post("Payment", "Payment", payment.Id, payment.ReceiptNumber,
+            (Accounts.Cash, payment.Amount, 0),
+            (Accounts.Receivable, 0, payment.Amount));
+        audit.Add("PaymentReceived", "Payment", payment.Id.ToString());
+        outbox.Add("PaymentReceived", new { invoiceId = invoice.Id }, Groups.Cashier, Groups.Finance, Groups.Management, Groups.Reception, Groups.Triage, Groups.Lab);
+        await db.SaveChangesAsync(ct);
+        return payment;
+    }
+
     public static decimal Balance(Invoice i) => i.Total - i.Discount - i.Paid;
+
+    /// <summary>The payable amount after discount is covered by money still held, so a refund undoes it.</summary>
+    public static bool IsSettled(Invoice i) => i.Status != InvoiceStatus.Void && i.Total - i.Discount <= i.Paid - i.Refunded;
 
     public static void UpdateStatus(Invoice i)
     {

@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using AlShifa.Api.Features.Auth;
+using AlShifa.Api.Features.Calls;
 using AlShifa.Api.Features.Clinical;
 using AlShifa.Api.Features.Finance;
 using AlShifa.Api.Features.Inventory;
@@ -19,8 +20,16 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Hosting.WindowsServices;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    // A Windows service starts in System32, so its files must be found relative to the executable.
+    ContentRootPath = WindowsServiceHelpers.IsWindowsService() ? AppContext.BaseDirectory : null,
+});
+
+builder.Host.UseWindowsService(o => o.ServiceName = "AlShifaApi");
 
 var connectionString = builder.Configuration.GetConnectionString("Default")
     ?? throw new InvalidOperationException("ConnectionStrings:Default is not configured.");
@@ -119,7 +128,9 @@ var app = builder.Build();
 if (args.Contains("--migrate") || args.Contains("--create-admin"))
 {
     using var scope = app.Services.CreateScope();
-    await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.MigrateAsync();
+    var operatorDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await DatabaseSafety.EnsureOperatorMayMigrateAsync(operatorDb, args.Contains(DatabaseSafety.BackupTakenFlag));
+    await operatorDb.Database.MigrateAsync();
     await Seeder.SeedReferenceDataAsync(scope.ServiceProvider);
 
     if (args.Contains("--create-admin"))
@@ -137,12 +148,34 @@ if (args.Contains("--migrate") || args.Contains("--create-admin"))
     return;
 }
 
-if (!app.Environment.IsProduction())
+using (var scope = app.Services.CreateScope())
 {
-    using var scope = app.Services.CreateScope();
-    await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.MigrateAsync();
-    await Seeder.SeedReferenceDataAsync(scope.ServiceProvider);
+    var startupDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+    // The environment name alone is not enough: a wrong setting on the host must not change a real database.
+    if ((app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Testing")) && DatabaseSafety.IsDisposable(connectionString))
+    {
+        await startupDb.Database.MigrateAsync();
+        await Seeder.SeedReferenceDataAsync(scope.ServiceProvider);
+    }
+    else if (await startupDb.Database.CanConnectAsync())
+    {
+        if (await DatabaseSafety.SchemaProblemAsync(startupDb) is { } problem)
+        {
+            app.Logger.LogCritical("Not starting: {Problem}", problem);
+            Environment.ExitCode = 1;
+            return;
+        }
+    }
+    else
+    {
+        // MySQL can still be starting after a reboot. /health reports this until it answers.
+        app.Logger.LogWarning("The database is not reachable yet, so its schema could not be checked at startup.");
+    }
 }
+
+// On the hospital host there is no separate web server: the published web app sits in wwwroot next to the API.
+var hostsFrontend = app.Environment.WebRootFileProvider.GetFileInfo("index.html").Exists;
 
 app.UseForwardedHeaders();
 app.UseExceptionHandler();
@@ -152,6 +185,10 @@ app.Use((http, next) =>
     http.Response.Headers.XContentTypeOptions = "nosniff";
     http.Response.Headers.XFrameOptions = "DENY";
     http.Response.Headers["Referrer-Policy"] = "no-referrer";
+    if (hostsFrontend)
+    {
+        http.Response.Headers.ContentSecurityPolicy = FrontendHosting.ContentSecurityPolicy;
+    }
 
     // Patient data must not stay in shared browser or proxy caches.
     if (http.Request.Path.StartsWithSegments("/api"))
@@ -165,6 +202,11 @@ app.Use((http, next) =>
 if (app.Environment.IsProduction())
 {
     app.UseHsts();
+}
+
+if (hostsFrontend)
+{
+    app.UseFrontendFiles();
 }
 
 app.UseRateLimiter();
@@ -200,7 +242,10 @@ app.MapUsers();
 app.MapStaff();
 app.MapPatients();
 app.MapVisits();
+app.MapCalls();
+app.MapReceptionFees();
 app.MapClinical();
+app.MapRefractions();
 app.MapPrescriptions();
 app.MapDiagnostics();
 app.MapSurgeries();
@@ -211,6 +256,11 @@ app.MapReports();
 app.MapPrint();
 app.MapAudit();
 app.MapSystemStatus();
+
+if (hostsFrontend)
+{
+    app.MapFrontendFallback();
+}
 
 app.Run();
 

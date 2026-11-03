@@ -8,6 +8,8 @@ Browser (Vue 3 SPA) ──HTTPS──> Nginx ──> ASP.NET Core 10 ──> MyS
         └──────── SignalR (فقط اعلان) ─────────┘
 ```
 
+روی لپ‌تاپ شفاخانه Nginx نیست: وقتی `wwwroot/index.html` کنار برنامه باشد، همان ASP.NET Core صفحه‌ها را هم با HTTPS سرو می‌کند (`DEPLOYMENT-WINDOWS.md`). در محیط توسعه و پشت Nginx این حالت خاموش است.
+
 - **Modular Monolith**: یک پروژه Backend، یک Frontend، یک دیتابیس.
 - بدون Microservices، Repository/UoW اضافی، CQRS/MediatR، Kafka، RabbitMQ، Redis.
 

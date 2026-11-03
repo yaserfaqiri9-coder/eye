@@ -60,6 +60,32 @@ public sealed class ClinicalAccess(AppDbContext db, CurrentUser user, AuditServi
         return await db.ClinicalAccessGrants.AnyAsync(g => g.UserId == userId && g.PatientId == patientId && g.ExpiresAt > now, ct);
     }
 
+    /// <summary>The account answering for a visit: the assigned doctor's, otherwise whoever started the exam. Null until a doctor takes it.</summary>
+    public async Task<long?> ResponsibleUserAsync(long visitId, CancellationToken ct)
+    {
+        var visit = await db.Visits.Where(v => v.Id == visitId).Select(v => new { AssignedUserId = v.Doctor != null ? v.Doctor.UserId : null }).SingleOrDefaultAsync(ct)
+            ?? throw AppException.NotFound();
+        return visit.AssignedUserId ?? await db.Consultations.Where(c => c.VisitId == visitId).Select(c => (long?)c.AuthorUserId).SingleOrDefaultAsync(ct);
+    }
+
+    /// <summary>
+    /// A doctor changes only their own patient's record; a patient no doctor has taken yet is free, as in the worklist.
+    /// Other roles stay limited by their permissions, and emergency access opens a record for reading only.
+    /// </summary>
+    public async Task EnsureResponsibleAsync(long visitId, CancellationToken ct, long? alsoAllowedUserId = null)
+    {
+        if (!accessor.HttpContext!.User.HasClaim(RolePermissions.ClaimType, "consultation.edit"))
+        {
+            return;
+        }
+
+        var responsible = await ResponsibleUserAsync(visitId, ct);
+        if (responsible is not null && responsible != user.Id && alsoAllowedUserId != user.Id)
+        {
+            throw new AppException(StatusCodes.Status403Forbidden, "not_responsible_doctor", "این مریض به داکتر دیگری سپرده شده است. برای تغییر پرونده، ابتدا مسئولیت باید انتقال داده شود.");
+        }
+    }
+
     public async Task GrantEmergencyAsync(long patientId, string reason, CancellationToken ct)
     {
         if (!accessor.HttpContext!.User.HasClaim(RolePermissions.ClaimType, "clinicalrecord.view"))

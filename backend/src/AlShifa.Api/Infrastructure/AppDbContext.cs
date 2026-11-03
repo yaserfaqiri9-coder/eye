@@ -1,4 +1,5 @@
 using AlShifa.Api.Features.Clinical;
+using AlShifa.Api.Features.Calls;
 using AlShifa.Api.Features.Finance;
 using AlShifa.Api.Features.Inventory;
 using AlShifa.Api.Features.Patients;
@@ -19,6 +20,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<Patient> Patients => Set<Patient>();
     public DbSet<PatientChangeLog> PatientChangeLogs => Set<PatientChangeLog>();
     public DbSet<Visit> Visits => Set<Visit>();
+    public DbSet<VisitToken> VisitTokens => Set<VisitToken>();
     public DbSet<VisitStatusHistory> VisitStatusHistory => Set<VisitStatusHistory>();
     public DbSet<Appointment> Appointments => Set<Appointment>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
@@ -27,6 +29,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<NumberSequence> NumberSequences => Set<NumberSequence>();
     public DbSet<Setting> Settings => Set<Setting>();
     public DbSet<PreExamination> PreExaminations => Set<PreExamination>();
+    public DbSet<Refraction> Refractions => Set<Refraction>();
+    public DbSet<RefractionLine> RefractionLines => Set<RefractionLine>();
     public DbSet<Consultation> Consultations => Set<Consultation>();
     public DbSet<Diagnosis> Diagnoses => Set<Diagnosis>();
     public DbSet<ClinicalAmendment> ClinicalAmendments => Set<ClinicalAmendment>();
@@ -58,6 +62,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<Sale> Sales => Set<Sale>();
     public DbSet<OpticalOrder> OpticalOrders => Set<OpticalOrder>();
     public DbSet<Attachment> Attachments => Set<Attachment>();
+    public DbSet<PatientCall> PatientCalls => Set<PatientCall>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
@@ -111,6 +116,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
         b.Entity<Visit>(e =>
         {
             e.Property(x => x.Version).IsConcurrencyToken();
+
+            // By name alone EF would not link Doctor to DoctorStaffId: it would add an empty column of its own and no visit would have a doctor.
+            e.HasOne(x => x.Doctor).WithMany().HasForeignKey(x => x.DoctorStaffId).OnDelete(DeleteBehavior.Restrict);
             e.HasIndex(x => x.VisitNumber).IsUnique();
             e.HasIndex(x => new { x.VisitDate, x.DepartmentId, x.QueueNumber }).IsUnique();
             e.HasIndex(x => new { x.PatientId, x.VisitDate });
@@ -123,11 +131,30 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
             e.HasIndex("ActiveVisitKey").IsUnique();
         });
 
+        b.Entity<VisitToken>(e =>
+        {
+            e.Property(x => x.Version).IsConcurrencyToken();
+            e.HasIndex(x => x.InvoiceId).IsUnique();
+            e.HasIndex(x => x.VisitId).IsUnique();
+            e.HasIndex(x => x.TokenDate);
+            e.HasOne(x => x.Doctor).WithMany().HasForeignKey(x => x.DoctorStaffId);
+        });
+
         b.Entity<VisitStatusHistory>().HasIndex(x => new { x.VisitId, x.ChangedAt });
+
+        b.Entity<PatientCall>(e =>
+        {
+            e.Property(x => x.Version).IsConcurrencyToken();
+            e.HasIndex(x => new { x.Status, x.Id });
+            e.HasIndex(x => new { x.VisitId, x.Desk, x.Id });
+            e.HasIndex(x => new { x.VisitTokenId, x.Desk, x.Id });
+            e.HasIndex(x => x.RequestedAt);
+        });
 
         b.Entity<Appointment>(e =>
         {
             e.Property(x => x.Version).IsConcurrencyToken();
+            e.HasOne(x => x.Doctor).WithMany().HasForeignKey(x => x.DoctorStaffId).OnDelete(DeleteBehavior.Restrict);
             e.HasIndex(x => new { x.DoctorStaffId, x.ScheduledAt });
             e.HasIndex(x => x.PatientId);
 
@@ -289,6 +316,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
             e.HasIndex(x => x.VisitId).IsUnique();
         });
 
+        b.Entity<Refraction>(e =>
+        {
+            e.Property(x => x.Version).IsConcurrencyToken();
+            e.HasIndex(x => x.VisitId).IsUnique();
+            e.HasMany(x => x.Lines).WithOne().HasForeignKey(x => x.RefractionId);
+        });
+
+        b.Entity<RefractionLine>().HasIndex(x => new { x.RefractionId, x.Stage, x.Eye }).IsUnique();
+
         b.Entity<Consultation>(e =>
         {
             e.Property(x => x.Version).IsConcurrencyToken();
@@ -358,10 +394,16 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
 
     private void BumpVersions()
     {
-        foreach (var entry in ChangeTracker.Entries().Where(e => e.State == EntityState.Modified))
+        foreach (var entry in ChangeTracker.Entries().Where(e => e.State is EntityState.Added or EntityState.Modified))
         {
-            var version = entry.Metadata.FindProperty("Version");
-            if (version is { IsConcurrencyToken: true })
+            // DATETIME(6) keeps microseconds, so a response built from the entity must not carry more than the stored row.
+            foreach (var property in entry.Properties.Where(p => p.CurrentValue is DateTime { Ticks: var ticks } && ticks % TimeSpan.TicksPerMicrosecond != 0))
+            {
+                var value = (DateTime)property.CurrentValue!;
+                property.CurrentValue = value.AddTicks(-(value.Ticks % TimeSpan.TicksPerMicrosecond));
+            }
+
+            if (entry.State == EntityState.Modified && entry.Metadata.FindProperty("Version") is { IsConcurrencyToken: true })
             {
                 var property = entry.Property("Version");
                 property.CurrentValue = (int)property.OriginalValue! + 1;

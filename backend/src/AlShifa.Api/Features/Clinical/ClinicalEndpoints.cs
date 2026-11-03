@@ -33,6 +33,8 @@ public sealed record SaveConsultationRequest(
 
 public sealed record FinalizeRequest(int Version, bool CloseVisit);
 
+public sealed record ReopenConsultationRequest([Required, MinLength(3), MaxLength(500)] string Reason, int Version);
+
 public sealed record AmendRequest([Required, MaxLength(40)] string Field, [MaxLength(4000)] string? Value, [Required, MinLength(3), MaxLength(500)] string Reason, int Version);
 
 public sealed record EmergencyAccessRequest([Required, MinLength(5), MaxLength(500)] string Reason);
@@ -99,7 +101,8 @@ public static class ClinicalEndpoints
 
         preExam.MapPut("/{visitId:long}", async (long visitId, SavePreExamRequest request, AppDbContext db, CurrentUser user, AuditService audit, CancellationToken ct) =>
         {
-            await PatientOfVisitAsync(db, visitId, ct);
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            EnsureNotCancelled(await VisitService.LockAsync(db, visitId, ct));
             var exam = await db.PreExaminations.SingleOrDefaultAsync(p => p.VisitId == visitId, ct);
             if (exam is null)
             {
@@ -108,7 +111,7 @@ public static class ClinicalEndpoints
             }
             else
             {
-                db.Entry(exam).Property(p => p.Version).OriginalValue = request.Version ?? throw VersionRequired();
+                db.Entry(exam).Property(p => p.Version).OriginalValue = request.Version ?? throw StaleScreen();
                 if (exam.CompletedAt is not null)
                 {
                     throw new AppException(StatusCodes.Status409Conflict, "already_completed", "این معاینه تکمیل شده و قابل ویرایش نیست.");
@@ -125,17 +128,26 @@ public static class ClinicalEndpoints
             exam.Notes = Text.Clean(request.Notes);
             audit.Add("PreExamSaved", "Visit", visitId.ToString());
             await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
             return Results.Ok(ToDto(exam));
         }).RequirePermission("preexam.edit");
 
         preExam.MapPost("/{visitId:long}/complete", async (long visitId, AppDbContext db, AuditService audit, Outbox outbox, CurrentUser user, CancellationToken ct) =>
         {
             await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var visit = await VisitService.LockAsync(db, visitId, ct);
+            EnsureNotCancelled(visit);
             var exam = await db.PreExaminations.SingleOrDefaultAsync(p => p.VisitId == visitId, ct)
                 ?? throw new AppException(StatusCodes.Status409Conflict, "nothing_to_complete", "ابتدا معاینه را ذخیره کنید.");
+
+            // An empty form must not count as Vision, or completing it would be the way around Vision.
+            if (exam.VisualAcuityOd is null && exam.VisualAcuityOs is null && exam.IopOd is null && exam.IopOs is null)
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "vision_empty", "ابتدا دید یا فشار چشم را ثبت کنید.");
+            }
+
             exam.CompletedAt ??= DateTime.UtcNow;
 
-            var visit = await db.Visits.SingleAsync(v => v.Id == visitId, ct);
             if (VisitWorkflow.CanMove(visit.Status, VisitStatus.ReadyForDoctor))
             {
                 db.VisitStatusHistory.Add(new VisitStatusHistory { VisitId = visitId, FromStatus = visit.Status, ToStatus = VisitStatus.ReadyForDoctor, ChangedByUserId = user.Id });
@@ -186,29 +198,51 @@ public static class ClinicalEndpoints
                 followUps));
         }).RequirePermission("consultation.view");
 
-        consultations.MapPut("/{visitId:long}", async (long visitId, SaveConsultationRequest request, AppDbContext db, CurrentUser user, AuditService audit, CancellationToken ct) =>
+        consultations.MapPut("/{visitId:long}", async (long visitId, SaveConsultationRequest request, AppDbContext db, ClinicalAccess access, CurrentUser user, AuditService audit, CancellationToken ct) =>
         {
             await using var tx = await db.Database.BeginTransactionAsync(ct);
-            await PatientOfVisitAsync(db, visitId, ct);
+
+            // The status history's foreign key takes a shared lock on the visit. Locking it first stops two savers deadlocking.
+            var visit = await VisitService.LockAsync(db, visitId, ct);
+            EnsureNotCancelled(visit);
             var consult = await db.Consultations.SingleOrDefaultAsync(c => c.VisitId == visitId, ct);
             if (consult is null)
             {
+                await access.EnsureResponsibleAsync(visitId, ct);
+                await EnsureVisionCompleteAsync(db, visitId, ct);
+                await DiagnosticGate.EnsureChargePaidAsync(db, nameof(Visit), visitId, ct);
+
                 consult = new Consultation { VisitId = visitId, AuthorUserId = user.Id };
                 db.Consultations.Add(consult);
 
-                var visit = await db.Visits.SingleAsync(v => v.Id == visitId, ct);
+                // The doctor who takes an unassigned patient keeps them, so a return from refraction comes back to this doctor.
+                if (visit.DoctorStaffId is null)
+                {
+                    var userId = user.Id;
+                    visit.DoctorStaffId = await db.Staff.Where(s => s.UserId == userId && s.IsDoctor && s.IsActive).Select(s => (long?)s.Id).FirstOrDefaultAsync(ct);
+                }
+
                 if (VisitWorkflow.CanMove(visit.Status, VisitStatus.InConsultation))
                 {
-                    db.VisitStatusHistory.Add(new VisitStatusHistory { VisitId = visitId, FromStatus = visit.Status, ToStatus = VisitStatus.InConsultation, ChangedByUserId = user.Id });
-                    visit.Status = VisitStatus.InConsultation;
+                    MoveVisit(db, visit, VisitStatus.InConsultation, user.Id);
                 }
             }
             else
             {
-                db.Entry(consult).Property(c => c.Version).OriginalValue = request.Version ?? throw VersionRequired();
+                db.Entry(consult).Property(c => c.Version).OriginalValue = request.Version ?? throw StaleScreen();
+                await access.EnsureResponsibleAsync(visitId, ct);
                 if (consult.FinalizedAt is not null)
                 {
                     throw new AppException(StatusCodes.Status409Conflict, "already_finalized", "این معاینه نهایی شده است. برای تغییر، اصلاحیه ثبت کنید.");
+                }
+
+                // Diagnoses live in their own table: without this, a save that changes only them would skip the version check.
+                db.Entry(consult).State = EntityState.Modified;
+
+                // A patient back from refraction or imaging continues the same exam.
+                if (visit.Status == VisitStatus.ReadyForDoctor)
+                {
+                    MoveVisit(db, visit, VisitStatus.InConsultation, user.Id);
                 }
             }
 
@@ -221,7 +255,8 @@ public static class ClinicalEndpoints
 
             if (request.Diagnoses is not null)
             {
-                await db.Diagnoses.Where(d => d.ConsultationId == consult.Id).ExecuteDeleteAsync(ct);
+                // Deleted by key: a range delete that finds nothing leaves a gap lock, and two doctors saving a first diagnosis deadlock on it.
+                db.Diagnoses.RemoveRange(await db.Diagnoses.Where(d => d.ConsultationId == consult.Id).ToListAsync(ct));
                 db.Diagnoses.AddRange(request.Diagnoses.Select(d => new Diagnosis { ConsultationId = consult.Id, Eye = d.Eye, Text = d.Text.Trim() }));
                 await db.SaveChangesAsync(ct);
             }
@@ -230,24 +265,31 @@ public static class ClinicalEndpoints
             return Results.Ok(await ToDtoAsync(db, consult, canSeeConfidential: true, ct));
         }).RequirePermission("consultation.edit");
 
-        consultations.MapPost("/{visitId:long}/finalize", async (long visitId, FinalizeRequest request, AppDbContext db, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
+        consultations.MapPost("/{visitId:long}/finalize", async (long visitId, FinalizeRequest request, AppDbContext db, ClinicalAccess access, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
         {
             await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var visit = await VisitService.LockAsync(db, visitId, ct);
+            await access.EnsureResponsibleAsync(visitId, ct);
             var consult = await db.Consultations.SingleOrDefaultAsync(c => c.VisitId == visitId, ct)
                 ?? throw new AppException(StatusCodes.Status409Conflict, "nothing_to_finalize", "ابتدا معاینه را ذخیره کنید.");
             db.Entry(consult).Property(c => c.Version).OriginalValue = request.Version;
+            await DiagnosticGate.EnsureNonePendingAsync(db, visitId, ct);
             consult.FinalizedAt ??= DateTime.UtcNow;
 
             if (request.CloseVisit)
             {
-                var visit = await db.Visits.SingleAsync(v => v.Id == visitId, ct);
+                // A returned patient the doctor closes without further edits has still been seen.
+                if (visit.Status == VisitStatus.ReadyForDoctor)
+                {
+                    MoveVisit(db, visit, VisitStatus.InConsultation, user.Id);
+                }
+
                 if (!VisitWorkflow.CanMove(visit.Status, VisitStatus.Completed))
                 {
                     throw new AppException(StatusCodes.Status409Conflict, "invalid_transition", "این مراجعه در وضعیت فعلی قابل تکمیل نیست.");
                 }
 
-                db.VisitStatusHistory.Add(new VisitStatusHistory { VisitId = visitId, FromStatus = visit.Status, ToStatus = VisitStatus.Completed, ChangedByUserId = user.Id });
-                visit.Status = VisitStatus.Completed;
+                MoveVisit(db, visit, VisitStatus.Completed, user.Id);
             }
 
             audit.Add("ConsultationFinalized", "Visit", visitId.ToString());
@@ -257,13 +299,53 @@ public static class ClinicalEndpoints
             return Results.Ok(await ToDtoAsync(db, consult, canSeeConfidential: true, ct));
         }).RequirePermission("consultation.approve");
 
-        consultations.MapPost("/{visitId:long}/amend", async (long visitId, AmendRequest request, AppDbContext db, CurrentUser user, AuditService audit, CancellationToken ct) =>
+        // Findings and diagnoses stay as they were; only the lock lifts, and the reason stays on the record.
+        consultations.MapPost("/{visitId:long}/reopen", async (long visitId, ReopenConsultationRequest request, AppDbContext db, ClinicalAccess access, CurrentUser user, AuditService audit, CancellationToken ct) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var visit = await VisitService.LockAsync(db, visitId, ct);
+            await access.EnsureResponsibleAsync(visitId, ct);
+            var consult = await db.Consultations.SingleOrDefaultAsync(c => c.VisitId == visitId, ct) ?? throw AppException.NotFound();
+            db.Entry(consult).Property(c => c.Version).OriginalValue = request.Version;
+            if (consult.FinalizedAt is null)
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "not_finalized", "این معاینه هنوز نهایی نشده است.");
+            }
+
+            if (visit.Status is VisitStatus.Completed or VisitStatus.Cancelled)
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "visit_closed", "این مراجعه بسته شده است. برای تغییر، اصلاحیه ثبت کنید.");
+            }
+
+            db.ClinicalAmendments.Add(new ClinicalAmendment
+            {
+                Entity = nameof(Consultation),
+                EntityId = consult.Id,
+                Field = nameof(Consultation.FinalizedAt),
+                OldValue = consult.FinalizedAt.Value.ToString("O"),
+                Reason = request.Reason.Trim(),
+                UserId = user.Id,
+            });
+            consult.FinalizedAt = null;
+            if (visit.Status == VisitStatus.ReadyForDoctor)
+            {
+                MoveVisit(db, visit, VisitStatus.InConsultation, user.Id);
+            }
+
+            audit.Add("ConsultationReopened", "Visit", visitId.ToString());
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return Results.NoContent();
+        }).RequirePermission("consultation.edit");
+
+        consultations.MapPost("/{visitId:long}/amend", async (long visitId, AmendRequest request, AppDbContext db, ClinicalAccess access, CurrentUser user, AuditService audit, CancellationToken ct) =>
         {
             if (!AmendableFields.Contains(request.Field))
             {
                 throw new AppException(StatusCodes.Status400BadRequest, "invalid_field", "این فیلد قابل اصلاح نیست.");
             }
 
+            await access.EnsureResponsibleAsync(visitId, ct);
             var consult = await db.Consultations.SingleOrDefaultAsync(c => c.VisitId == visitId, ct) ?? throw AppException.NotFound();
             db.Entry(consult).Property(c => c.Version).OriginalValue = request.Version;
             if (consult.FinalizedAt is null)
@@ -320,21 +402,18 @@ public static class ClinicalEndpoints
             var query = db.Visits.AsNoTracking().Where(v => v.VisitDate == today);
             if (kind == "triage")
             {
-                query = query.Where(v => v.Department!.Code == "triage" && (v.Status == VisitStatus.Registered || v.Status == VisitStatus.Waiting || v.Status == VisitStatus.InPreExam));
+                query = VisionQueue(query);
             }
             else if (kind == "doctor")
             {
-                var userId = user.Id;
-                query = query.Where(v =>
-                    (v.Doctor != null ? v.Doctor.UserId == userId : v.Department!.Code == "doctor" || v.Status == VisitStatus.ReadyForDoctor) &&
-                    v.Status != VisitStatus.Completed && v.Status != VisitStatus.Cancelled);
+                query = DoctorQueue(db, query, user.Id);
             }
             else
             {
                 throw new AppException(StatusCodes.Status400BadRequest, "invalid_kind", "نوع فهرست معتبر نیست.");
             }
 
-            var rows = await VisitService.QueryRows(query.OrderBy(v => v.QueueNumber).Take(200)).ToListAsync(ct);
+            var rows = await VisitService.QueryRows(db, query.OrderBy(v => v.QueueNumber).Take(200)).ToListAsync(ct);
             return Results.Ok(rows.Select(VisitService.ToRow).ToList());
         }).RequirePermission("visits.view").WithTags("Clinical");
 
@@ -352,9 +431,10 @@ public static class ClinicalEndpoints
             return Results.Ok(rows.Select(f => new { f.Id, f.PatientId, f.DueDate, f.Note, PatientName = $"{f.FirstName} {f.LastName}".Trim() }));
         }).RequirePermission("consultation.view").WithTags("Clinical");
 
-        app.MapPost("/api/follow-ups", async (CreateFollowUpRequest request, AppDbContext db, CurrentUser user, AuditService audit, CancellationToken ct) =>
+        app.MapPost("/api/follow-ups", async (CreateFollowUpRequest request, AppDbContext db, ClinicalAccess access, CurrentUser user, AuditService audit, CancellationToken ct) =>
         {
             var patientId = await PatientOfVisitAsync(db, request.VisitId, ct);
+            await access.EnsureResponsibleAsync(request.VisitId, ct);
             if (request.DueDate < KabulClock.Today)
             {
                 throw new AppException(StatusCodes.Status400BadRequest, "invalid_date", "تاریخ پیگیری نمی‌تواند در گذشته باشد.");
@@ -368,14 +448,56 @@ public static class ClinicalEndpoints
         }).RequirePermission("consultation.edit").WithTags("Clinical");
     }
 
+    /// <summary>Everyone bound for a doctor passes through here, whichever department the desk chose.</summary>
+    public static IQueryable<Visit> VisionQueue(IQueryable<Visit> visits) =>
+        visits.Where(v => (v.Department!.Code == "triage" || v.Department!.Code == "doctor" || v.DoctorStaffId != null)
+            && (v.Status == VisitStatus.Registered || v.Status == VisitStatus.Waiting || v.Status == VisitStatus.InPreExam));
+
+    /// <summary>
+    /// A patient belongs to the assigned doctor's account. Without one (nobody assigned, or a doctor with no login)
+    /// the patient stays with whoever started the exam, and otherwise waits in the shared list so nobody is lost.
+    /// A patient still waiting for Vision reaches the doctor only after it is complete.
+    /// </summary>
+    public static IQueryable<Visit> DoctorQueue(AppDbContext db, IQueryable<Visit> visits, long userId) =>
+        visits.Where(v =>
+            ((v.Doctor != null && v.Doctor.UserId != null && v.Doctor.UserId == userId)
+                || ((v.Doctor == null || v.Doctor.UserId == null)
+                    && (db.Consultations.Any(c => c.VisitId == v.Id && c.AuthorUserId == userId)
+                        || (!db.Consultations.Any(c => c.VisitId == v.Id) && (v.Department!.Code == "doctor" || v.Status == VisitStatus.ReadyForDoctor))))) &&
+            v.Status != VisitStatus.Completed && v.Status != VisitStatus.Cancelled &&
+            v.Status != VisitStatus.Registered && v.Status != VisitStatus.Waiting && v.Status != VisitStatus.InPreExam);
+
+    private static void MoveVisit(AppDbContext db, Visit visit, VisitStatus to, long userId)
+    {
+        db.VisitStatusHistory.Add(new VisitStatusHistory { VisitId = visit.Id, FromStatus = visit.Status, ToStatus = to, ChangedByUserId = userId });
+        visit.Status = to;
+    }
+
     public static async Task<long> PatientOfVisitAsync(AppDbContext db, long visitId, CancellationToken ct)
     {
         var patientId = await db.Visits.Where(v => v.Id == visitId).Select(v => (long?)v.PatientId).SingleOrDefaultAsync(ct);
         return patientId ?? throw AppException.NotFound();
     }
 
-    private static AppException VersionRequired() =>
-        new(StatusCodes.Status400BadRequest, "version_required", "نسخه رکورد ارسال نشده است.");
+    public static void EnsureNotCancelled(Visit visit)
+    {
+        if (visit.Status == VisitStatus.Cancelled)
+        {
+            throw new AppException(StatusCodes.Status409Conflict, "visit_closed", "این مراجعه لغو شده است.");
+        }
+    }
+
+    /// <summary>Vision is free and comes first for every patient; no hand-set status or direct exam goes around it.</summary>
+    public static async Task EnsureVisionCompleteAsync(AppDbContext db, long visitId, CancellationToken ct)
+    {
+        if (!await db.PreExaminations.AnyAsync(p => p.VisitId == visitId && p.CompletedAt != null, ct))
+        {
+            throw new AppException(StatusCodes.Status409Conflict, "vision_required", "این مریض هنوز Vision را تکمیل نکرده است. ابتدا باید Vision ثبت و تکمیل شود.");
+        }
+    }
+
+    /// <summary>A screen with no version opened before the first save, so it never saw what is stored now.</summary>
+    private static DbUpdateConcurrencyException StaleScreen() => new();
 
     private static PreExamDto ToDto(PreExamination p) => new(
         p.Id, p.VisitId, p.ChiefComplaint, p.History, p.VisualAcuityOd, p.VisualAcuityOs, p.IopOd, p.IopOs, p.Measurements, p.Notes, p.RecordedAt, p.CompletedAt, p.Version);

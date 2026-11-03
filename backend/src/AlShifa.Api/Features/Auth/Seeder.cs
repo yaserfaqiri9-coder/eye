@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using AlShifa.Api.Features.Clinical;
 using AlShifa.Api.Features.Finance;
 using AlShifa.Api.Features.Inventory;
 using AlShifa.Api.Features.Users;
@@ -30,6 +31,22 @@ public static class Seeder
         ("pharmacy", "دواخانه"),
         ("optical", "بخش عینک"),
     ];
+
+    /// <summary>Tariffs are not seeded: until finance sets a price, these services refuse to charge.</summary>
+    private static readonly (string Code, string Name)[] Services =
+    [
+        (ServiceCodes.VisitFee, "فیس ویزیت"),
+        (ServiceCodes.Refraction, "فیس رفرکشن"),
+        (ServiceCodes.Imaging, "فیس عکس‌برداری"),
+    ];
+
+    private static readonly (string Name, DiagnosticKind Kind, string ServiceCode)[] PrepaidTests =
+    [
+        ("رفرکشن", DiagnosticKind.Refraction, ServiceCodes.Refraction),
+        ("عکس‌برداری", DiagnosticKind.Imaging, ServiceCodes.Imaging),
+    ];
+
+    private const string ReceptionRegister = "صندوق پذیرش";
 
     /// <summary>Roles, permissions and departments are reference data and are safe to apply in every environment.</summary>
     public static async Task SeedReferenceDataAsync(IServiceProvider services)
@@ -75,6 +92,26 @@ public static class Seeder
         if (!await db.CashRegisters.AnyAsync())
         {
             db.CashRegisters.Add(new CashRegister { Name = "صندوق اصلی" });
+        }
+
+        // A register holds one open session at a time, so the reception desk needs its own.
+        if (!await db.CashRegisters.AnyAsync(r => r.Name == ReceptionRegister))
+        {
+            db.CashRegisters.Add(new CashRegister { Name = ReceptionRegister });
+        }
+
+        var serviceCodes = await db.Services.Select(s => s.Code).ToListAsync();
+        db.Services.AddRange(Services
+            .Where(s => !serviceCodes.Contains(s.Code))
+            .Select(s => new Service { Code = s.Code, Name = s.Name }));
+
+        await db.SaveChangesAsync();
+
+        var testNames = await db.DiagnosticTests.Select(t => t.Name).ToListAsync();
+        foreach (var test in PrepaidTests.Where(t => !testNames.Contains(t.Name)))
+        {
+            var serviceId = await db.Services.Where(s => s.Code == test.ServiceCode).Select(s => s.Id).SingleAsync();
+            db.DiagnosticTests.Add(new DiagnosticTest { Name = test.Name, Kind = test.Kind, ServiceId = serviceId });
         }
 
         await db.SaveChangesAsync();

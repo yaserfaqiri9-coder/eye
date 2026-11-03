@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { api, ApiError } from '@/api/http'
+import { clearLookups } from '@/api/lookups'
 
 export interface CurrentUser {
   id: number
@@ -32,6 +33,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function login(userName: string, password: string) {
+    clearLookups()
     user.value = await api<CurrentUser>('/auth/login', { method: 'POST', body: { userName, password } })
     loaded.value = true
   }
@@ -42,6 +44,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function clear() {
+    clearLookups()
     user.value = null
     loaded.value = true
   }

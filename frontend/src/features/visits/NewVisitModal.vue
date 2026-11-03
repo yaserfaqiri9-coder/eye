@@ -1,50 +1,76 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
-import { api, errorMessage, newIdempotencyKey } from '@/api/http'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { api, ApiError, errorMessage, newIdempotencyKey } from '@/api/http'
+import { departmentOptions, doctorOptions } from '@/api/lookups'
+import UiComboBox, { type ComboOption } from '@/components/UiComboBox.vue'
 import UiModal from '@/components/UiModal.vue'
-import { patientName, type PatientListItem } from '@/features/patients/types'
-import { money } from '@/utils/money'
-import type { LookupItem, VisitRow } from './types'
+import PatientPicker from '@/features/patients/PatientPicker.vue'
+import { money, quantity } from '@/utils/money'
+import type { VisitRow, VisitToken } from './types'
 
-const props = defineProps<{ patient?: { id: number; label: string } }>()
-const emit = defineEmits<{ close: []; saved: [visit: VisitRow] }>()
+const props = defineProps<{ patient?: { id: number; label: string }; token?: VisitToken }>()
+const emit = defineEmits<{ close: []; saved: [visit: VisitRow]; changed: [] }>()
 
-const departments = ref<LookupItem[]>([])
-const doctors = ref<LookupItem[]>([])
-const services = ref<{ id: number; name: string; isActive: boolean; currentPrice: number | null }[]>([])
-const form = reactive({ departmentId: null as number | null, doctorStaffId: null as number | null, serviceId: null as number | null, reason: '' })
-const selected = ref(props.patient ?? null)
-const search = ref('')
-const results = ref<PatientListItem[]>([])
+const departments = ref<ComboOption[]>([])
+const doctors = ref<ComboOption[]>([])
+const services = ref<ComboOption[]>([])
+const listsLoading = ref(true)
+const fee = ref<number | null>(null)
+const token = ref<VisitToken | null>(props.token ?? null)
+const form = reactive({ patientId: props.patient?.id ?? null, departmentId: props.token?.departmentId ?? null as number | null, doctorStaffId: props.token?.doctorStaffId ?? null as number | null, serviceId: null as number | null, reason: '' })
 const saving = ref(false)
 const error = ref('')
-const key = newIdempotencyKey()
+const tokenKey = ref(newIdempotencyKey())
+const payKey = ref(newIdempotencyKey())
+const visitKey = ref(newIdempotencyKey())
 
-let debounce: ReturnType<typeof setTimeout> | undefined
-watch(search, (value) => {
-  clearTimeout(debounce)
-  if (!value.trim()) {
-    results.value = []
-    return
-  }
-  debounce = setTimeout(async () => {
-    try {
-      const page = await api<{ items: PatientListItem[] }>(`/patients?pageSize=8&q=${encodeURIComponent(value.trim())}`)
-      results.value = page.items
-    } catch (cause) {
-      error.value = errorMessage(cause)
+const paid = computed(() => token.value?.paid === true)
+
+function retryable(cause: unknown, key: typeof tokenKey) {
+  // A definite refusal may be retried with new values; an unknown outcome keeps the key so a retry cannot double-charge.
+  if (cause instanceof ApiError && !cause.outcomeUnknown) key.value = newIdempotencyKey()
+}
+
+/** Issues the token if there is none yet, then collects the fee in full. */
+async function collect() {
+  saving.value = true
+  error.value = ''
+  try {
+    if (!token.value) {
+      try {
+        token.value = await api<VisitToken>('/visit-tokens', {
+          method: 'POST',
+          idempotencyKey: tokenKey.value,
+          body: { departmentId: form.departmentId, doctorStaffId: form.doctorStaffId },
+        })
+        emit('changed')
+      } catch (cause) {
+        retryable(cause, tokenKey)
+        throw cause
+      }
     }
-  }, 300)
-})
-
-function pick(patient: PatientListItem) {
-  selected.value = { id: patient.id, label: `${patient.fileNumber} — ${patientName(patient)}` }
-  results.value = []
-  search.value = ''
+    try {
+      await api('/reception-fees/pay', {
+        method: 'POST',
+        idempotencyKey: payKey.value,
+        body: { invoiceId: token.value.invoiceId, amount: token.value.balance, method: 'Cash', invoiceVersion: token.value.invoiceVersion },
+      })
+      token.value = await api<VisitToken>(`/visit-tokens/${token.value.id}`)
+      emit('changed')
+    } catch (cause) {
+      retryable(cause, payKey)
+      if (cause instanceof ApiError && cause.code === 'invoice_changed') token.value = await api<VisitToken>(`/visit-tokens/${token.value.id}`)
+      throw cause
+    }
+  } catch (cause) {
+    error.value = errorMessage(cause)
+  } finally {
+    saving.value = false
+  }
 }
 
 async function save() {
-  if (!selected.value) {
+  if (!form.patientId) {
     error.value = 'مریض را انتخاب کنید.'
     return
   }
@@ -53,12 +79,13 @@ async function save() {
   try {
     const visit = await api<VisitRow>('/visits', {
       method: 'POST',
-      idempotencyKey: key,
-      body: { patientId: selected.value.id, departmentId: form.departmentId, doctorStaffId: form.doctorStaffId, serviceId: form.serviceId, reason: form.reason },
+      idempotencyKey: visitKey.value,
+      body: { patientId: form.patientId, departmentId: token.value!.departmentId, doctorStaffId: form.doctorStaffId, serviceId: form.serviceId, reason: form.reason, tokenId: token.value!.id },
     })
     emit('saved', visit)
   } catch (cause) {
     error.value = errorMessage(cause)
+    retryable(cause, visitKey)
   } finally {
     saving.value = false
   }
@@ -66,68 +93,65 @@ async function save() {
 
 onMounted(async () => {
   try {
-    const [loadedDepartments, loadedDoctors, loadedServices] = await Promise.all([
-      api<LookupItem[]>('/lookups/departments'),
-      api<LookupItem[]>('/lookups/doctors'),
-      api<typeof services.value>('/services'),
+    // Prices are read fresh each time; departments and doctors come from the shared short-lived list.
+    const [loadedDepartments, loadedDoctors, loadedServices, loadedFee] = await Promise.all([
+      departmentOptions(),
+      doctorOptions(),
+      api<{ id: number; name: string; code: string; isActive: boolean; currentPrice: number | null }[]>('/services'),
+      token.value ? Promise.resolve(null) : api<{ price: number }>('/visit-tokens/fee'),
     ])
     departments.value = loadedDepartments
     doctors.value = loadedDoctors
-    services.value = loadedServices.filter((s) => s.isActive && s.currentPrice !== null)
+    services.value = loadedServices.filter((s) => s.isActive && s.currentPrice !== null).map((s) => ({ value: s.id, label: s.name, hint: money(s.currentPrice) }))
+    fee.value = loadedFee?.price ?? null
+    // Most patients start at Vision, so the desk does not have to choose each time.
+    if (!form.departmentId) form.departmentId = loadedDepartments.find((d) => d.label === 'معاینه ابتدایی')?.value ?? null
   } catch (cause) {
     error.value = errorMessage(cause)
+  } finally {
+    listsLoading.value = false
   }
 })
 </script>
 
 <template>
-  <UiModal title="مراجعه جدید" @close="$emit('close')">
-    <form @submit.prevent="save">
+  <UiModal :title="paid ? `نوبت ${quantity(token!.queueNumber)}: ثبت مشخصات مریض` : 'نوبت جدید و دریافت فیس ویزیت'" @close="$emit('close')">
+    <form v-if="!paid" @submit.prevent="collect">
+      <template v-if="!token">
+        <div class="mb-3"><UiComboBox v-model="form.departmentId" label="بخش" :options="departments" :loading="listsLoading" required chip /></div>
+        <div class="mb-3"><UiComboBox v-model="form.doctorStaffId" label="داکتر (اختیاری)" :options="doctors" :loading="listsLoading" chip placeholder="بدون انتخاب" /></div>
+      </template>
+      <p>فیس ویزیت: <strong>{{ money(token ? token.balance : fee) }}</strong></p>
+      <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="saving || listsLoading">{{ token ? 'دریافت فیس' : 'ثبت نوبت و دریافت فیس' }}</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
+    </form>
+
+    <form v-else @submit.prevent="save">
+      <div class="alert alert-success" role="status">فیس ویزیت دریافت شد. {{ token!.departmentName }}، نوبت {{ quantity(token!.queueNumber) }}</div>
       <div class="mb-3">
-        <template v-if="selected">
+        <template v-if="patient">
           <div class="form-label">مریض</div>
-          <div class="d-flex align-items-center justify-content-between">
-            <strong>{{ selected.label }}</strong>
-            <button v-if="!patient" type="button" class="btn btn-soft btn-sm" @click="selected = null">تغییر</button>
-          </div>
+          <strong>{{ patient.label }}</strong>
         </template>
         <template v-else>
-          <label class="form-label" for="v-search">جستجوی مریض</label>
-          <input id="v-search" v-model="search" type="search" class="form-control" placeholder="نام، شماره پرونده یا تماس" autocomplete="off" />
-          <div v-if="results.length" class="list-group mt-1">
-            <button v-for="row in results" :key="row.id" type="button" class="list-group-item list-group-item-action" @click="pick(row)">
-              <span class="ltr-num">{{ row.fileNumber }}</span> — {{ patientName(row) }}
-            </button>
-          </div>
+          <PatientPicker v-model="form.patientId" required />
+          <RouterLink :to="{ name: 'patient-new', query: { token: token!.id } }" class="btn btn-soft btn-sm mt-2">مریض جدید</RouterLink>
         </template>
       </div>
-      <div class="mb-3">
-        <label class="form-label" for="v-dept">بخش</label>
-        <select id="v-dept" v-model.number="form.departmentId" class="form-select" required>
-          <option :value="null" disabled>انتخاب کنید</option>
-          <option v-for="d in departments" :key="d.id" :value="d.id">{{ d.name }}</option>
-        </select>
-      </div>
-      <div class="mb-3">
-        <label class="form-label" for="v-doctor">داکتر (اختیاری)</label>
-        <select id="v-doctor" v-model.number="form.doctorStaffId" class="form-select">
-          <option :value="null">بدون انتخاب</option>
-          <option v-for="d in doctors" :key="d.id" :value="d.id">{{ d.name }}</option>
-        </select>
-      </div>
-      <div class="mb-3">
-        <label class="form-label" for="v-service">خدمت قابل پرداخت (اختیاری)</label>
-        <select id="v-service" v-model.number="form.serviceId" class="form-select">
-          <option :value="null">بدون هزینه</option>
-          <option v-for="s in services" :key="s.id" :value="s.id">{{ s.name }} — {{ money(s.currentPrice) }}</option>
-        </select>
-      </div>
+      <div class="mb-3"><UiComboBox v-model="form.doctorStaffId" label="داکتر (اختیاری)" :options="doctors" :loading="listsLoading" chip placeholder="بدون انتخاب" /></div>
+      <div class="mb-3"><UiComboBox v-model="form.serviceId" label="خدمت اضافی قابل پرداخت (اختیاری)" :options="services" :loading="listsLoading" chip placeholder="بدون خدمت اضافی" /></div>
       <div class="mb-3">
         <label class="form-label" for="v-reason">علت مراجعه</label>
         <input id="v-reason" v-model="form.reason" class="form-control" maxlength="300" />
       </div>
       <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="saving">ثبت مراجعه</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="saving">ثبت مراجعه</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>بعداً</button>
+      </div>
     </form>
   </UiModal>
 </template>

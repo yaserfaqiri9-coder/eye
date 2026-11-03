@@ -1,0 +1,51 @@
+{
+  "items": [
+    {
+      "id": "mysql",
+      "name": "MySQL Community Server",
+      "version": "8.4.11",
+      "file": "mysql-8.4.11-winx64.zip",
+      "url": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-winx64.zip",
+      "sha256": "A492371D687D2BAB088B0062581144A0044B8964BAEFDF4FAA579292B423D25C",
+      "signature": {
+        "extension": "asc",
+        "url": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-winx64.zip.asc",
+        "keyFile": "RPM-GPG-KEY-mysql-2025",
+        "keyUrl": "https://repo.mysql.com/RPM-GPG-KEY-mysql-2025",
+        "fingerprints": [ "BCA43417C3B485DD128EC6D4B7B3B788A8D3785C" ]
+      },
+      "license": "GPL-2.0 with exceptions; full text in LICENSE inside the zip",
+      "licenseNote": "Source: https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11.tar.gz"
+    },
+    {
+      "id": "gpg4win",
+      "name": "Gpg4win",
+      "version": "5.1.1",
+      "file": "gpg4win-5.1.1.exe",
+      "url": "https://files.gpg4win.org/gpg4win-5.1.1.exe",
+      "sha256": "ED19C0C89EC42FE32C52A7ABD6E3DA5F491752700546B9EED7DDF82FD303CDDF",
+      "signature": {
+        "extension": "sig",
+        "url": "https://files.gpg4win.org/gpg4win-5.1.1.exe.sig",
+        "keyFile": "gnupg-signature_key.asc",
+        "keyUrl": "https://gnupg.org/signature_key.asc",
+        "fingerprints": [ "6DAA6E64A76D2840571B4902528897B826403ADA" ]
+      },
+      "publisher": "g10 Code GmbH",
+      "license": "GPL-2.0-or-later; see https://www.gpg4win.org/license.html",
+      "licenseNote": "Source: https://files.gpg4win.org/gpg4win-5.1.1.tar.xz"
+    },
+    {
+      "id": "vcredist",
+      "name": "Microsoft Visual C++ 2015-2022 Redistributable (x64)",
+      "version": "14.44.35211",
+      "file": "vc_redist.x64.exe",
+      "url": "https://download.visualstudio.microsoft.com/download/pr/990c720a-46ce-4dc7-87b9-c2eb615d34b9/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe",
+      "sha256": "CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B",
+      "publisher": "Microsoft Corporation",
+      "requiresVisualStudioLicense": true,
+      "license": "Microsoft Software License Terms",
+      "licenseNote": "Microsoft limits redistribution to licensed Visual Studio users: https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files"
+    }
+  ]
+}

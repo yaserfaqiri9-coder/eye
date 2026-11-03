@@ -141,7 +141,7 @@ public static class ReportEndpoints
                 group p by u.FullName into g
                 select new CashierRow(g.Key, g.Sum(x => x.Amount))).ToListAsync(ct);
 
-            var open = db.Invoices.AsNoTracking().Where(i => i.Status == InvoiceStatus.Issued || i.Status == InvoiceStatus.PartiallyPaid);
+            var open = db.Invoices.AsNoTracking().Where(i => (i.Status == InvoiceStatus.Issued || i.Status == InvoiceStatus.PartiallyPaid) && i.Total - i.Discount - i.Paid > 0);
 
             return Results.Ok(new FinancialReport(
                 start, end, service, pharmacy, optical, discounts, refunds,

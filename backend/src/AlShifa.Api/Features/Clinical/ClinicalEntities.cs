@@ -48,6 +48,65 @@ public class PreExamination
     public int Version { get; set; }
 }
 
+public enum RefractionStage
+{
+    Current,
+    Auto,
+    Subjective,
+    Final,
+}
+
+public class Refraction
+{
+    public long Id { get; set; }
+
+    public long VisitId { get; set; }
+
+    public Visit? Visit { get; set; }
+
+    [MaxLength(30)] public string? UnaidedVaOd { get; set; }
+    [MaxLength(30)] public string? UnaidedVaOs { get; set; }
+    [MaxLength(30)] public string? PinholeVaOd { get; set; }
+    [MaxLength(30)] public string? PinholeVaOs { get; set; }
+    [MaxLength(30)] public string? NearVaOd { get; set; }
+    [MaxLength(30)] public string? NearVaOs { get; set; }
+    [MaxLength(10)] public string? Pd { get; set; }
+
+    [MaxLength(1000)]
+    public string? Measurements { get; set; }
+
+    [MaxLength(2000)]
+    public string? Notes { get; set; }
+
+    public long RecordedByUserId { get; set; }
+
+    public DateTime RecordedAt { get; set; } = DateTime.UtcNow;
+
+    public DateTime? CompletedAt { get; set; }
+
+    public int Version { get; set; }
+
+    public List<RefractionLine> Lines { get; set; } = [];
+}
+
+/// <summary>One eye at one stage. Device, examiner and final values stay separate rows so they cannot be confused.</summary>
+public class RefractionLine
+{
+    public long Id { get; set; }
+
+    public long RefractionId { get; set; }
+
+    public RefractionStage Stage { get; set; }
+
+    public EyeSide Eye { get; set; }
+
+    [MaxLength(10)] public string? Sphere { get; set; }
+    [MaxLength(10)] public string? Cylinder { get; set; }
+    [MaxLength(10)] public string? Axis { get; set; }
+    [MaxLength(10)] public string? Add { get; set; }
+    [MaxLength(30)] public string? Va { get; set; }
+}
+
 public class Consultation
 {
     public long Id { get; set; }
@@ -261,6 +320,14 @@ public class ClinicalAccessGrant
     public DateTime ExpiresAt { get; set; }
 }
 
+/// <summary>Refraction and Imaging are paid in full before they start; Lab keeps its pay-any-time rule.</summary>
+public enum DiagnosticKind
+{
+    Lab,
+    Refraction,
+    Imaging,
+}
+
 public class DiagnosticTest
 {
     public int Id { get; set; }
@@ -274,6 +341,8 @@ public class DiagnosticTest
     public int? ServiceId { get; set; }
 
     public Finance.Service? Service { get; set; }
+
+    public DiagnosticKind Kind { get; set; }
 }
 
 public enum DiagnosticStatus
@@ -309,6 +378,14 @@ public class DiagnosticOrder
     public string? Note { get; set; }
 
     public DiagnosticStatus Status { get; set; } = DiagnosticStatus.Requested;
+
+    /// <summary>The doctor's decision: finishing this request sends the patient back to the doctor's queue.</summary>
+    public bool ReturnToDoctor { get; set; }
+
+    /// <summary>A prepaid request's own invoice, so its fee and discount never mix with another charge.</summary>
+    public long? InvoiceId { get; set; }
+
+    public Finance.Invoice? Invoice { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 

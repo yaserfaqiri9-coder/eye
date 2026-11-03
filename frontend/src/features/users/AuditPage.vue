@@ -76,8 +76,8 @@ onMounted(load)
       </select>
     </template>
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
-    <div v-if="loading" class="py-4 text-center text-muted" role="status">در حال بارگذاری...</div>
-    <div v-else-if="rows.length === 0" class="py-4 text-center text-muted">موردی ثبت نشده است.</div>
+    <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
+    <div v-else-if="rows.length === 0" class="xr-state">موردی ثبت نشده است.</div>
     <div v-else class="xr-table-wrap">
       <table class="xr-table">
         <thead><tr><th>زمان</th><th>کاربر</th><th>فعالیت</th><th>مورد</th><th>جزئیات</th><th>آدرس</th></tr></thead>
@@ -85,7 +85,7 @@ onMounted(load)
           <tr v-for="row in rows" :key="row.id">
             <td class="text-nowrap">{{ formatDateTime(row.createdAt) }}</td>
             <td>{{ row.userName ?? '—' }}</td>
-            <td><span class="ltr-num">{{ row.action }}</span></td>
+            <td>{{ filters.find((f) => f.value === row.action)?.label ?? row.action }}</td>
             <td><span class="ltr-num">{{ row.entity }} {{ row.entityId }}</span></td>
             <td>{{ row.details ?? '—' }}</td>
             <td><span class="ltr-num">{{ row.ipAddress ?? '—' }}</span></td>

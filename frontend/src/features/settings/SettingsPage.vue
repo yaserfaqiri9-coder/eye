@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { api, errorMessage, uploadFile } from '@/api/http'
 import UiCard from '@/components/UiCard.vue'
 import UiModal from '@/components/UiModal.vue'
+import CallSettingsTab from '@/features/calls/CallSettingsTab.vue'
 import type { ServiceRow } from '@/features/finance/types'
 import { useAuthStore } from '@/stores/auth'
 import { money } from '@/utils/money'
@@ -11,6 +12,7 @@ interface TestRow {
   id: number
   name: string
   isActive: boolean
+  kind: string
 }
 
 const auth = useAuthStore()
@@ -27,9 +29,17 @@ const tabs = [
   { key: 'services', label: 'خدمات و تعرفه‌ها' },
   { key: 'tests', label: 'فهرست آزمایش‌ها' },
   { key: 'registers', label: 'صندوق‌ها' },
+  { key: 'calls', label: 'فراخوان' },
 ]
 
 const canEdit = () => auth.can('settings.edit')
+const canPrice = () => auth.can('services.edit')
+
+// These fees open the visit and the paid departments, and refuse to charge until they have a price.
+const paidFlowCodes = ['VISIT-FEE', 'REFRACTION', 'IMAGING']
+const unpriced = computed(() => services.value.filter((s) => paidFlowCodes.includes(s.code) && !s.currentPrice).map((s) => s.name))
+const priceMinimum = computed(() => (price.row && paidFlowCodes.includes(price.row.code) ? 0.01 : 0))
+const kindLabels: Record<string, string> = { Lab: 'آزمایش', Refraction: 'رفرکشن', Imaging: 'عکس‌برداری' }
 
 const hospital = reactive({ hospitalName: '', address: '', phone: '', printFooter: '', saving: false })
 
@@ -115,13 +125,13 @@ async function savePrice() {
   }
 }
 
-const test = reactive({ open: false, name: '', serviceId: null as number | null, saving: false, error: '' })
+const test = reactive({ open: false, name: '', kind: 'Lab', serviceId: null as number | null, saving: false, error: '' })
 
 async function saveTest() {
   test.saving = true
   test.error = ''
   try {
-    await api('/diagnostic-tests', { method: 'POST', body: { name: test.name, isActive: true, serviceId: test.serviceId } })
+    await api('/diagnostic-tests', { method: 'POST', body: { name: test.name, isActive: true, serviceId: test.serviceId, kind: test.kind } })
     test.open = false
     tests.value = await api<TestRow[]>('/diagnostic-tests')
   } catch (cause) {
@@ -176,16 +186,23 @@ onMounted(load)
 
       <template v-else-if="tab === 'services'">
         <button v-if="canEdit()" type="button" class="btn btn-primary mb-3" @click="Object.assign(service, { open: true, code: '', name: '', price: 0, error: '' })">خدمت جدید</button>
+        <div v-if="unpriced.length" class="alert alert-warning" role="alert">
+          تا قیمت این خدمات ثبت نشود، نوبت و درخواست مربوط ثبت نمی‌شود: {{ unpriced.join('، ') }}. مبلغ را مسئول مالی تعیین می‌کند.
+        </div>
         <p v-if="services.length === 0" class="text-muted">خدمتی تعریف نشده است.</p>
         <div v-else class="xr-table-wrap">
           <table class="xr-table">
-            <thead><tr><th>کد</th><th>نام</th><th>قیمت فعلی</th><th v-if="canEdit()">عملیات</th></tr></thead>
+            <thead><tr><th>کد</th><th>نام</th><th>قیمت فعلی</th><th v-if="canPrice()">عملیات</th></tr></thead>
             <tbody>
               <tr v-for="row in services" :key="row.id">
                 <td><span class="ltr-num">{{ row.code }}</span></td>
                 <td>{{ row.name }}</td>
-                <td>{{ money(row.currentPrice) }}</td>
-                <td v-if="canEdit()"><button type="button" class="btn btn-soft btn-sm" @click="Object.assign(price, { row, value: row.currentPrice ?? 0, error: '' })">تغییر قیمت</button></td>
+                <td>
+                  <template v-if="row.currentPrice">{{ money(row.currentPrice) }}</template>
+                  <span v-else-if="paidFlowCodes.includes(row.code)" class="xr-badge xr-badge--orange">تعیین نشده</span>
+                  <template v-else>{{ money(row.currentPrice) }}</template>
+                </td>
+                <td v-if="canPrice()"><button type="button" class="btn btn-soft btn-sm" @click="Object.assign(price, { row, value: row.currentPrice ?? 0, error: '' })">{{ row.currentPrice ? 'تغییر قیمت' : 'ثبت قیمت' }}</button></td>
               </tr>
             </tbody>
           </table>
@@ -195,8 +212,10 @@ onMounted(load)
       <template v-else-if="tab === 'tests'">
         <button v-if="canEdit()" type="button" class="btn btn-primary mb-3" @click="Object.assign(test, { open: true, name: '', serviceId: null, error: '' })">آزمایش جدید</button>
         <p v-if="tests.length === 0" class="text-muted">آزمایشی تعریف نشده یا اجازه مشاهده ندارید.</p>
-        <ul v-else class="mb-0"><li v-for="row in tests" :key="row.id">{{ row.name }}</li></ul>
+        <ul v-else class="mb-0"><li v-for="row in tests" :key="row.id">{{ row.name }} <span class="text-muted small">({{ kindLabels[row.kind] ?? row.kind }})</span></li></ul>
       </template>
+
+      <CallSettingsTab v-else-if="tab === 'calls'" />
 
       <template v-else>
         <form v-if="canEdit()" class="row g-2 mb-3" @submit.prevent="saveRegister">
@@ -215,7 +234,10 @@ onMounted(load)
       <div class="mb-3"><label class="form-label" for="sv-name">نام خدمت</label><input id="sv-name" v-model="service.name" class="form-control" maxlength="150" required /></div>
       <div class="mb-3"><label class="form-label" for="sv-price">قیمت</label><input id="sv-price" v-model.number="service.price" class="form-control" type="number" min="0" step="0.01" required /></div>
       <div v-if="service.error" class="alert alert-danger" role="alert">{{ service.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="service.saving">ذخیره</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="service.saving">ذخیره</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 
@@ -223,15 +245,25 @@ onMounted(load)
     <form @submit.prevent="savePrice">
       <p class="small text-muted">قیمت جدید فقط روی فاکتورهای بعدی اثر دارد.</p>
       <label class="form-label" for="pr-value">قیمت جدید</label>
-      <input id="pr-value" v-model.number="price.value" class="form-control mb-3" type="number" min="0" step="0.01" required />
+      <input id="pr-value" v-model.number="price.value" class="form-control mb-3" type="number" :min="priceMinimum" step="0.01" required />
       <div v-if="price.error" class="alert alert-danger" role="alert">{{ price.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="price.saving">ذخیره</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="price.saving">ذخیره</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 
   <UiModal v-if="test.open" title="آزمایش جدید" @close="test.open = false">
     <form @submit.prevent="saveTest">
       <div class="mb-3"><label class="form-label" for="ts-name">نام آزمایش</label><input id="ts-name" v-model="test.name" class="form-control" maxlength="150" required /></div>
+      <div class="mb-3">
+        <label class="form-label" for="ts-kind">نوع</label>
+        <select id="ts-kind" v-model="test.kind" class="form-select">
+          <option value="Lab">آزمایش (پرداخت هر زمان)</option>
+          <option value="Imaging">عکس‌برداری (پرداخت پیش از شروع)</option>
+        </select>
+      </div>
       <div class="mb-3">
         <label class="form-label" for="ts-service">خدمت قابل پرداخت</label>
         <select id="ts-service" v-model.number="test.serviceId" class="form-select">
@@ -240,7 +272,10 @@ onMounted(load)
         </select>
       </div>
       <div v-if="test.error" class="alert alert-danger" role="alert">{{ test.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="test.saving">ذخیره</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="test.saving">ذخیره</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 </template>

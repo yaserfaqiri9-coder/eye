@@ -4,6 +4,9 @@ import { api, errorMessage } from '@/api/http'
 import { useLiveRefresh } from '@/api/realtime'
 import StatCard from '@/components/StatCard.vue'
 import UiCard from '@/components/UiCard.vue'
+import CallControls from '@/features/calls/CallControls.vue'
+import CallNotice from '@/features/calls/CallNotice.vue'
+import { useCallDesk } from '@/features/calls/useCallDesk'
 import { visitStatusLabels, visitStatusTones, type VisitRow } from '@/features/visits/types'
 import { formatDate, formatDateTime } from '@/utils/date'
 import { quantity } from '@/utils/money'
@@ -17,6 +20,7 @@ interface FollowUpRow {
   note: string | null
 }
 
+const calls = useCallDesk('Doctor')
 const rows = ref<VisitRow[]>([])
 const results = ref<DiagnosticOrder[]>([])
 const followUps = ref<FollowUpRow[]>([])
@@ -56,12 +60,13 @@ onMounted(load)
     <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
 
     <UiCard title="مریضان در صف داکتر">
-      <div v-if="loading" class="py-4 text-center text-muted" role="status">در حال بارگذاری...</div>
-      <div v-else-if="rows.length === 0" class="py-4 text-center text-muted">مریضی در صف نیست.</div>
+      <CallNotice :desks="[calls]" />
+      <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
+      <div v-else-if="rows.length === 0" class="xr-state">مریضی در صف نیست.</div>
       <div v-else class="xr-table-wrap">
         <table class="xr-table">
           <thead>
-            <tr><th>نوبت</th><th>مریض</th><th>شماره پرونده</th><th>علت</th><th>وضعیت</th><th>عملیات</th></tr>
+            <tr><th>نوبت</th><th>مریض</th><th>شماره پرونده</th><th>علت</th><th>وضعیت</th><th>فراخوان</th><th>عملیات</th></tr>
           </thead>
           <tbody>
             <tr v-for="row in rows" :key="row.id">
@@ -70,6 +75,7 @@ onMounted(load)
               <td><span class="ltr-num">{{ row.patientFileNumber }}</span></td>
               <td>{{ row.reason ?? '—' }}</td>
               <td><span class="xr-badge" :class="`xr-badge--${visitStatusTones[row.status]}`">{{ visitStatusLabels[row.status] }}</span></td>
+              <td><CallControls :desk="calls" :visit-id="row.id" /></td>
               <td><RouterLink :to="`/chart/${row.id}`" class="btn btn-soft btn-sm">باز کردن پرونده</RouterLink></td>
             </tr>
           </tbody>

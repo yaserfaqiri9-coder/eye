@@ -29,9 +29,15 @@ storage/
 # Reference screenshots of the commercial XRay template: third-party material, not project source
 /*.jpg
 
+# Scans of clinic paper forms: one shows a real patient's name and prescription
+/*.jpeg
+
 # Tooling and logs
 .vs/
 .vscode/
 .claude/
 *.user
 *.log
+
+# Release builds of the hospital package
+/release/

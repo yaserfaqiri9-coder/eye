@@ -5,7 +5,7 @@ import ShamsiDateInput from '@/components/ShamsiDateInput.vue'
 import UiCard from '@/components/UiCard.vue'
 import UiModal from '@/components/UiModal.vue'
 import { useAuthStore } from '@/stores/auth'
-import { formatDate, formatDateTime, shamsiToIso, todayShamsi } from '@/utils/date'
+import { formatDate, formatDateTime, todayIso } from '@/utils/date'
 import { money } from '@/utils/money'
 import { invoiceStatusLabels, invoiceStatusTones, type InvoiceDetail, type InvoiceRow, type PaymentRow } from './types'
 
@@ -97,7 +97,8 @@ async function submitDiscount() {
 const refund = reactive({ payment: null as PaymentRow | null, amount: 0, reason: '', saving: false, error: '', key: '' })
 
 function openRefund(row: PaymentRow) {
-  Object.assign(refund, { payment: row, amount: row.amount - row.refunded, reason: '', saving: false, error: '', key: newIdempotencyKey() })
+  // Rounded because subtracting decimals in floating point can leave a tail the server rightly refuses.
+  Object.assign(refund, { payment: row, amount: Number((row.amount - row.refunded).toFixed(2)), reason: '', saving: false, error: '', key: newIdempotencyKey() })
 }
 
 async function submitRefund() {
@@ -115,11 +116,10 @@ async function submitRefund() {
   }
 }
 
-const today = todayShamsi()
-const expense = reactive({ open: false, category: '', description: '', amount: 0, date: shamsiToIso(today.year, today.month, today.day) as string | null, saving: false, error: '', key: '' })
+const expense = reactive({ open: false, category: '', description: '', amount: 0, date: todayIso() as string | null, saving: false, error: '', key: '' })
 
 function openExpense() {
-  Object.assign(expense, { open: true, category: '', description: '', amount: 0, saving: false, error: '', key: newIdempotencyKey() })
+  Object.assign(expense, { open: true, category: '', description: '', amount: 0, date: todayIso(), saving: false, error: '', key: newIdempotencyKey() })
 }
 
 async function submitExpense() {
@@ -157,9 +157,10 @@ async function submitCancel() {
   }
 }
 
-onMounted(async () => {
-  await loadAll()
+onMounted(() => {
+  // Chosen before loading, so a tab the user clicks while data is still arriving stays selected.
   tab.value = tabs.value[0]?.key ?? 'ledger'
+  loadAll()
 })
 </script>
 
@@ -235,7 +236,7 @@ onMounted(async () => {
 
       <template v-else>
         <button v-if="auth.can('expenses.create')" type="button" class="btn btn-primary mb-3" @click="openExpense">ثبت مصرف</button>
-        <p v-if="expenses.length === 0" class="text-muted">مصرفی ثبت نشده است.</p>
+        <p v-if="expenses.length === 0" class="xr-state">مصرفی ثبت نشده است.</p>
         <div v-else class="xr-table-wrap">
           <table class="xr-table">
             <thead><tr><th>شماره</th><th>دسته</th><th>شرح</th><th>مبلغ</th><th>تاریخ</th><th>وضعیت</th><th v-if="auth.can('expenses.cancel')">عملیات</th></tr></thead>
@@ -247,7 +248,7 @@ onMounted(async () => {
                 <td>{{ money(row.amount) }}</td>
                 <td>{{ formatDate(row.expenseDate) }}</td>
                 <td>{{ row.status === 'Recorded' ? 'ثبت‌شده' : 'لغو شده' }}</td>
-                <td v-if="auth.can('expenses.cancel')"><button v-if="row.status === 'Recorded'" type="button" class="btn btn-soft btn-sm" @click="Object.assign(cancelling, { row, reason: '', error: '' })">لغو</button></td>
+                <td v-if="auth.can('expenses.cancel')"><button v-if="row.status === 'Recorded'" type="button" class="btn btn-soft-danger btn-sm" @click="Object.assign(cancelling, { row, reason: '', error: '' })">لغو</button></td>
               </tr>
             </tbody>
           </table>
@@ -259,12 +260,18 @@ onMounted(async () => {
   <UiModal v-if="discount.detail" :title="`تخفیف ${discount.detail.invoice.invoiceNumber}`" @close="discount.detail = null">
     <form @submit.prevent="submitDiscount">
       <p>مانده: {{ money(discount.detail.invoice.balance) }}</p>
+      <ul v-if="discount.detail.discounts.length" class="list-unstyled small mb-3" aria-label="سابقه تخفیف">
+        <li v-for="(d, i) in discount.detail.discounts" :key="i">{{ d.details }} ({{ d.byUser ?? '—' }}، {{ formatDateTime(d.createdAt) }})</li>
+      </ul>
       <label class="form-label" for="d-amount">مبلغ تخفیف</label>
       <input id="d-amount" v-model.number="discount.amount" class="form-control mb-3" type="number" min="0.01" step="0.01" :max="discount.detail.invoice.balance" required />
       <label class="form-label" for="d-reason">دلیل</label>
-      <input id="d-reason" v-model="discount.reason" class="form-control mb-3" maxlength="300" required />
+      <input id="d-reason" v-model="discount.reason" class="form-control mb-3" minlength="3" maxlength="300" required />
       <div v-if="discount.error" class="alert alert-danger" role="alert">{{ discount.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="discount.saving">ثبت تخفیف</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="discount.saving">ثبت تخفیف</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 
@@ -275,7 +282,10 @@ onMounted(async () => {
       <label class="form-label" for="rf-reason">دلیل</label>
       <input id="rf-reason" v-model="refund.reason" class="form-control mb-3" minlength="3" maxlength="300" required />
       <div v-if="refund.error" class="alert alert-danger" role="alert">{{ refund.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="refund.saving">تأیید برگشت وجه</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="refund.saving">تأیید برگشت وجه</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 
@@ -293,9 +303,12 @@ onMounted(async () => {
         <label class="form-label" for="e-amount">مبلغ</label>
         <input id="e-amount" v-model.number="expense.amount" class="form-control" type="number" min="0.01" step="0.01" required />
       </div>
-      <div class="mb-3"><ShamsiDateInput v-model="expense.date" label="تاریخ" :initial="today" /></div>
+      <div class="mb-3"><ShamsiDateInput v-model="expense.date" label="تاریخ" required /></div>
       <div v-if="expense.error" class="alert alert-danger" role="alert">{{ expense.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="expense.saving">ثبت مصرف</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="expense.saving">ثبت مصرف</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 
@@ -304,7 +317,10 @@ onMounted(async () => {
       <label class="form-label" for="x-reason">دلیل</label>
       <input id="x-reason" v-model="cancelling.reason" class="form-control mb-3" maxlength="300" required />
       <div v-if="cancelling.error" class="alert alert-danger" role="alert">{{ cancelling.error }}</div>
-      <button type="submit" class="btn btn-primary" :disabled="cancelling.saving">لغو مصرف</button>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="cancelling.saving">لغو مصرف</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
     </form>
   </UiModal>
 </template>

@@ -92,7 +92,7 @@ public sealed class RealtimeTests(ApiFixture api)
         var patientResponse = await reception.SendAsync(Post("/api/patients", new SavePatientRequest(firstName, null, null, Gender.Male, null, 30, null, null)));
         var patient = (await patientResponse.Content.ReadFromJsonAsync<PatientDto>())!;
         var departments = await reception.GetFromJsonAsync<List<LookupItem>>("/api/lookups/departments");
-        var visitResponse = await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, (int)departments![0].Id, null, privateReason)));
+        var visitResponse = await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, (int)departments![0].Id, null, privateReason, null, await api.PaidTokenAsync())));
         var visit = (await visitResponse.Content.ReadFromJsonAsync<VisitRow>())!;
 
         bool Matches(ReceivedEvent e) => e.Type == "VisitCreated" && e.Payload.Contains(visit.Id.ToString());
