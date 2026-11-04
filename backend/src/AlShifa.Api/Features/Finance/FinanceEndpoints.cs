@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using AlShifa.Api.Features.Auth;
+using AlShifa.Api.Features.Visits;
 using AlShifa.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
@@ -28,11 +29,14 @@ public sealed record CloseSessionRequest([Range(0, 100000000)] decimal CountedAm
 
 public sealed record CreateExpenseRequest([Required, MaxLength(100)] string Category, [MaxLength(300)] string? Description, [Range(0.01, 100000000)] decimal Amount, DateOnly ExpenseDate);
 
-public sealed record InvoiceRow(long Id, string InvoiceNumber, long? PatientId, string? PatientFileNumber, string? PatientName, long? VisitId, string Status, decimal Total, decimal Discount, decimal Paid, decimal Refunded, decimal Balance, DateTime CreatedAt, int Version);
+/// <param name="Description">What the first line charges for, so the cashier sees what the patient is paying for.</param>
+/// <param name="ItemCount">The lines on the invoice, counting that first one.</param>
+public sealed record InvoiceRow(long Id, string InvoiceNumber, long? PatientId, string? PatientFileNumber, string? PatientName, long? VisitId, string Status, decimal Total, decimal Discount, decimal Paid, decimal Refunded, decimal Balance, DateTime CreatedAt, int Version, string? Description, int ItemCount);
 
 public sealed record InvoiceItemRow(long Id, string Description, decimal Quantity, decimal UnitPrice, decimal LineTotal, bool IsVoid);
 
-public sealed record PaymentRow(long Id, string ReceiptNumber, long InvoiceId, string InvoiceNumber, decimal Amount, string Method, string? Reference, decimal Refunded, DateTime CreatedAt, string? ReceivedBy);
+/// <param name="QueueNumber">The number a visit fee earned, for the cashier to give the patient. Null until the fee is settled, and on any other invoice.</param>
+public sealed record PaymentRow(long Id, string ReceiptNumber, long InvoiceId, string InvoiceNumber, decimal Amount, string Method, string? Reference, decimal Refunded, DateTime CreatedAt, string? ReceivedBy, int? QueueNumber);
 
 public sealed record DiscountHistoryRow(string? Details, string? ByUser, DateTime CreatedAt);
 
@@ -191,10 +195,11 @@ public static class FinanceEndpoints
                 return (StatusCodes.Status201Created, await Project(db.Invoices.AsNoTracking().Where(i => i.Id == invoice.Id)).SingleAsync(ct));
             }, ct)).RequirePermission("invoices.create");
 
-        group.MapPost("/{id:long}/discount", async (long id, DiscountRequest request, AppDbContext db, InvoiceService invoices, LedgerService ledger, AuditService audit, Outbox outbox, CancellationToken ct) =>
+        group.MapPost("/{id:long}/discount", async (long id, DiscountRequest request, AppDbContext db, InvoiceService invoices, VisitFeeService visitFees, LedgerService ledger, AuditService audit, Outbox outbox, CancellationToken ct) =>
         {
             Money.EnsureCents(request.Amount);
             await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var fee = await visitFees.LockFeeOfInvoiceAsync(id, ct);
             var invoice = await invoices.LockAsync(id, ct);
             if (invoice.Version != request.Version)
             {
@@ -212,7 +217,7 @@ public static class FinanceEndpoints
             }
 
             // A discount may lower the visit fee but never waive it.
-            if (invoice.Total - invoice.Discount - request.Amount <= 0 && await db.VisitTokens.AnyAsync(t => t.InvoiceId == id, ct))
+            if (invoice.Total - invoice.Discount - request.Amount <= 0 && fee is not null)
             {
                 throw new AppException(StatusCodes.Status409Conflict, "visit_fee_no_exemption", "فیس ویزیت معافیت ندارد. تخفیف نمی‌تواند تمام مبلغ را حذف کند.");
             }
@@ -226,6 +231,9 @@ public static class FinanceEndpoints
                 (Accounts.Receivable, 0, request.Amount));
             outbox.Add("InvoiceIssued", new { invoiceId = id }, Groups.Cashier, Groups.Finance, Groups.Reception);
             await db.SaveChangesAsync(ct);
+
+            // A discount can finish a fee that was part paid at the cashier, and a settled fee earns its number.
+            await visitFees.IssueNumberIfSettledAsync(fee, invoice, ct);
             await tx.CommitAsync(ct);
             return Results.NoContent();
         }).RequirePermission("invoices.approve");
@@ -290,19 +298,22 @@ public static class FinanceEndpoints
             return Results.Ok(new PagedResult<PaymentRow>(rows, total, page, pageSize));
         }).RequirePermission("payments.view");
 
-        group.MapPost("/", async (PaymentRequest request, AppDbContext db, Idempotency idempotency, InvoiceService invoices, CancellationToken ct) =>
+        group.MapPost("/", async (PaymentRequest request, AppDbContext db, Idempotency idempotency, InvoiceService invoices, VisitFeeService visitFees, CancellationToken ct) =>
             await idempotency.RunAsync(request, async () =>
             {
+                var fee = await visitFees.LockFeeOfInvoiceAsync(request.InvoiceId, ct, forPayment: true);
                 var payment = await invoices.ReceiveAsync(request, fullOnly: false, ct);
+                await visitFees.IssueNumberIfSettledAsync(fee, await invoices.LockAsync(request.InvoiceId, ct), ct);
                 var row = await QueryPayments(db, db.Payments.Where(p => p.Id == payment.Id)).SingleAsync(ct);
                 return (StatusCodes.Status201Created, row);
             }, ct)).RequirePermission("payments.create");
 
-        app.MapPost("/api/refunds", async (RefundRequest request, AppDbContext db, Idempotency idempotency, InvoiceService invoices, NumberService numbers, LedgerService ledger, CurrentUser user, AuditService audit, CancellationToken ct) =>
+        app.MapPost("/api/refunds", async (RefundRequest request, AppDbContext db, Idempotency idempotency, InvoiceService invoices, VisitFeeService visitFees, NumberService numbers, LedgerService ledger, CurrentUser user, AuditService audit, CancellationToken ct) =>
             await idempotency.RunAsync(request, async () =>
             {
                 Money.EnsureCents(request.Amount);
                 var invoiceId = await db.Payments.Where(p => p.Id == request.PaymentId).Select(p => (long?)p.InvoiceId).SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
+                var fee = await visitFees.LockFeeOfInvoiceAsync(invoiceId, ct);
                 var invoice = await invoices.LockAsync(invoiceId, ct);
 
                 // Must be a locking read: a plain read here sees the data from before the wait for the invoice lock,
@@ -332,6 +343,7 @@ public static class FinanceEndpoints
                     (Accounts.Cash, 0, refund.Amount));
                 audit.Add("RefundApproved", "Refund", refund.Id.ToString(), refund.Reason);
                 await db.SaveChangesAsync(ct);
+                await visitFees.WithdrawIfFullyRefundedAsync(fee, invoice, ct);
                 return (StatusCodes.Status201Created, new { refund.Id, refund.RefundNumber });
             }, ct)).RequirePermission("payments.refund").WithTags("Finance");
     }
@@ -506,14 +518,17 @@ public static class FinanceEndpoints
     private static IQueryable<InvoiceRow> Project(IQueryable<Invoice> invoices) => invoices.Select(i => new InvoiceRow(
         i.Id, i.InvoiceNumber, i.PatientId, i.Patient != null ? i.Patient.FileNumber : null,
         i.Patient != null ? (i.Patient.FirstName + " " + (i.Patient.LastName ?? "")).Trim() : null,
-        i.VisitId, i.Status.ToString(), i.Total, i.Discount, i.Paid, i.Refunded, i.Total - i.Discount - i.Paid, i.CreatedAt, i.Version));
+        i.VisitId, i.Status.ToString(), i.Total, i.Discount, i.Paid, i.Refunded, i.Total - i.Discount - i.Paid, i.CreatedAt, i.Version,
+        i.Items.Where(x => !x.IsVoid).OrderBy(x => x.Id).Select(x => x.Description).FirstOrDefault(),
+        i.Items.Count(x => !x.IsVoid)));
 
     private static IQueryable<PaymentRow> QueryPayments(AppDbContext db, IQueryable<Payment> payments) =>
         from p in payments
         join u in db.Users on p.ReceivedByUserId equals u.Id
-        select new PaymentRow(p.Id, p.ReceiptNumber, p.InvoiceId, p.Invoice!.InvoiceNumber, p.Amount, p.Method.ToString(), p.Reference, p.Refunded, p.CreatedAt, u.FullName);
+        select new PaymentRow(p.Id, p.ReceiptNumber, p.InvoiceId, p.Invoice!.InvoiceNumber, p.Amount, p.Method.ToString(), p.Reference, p.Refunded, p.CreatedAt, u.FullName,
+            db.VisitTokens.Where(t => t.InvoiceId == p.InvoiceId).Select(t => t.QueueNumber).FirstOrDefault());
 
-    private static IQueryable<SessionRow> QuerySessions(AppDbContext db, IQueryable<CashSession> sessions) =>
+    internal static IQueryable<SessionRow> QuerySessions(AppDbContext db, IQueryable<CashSession> sessions) =>
         from s in sessions
         join u in db.Users on s.OpenedByUserId equals u.Id
         select new SessionRow(

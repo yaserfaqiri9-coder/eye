@@ -378,7 +378,7 @@ public sealed class HospitalReadinessTests(ApiFixture api)
             var settled = await cashier.GetFromJsonAsync<PagedResult<InvoiceRow>>($"/api/invoices?unpaid=true&q={patient.FileNumber}", JsonOptions);
             Assert.Empty(settled!.Items);
             Assert.Equal(200, sale.Total);
-            return (visit.Id, visit.QueueNumber);
+            return (visit.Id, visit.QueueNumber!.Value);
         }
 
         var results = await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => OnePatientAsync()));

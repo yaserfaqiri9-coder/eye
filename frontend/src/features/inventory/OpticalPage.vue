@@ -84,12 +84,12 @@ onMounted(load)
           <tbody>
             <tr v-for="rx in prescriptions" :key="rx.id">
               <td><span class="ltr-num">{{ rx.rxNumber }}</span></td>
-              <td>{{ rx.patientName }}</td>
+              <td><span class="xr-person__name">{{ rx.patientName }}</span></td>
               <td><span class="ltr-num">{{ rx.sphereOd ?? '—' }} / {{ rx.cylinderOd ?? '—' }} / {{ rx.axisOd ?? '—' }} / {{ rx.addOd ?? '—' }}</span></td>
               <td><span class="ltr-num">{{ rx.sphereOs ?? '—' }} / {{ rx.cylinderOs ?? '—' }} / {{ rx.axisOs ?? '—' }} / {{ rx.addOs ?? '—' }}</span></td>
               <td><span class="ltr-num">{{ rx.pd ?? '—' }}</span></td>
               <td><CallControls :desk="calls" :visit-id="rx.visitId" /></td>
-              <td class="text-nowrap"><RouterLink v-if="auth.can('optical.create')" :to="{ name: 'optical-order', query: { rx: rx.id } }" class="btn btn-soft btn-sm">ثبت سفارش</RouterLink><RouterLink v-if="auth.can('opticalrx.print')" :to="`/print/optical/${rx.id}`" target="_blank" class="btn btn-soft btn-sm ms-2">چاپ نسخه</RouterLink></td>
+              <td class="text-nowrap"><RouterLink v-if="auth.can('optical.create')" :to="{ name: 'optical-order', query: { rx: rx.id } }" class="btn btn-soft btn-sm">ثبت سفارش</RouterLink><RouterLink v-if="auth.can('opticalrx.print')" :to="`/print/optical/${rx.id}`" target="_blank" class="btn btn-quiet btn-sm ms-2">چاپ نسخه</RouterLink></td>
             </tr>
           </tbody>
         </table>

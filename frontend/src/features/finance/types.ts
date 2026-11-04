@@ -1,3 +1,5 @@
+import { quantity } from '@/utils/money'
+
 export interface InvoiceRow {
   id: number
   invoiceNumber: string
@@ -13,6 +15,8 @@ export interface InvoiceRow {
   balance: number
   createdAt: string
   version: number
+  description: string | null
+  itemCount: number
 }
 
 export interface InvoiceItemRow {
@@ -22,6 +26,12 @@ export interface InvoiceItemRow {
   unitPrice: number
   lineTotal: number
   isVoid: boolean
+}
+
+/** What an invoice charges for, in the cashier's words: its first line and how many others follow. */
+export function invoiceSubject(row: { description: string | null; itemCount: number }) {
+  if (!row.description) return '—'
+  return row.itemCount > 1 ? `${row.description} و ${quantity(row.itemCount - 1)} قلم دیگر` : row.description
 }
 
 export interface PaymentRow {
@@ -35,6 +45,7 @@ export interface PaymentRow {
   refunded: number
   createdAt: string
   receivedBy: string | null
+  queueNumber: number | null
 }
 
 export interface InvoiceDetail {

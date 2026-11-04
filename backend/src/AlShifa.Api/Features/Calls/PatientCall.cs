@@ -58,6 +58,9 @@ public class PatientCall
 
     public bool IsRecall { get; set; }
 
+    /// <summary>No station was online, so the desk that pressed the button plays it. The station never takes these.</summary>
+    public bool LocalPlayback { get; set; }
+
     public CallStatus Status { get; set; } = CallStatus.Queued;
 
     public CallOutcome? Outcome { get; set; }

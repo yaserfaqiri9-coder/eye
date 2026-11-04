@@ -183,7 +183,7 @@ public static class PatientEndpoints
         ["Address"] = p.Address,
     };
 
-    private static int? AgeOf(DateOnly? birth, int? estimatedYear)
+    internal static int? AgeOf(DateOnly? birth, int? estimatedYear)
     {
         var today = KabulClock.Today;
         if (birth is { } b)

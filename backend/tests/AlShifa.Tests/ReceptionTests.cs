@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using AlShifa.Api.Features.Auth;
+using AlShifa.Api.Features.Finance;
 using AlShifa.Api.Features.Patients;
 using AlShifa.Api.Features.Users;
 using AlShifa.Api.Features.Visits;
@@ -265,12 +266,12 @@ public sealed class ReceptionTests(ApiFixture api)
     }
 
     [Fact]
-    public async Task Appointment_check_in_without_an_open_cash_session_rolls_back_everything()
+    public async Task Appointment_arrival_sends_the_fee_to_the_cashier_and_reception_takes_no_money_and_issues_no_number()
     {
         var admin = await UserAsync(Roles.SuperAdmin);
         var staff = await admin.PostAsJsonAsync("/api/staff", new SaveStaffRequest("داکتر " + Name("cash"), null, true, true, null, null));
         var doctorId = JsonDocument.Parse(await staff.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt64();
-        var reception = await UserAsync(Roles.Receptionist);
+        var reception = await api.FeeDeskAsync();
         var patient = await CreatePatientAsync(reception);
         var at = DateTime.UtcNow.AddDays(2).Date.AddHours(5);
         var created = await reception.SendAsync(Post("/api/appointments", new CreateAppointmentRequest(patient.Id, doctorId, at, null)));
@@ -279,16 +280,18 @@ public sealed class ReceptionTests(ApiFixture api)
         var day = DateOnly.FromDateTime(at.AddHours(4.5));
         var appointment = (await reception.GetFromJsonAsync<List<AppointmentRow>>($"/api/appointments?date={day:yyyy-MM-dd}"))!.Single(a => a.PatientId == patient.Id);
         var response = await reception.SendAsync(Post($"/api/appointments/{appointment.Id}/check-in", new CheckInRequest(await DepartmentAsync(reception), appointment.Version)));
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        Assert.Contains("no_open_session", await response.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var admission = (await response.Content.ReadFromJsonAsync<AdmissionRow>())!;
+
+        var payment = new PaymentRequest(admission.InvoiceId, admission.Balance, PaymentMethod.Cash, null, admission.InvoiceVersion);
+        Assert.Equal(HttpStatusCode.Forbidden, (await reception.SendAsync(Post("/api/payments", payment))).StatusCode);
 
         using var scope = api.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var stored = await db.Appointments.AsNoTracking().SingleAsync(a => a.Id == appointment.Id);
-        Assert.Equal(AppointmentStatus.Scheduled, stored.Status);
-        Assert.Null(stored.VisitId);
-        Assert.False(await db.Visits.AnyAsync(v => v.PatientId == patient.Id));
-        Assert.False(await db.Invoices.AnyAsync(i => i.PatientId == patient.Id));
+        var visit = await db.Visits.AsNoTracking().SingleAsync(v => v.Id == admission.VisitId);
+        Assert.Null(visit.QueueNumber);
+        Assert.Equal(VisitStatus.AwaitingPayment, visit.Status);
+        Assert.False(await db.Payments.AnyAsync(p => p.InvoiceId == admission.InvoiceId));
     }
 
     [Fact]
@@ -320,24 +323,28 @@ public sealed class ReceptionTests(ApiFixture api)
         var request = new { DepartmentId = department, appointment.Version, TokenId = unrelatedTokenId };
         var checkIn = await reception.SendAsync(Post($"/api/appointments/{appointment.Id}/check-in", request, key));
         Assert.True(checkIn.StatusCode == HttpStatusCode.Created, await checkIn.Content.ReadAsStringAsync());
-        var visit = (await checkIn.Content.ReadFromJsonAsync<VisitRow>())!;
+        var visit = (await checkIn.Content.ReadFromJsonAsync<AdmissionRow>())!;
         Assert.Equal(appointment.PatientId, visit.PatientId);
 
         var repeated = await reception.SendAsync(Post($"/api/appointments/{appointment.Id}/check-in", request, key));
         Assert.Equal(HttpStatusCode.Created, repeated.StatusCode);
-        Assert.Equal(visit.Id, (await repeated.Content.ReadFromJsonAsync<VisitRow>())!.Id);
+        Assert.Equal(visit.VisitId, (await repeated.Content.ReadFromJsonAsync<AdmissionRow>())!.VisitId);
+
+        var cashier = await api.FeeCashierAsync();
+        var paid = await cashier.SendAsync(Post("/api/payments", new PaymentRequest(visit.InvoiceId, visit.Balance, PaymentMethod.Cash, null, visit.InvoiceVersion)));
+        Assert.Equal(HttpStatusCode.Created, paid.StatusCode);
 
         using var scope = api.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var stored = await db.Appointments.AsNoTracking().SingleAsync(a => a.Id == appointment.Id);
         Assert.Equal(AppointmentStatus.CheckedIn, stored.Status);
-        Assert.Equal(visit.Id, stored.VisitId);
-        Assert.Equal(1, await db.Visits.CountAsync(v => v.Id == visit.Id));
-        var token = await db.VisitTokens.AsNoTracking().SingleAsync(t => t.VisitId == visit.Id);
+        Assert.Equal(visit.VisitId, stored.VisitId);
+        Assert.Equal(1, await db.Visits.CountAsync(v => v.Id == visit.VisitId));
+        var token = await db.VisitTokens.AsNoTracking().SingleAsync(t => t.VisitId == visit.VisitId);
         Assert.Null((await db.VisitTokens.AsNoTracking().SingleAsync(t => t.Id == unrelatedTokenId)).VisitId);
         var invoice = await db.Invoices.AsNoTracking().SingleAsync(i => i.Id == token.InvoiceId);
         Assert.Equal(appointment.PatientId, invoice.PatientId);
-        Assert.Equal(visit.Id, invoice.VisitId);
+        Assert.Equal(visit.VisitId, invoice.VisitId);
         Assert.Equal(invoice.Total - invoice.Discount, invoice.Paid - invoice.Refunded);
         Assert.Equal(1, await db.Payments.CountAsync(p => p.InvoiceId == invoice.Id));
         Assert.True(await db.AuditLogs.AnyAsync(a => a.Action == "AppointmentCheckedIn" && a.EntityId == appointment.Id.ToString()));

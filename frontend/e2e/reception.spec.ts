@@ -78,28 +78,44 @@ test('receptionist registers a patient, duplicate is caught, visit reaches the q
   await expect(reception).toHaveURL(/\/patients\?q=/)
   await expect(reception.getByRole('row', { name: new RegExp(firstName) })).toHaveCount(1)
 
-  // New visit from the patient record.
+  // New visit from the patient record continues in the one reception flow, with this patient already chosen.
   await reception.getByRole('link', { name: new RegExp(firstName) }).first().click()
-  await reception.getByRole('button', { name: 'مراجعه جدید' }).click()
-  const visitDialog = reception.getByRole('dialog')
-  await pick(reception, visitDialog, 'بخش', 'معاینه ابتدایی')
-  await collectFee(visitDialog)
-  await visitDialog.getByLabel('علت مراجعه').fill('تاری دید')
-  await visitDialog.getByRole('button', { name: 'ثبت مراجعه' }).click()
-  await expect(visitDialog).toBeHidden()
+  await expect(reception).toHaveURL(/\/patients\/\d+$/)
+  const recordUrl = reception.url()
+  await reception.getByRole('link', { name: 'مراجعه جدید' }).click()
+  await expect(reception).toHaveURL(/\/reception\?patient=\d+$/)
+  await expect(reception.getByRole('heading', { name: 'پذیرش مریض' })).toBeVisible()
+  await reception.getByLabel('علت مراجعه').fill('تاری دید')
+  await reception.getByRole('button', { name: 'ثبت مراجعه' }).click()
+
+  // Registered but unpaid: no number anywhere yet, and the visit waits in the desk's open payments.
+  const owing = reception.getByRole('row', { name: new RegExp(`فیس معاینه.*${firstName}`) })
+  await expect(owing).toBeVisible()
+  await collectFee(reception)
+  await expect(owing).toHaveCount(0)
+  const number = (await reception.locator('.admission-done__number').innerText()).trim()
+  await reception.getByRole('button', { name: 'مریض بعدی' }).click()
+
+  // The same patient cannot be given a second visit or fee while this one is open.
+  await pick(reception, reception, 'مریض', firstName)
+  await expect(reception.getByRole('alert').filter({ hasText: 'این مریض امروز مراجعه فعال دارد' })).toContainText(number)
+  await reception.getByRole('button', { name: 'مریض دیگر' }).click()
+
+  await reception.goto(recordUrl)
   await expect(reception.getByRole('row', { name: /تاری دید/ })).toBeVisible()
 
   // Dates display in the Afghan month names.
   const dateCell = await reception.getByRole('row', { name: /تاری دید/ }).getByRole('cell').nth(1).innerText()
   expect(dateCell).toMatch(/حمل|ثور|جوزا|سرطان|اسد|سنبله|میزان|عقرب|قوس|جدی|دلو|حوت/)
 
-  // Visit appears in the queue, and status moves directly to completed without any lab step.
+  // Visit appears in the queue with its number and payment, and status moves directly to completed without any lab step.
   await reception.goto('/reception')
-  await expect(reception.getByRole('button', { name: 'پذیرش مریض حضوری' })).toBeVisible()
   await expect(reception.getByRole('heading', { name: 'مراجعات امروز' })).toBeVisible()
-  await expect(reception.getByRole('heading', { name: 'وقت‌های قبلی امروز' })).toBeVisible()
+  await expect(reception.getByRole('heading', { name: 'وقت‌های ملاقات امروز' })).toBeVisible()
   const row = reception.getByRole('row', { name: new RegExp(firstName) })
-  await expect(row).toContainText('ثبت‌شده')
+  await expect(row).toContainText(number)
+  await expect(row).toContainText('پرداخت‌شده')
+  await expect(row).toContainText('در انتظار')
   await row.getByRole('combobox').selectOption({ label: 'تکمیل' })
   await expect(row).toContainText('تکمیل')
 

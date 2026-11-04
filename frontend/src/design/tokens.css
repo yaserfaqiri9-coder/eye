@@ -43,7 +43,19 @@
   --xr-field-disabled: #e9ecef;
   --xr-field-invalid: #dc3545;
 
-  /* List rows and status colours deliberately keep the system's earlier design, not the template's. */
+  /* List rows stay calm: a dark name, soft secondary text, and tinted statuses instead of solid ones. */
+  --xr-text-soft: #667079;
+  --xr-row-hover: #f6fbfc;
+  --xr-tone-primary-bg: #e3f4f6;
+  --xr-tone-primary-text: #066f7b;
+  --xr-tone-orange-bg: #fdf0e5;
+  --xr-tone-orange-text: #99500f;
+  --xr-tone-red-bg: #fcecec;
+  --xr-tone-red-text: #b5322e;
+  --xr-tone-cyan-bg: #e3f7fc;
+  --xr-tone-cyan-text: #0a6c82;
+  --xr-tone-green-bg: #e6f6ea;
+  --xr-tone-green-text: #1c7a32;
   --xr-row-border: #eef0f4;
   --xr-row-link: #089eaf;
   --xr-status-primary: #089eaf;

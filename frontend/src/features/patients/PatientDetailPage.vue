@@ -5,7 +5,6 @@ import UiAvatar from '@/components/UiAvatar.vue'
 import UiCard from '@/components/UiCard.vue'
 import { eyeLabels, type Chart } from '@/features/clinical/types'
 import type { InvoiceRow } from '@/features/finance/types'
-import NewVisitModal from '@/features/visits/NewVisitModal.vue'
 import { visitStatusLabels, type VisitRow } from '@/features/visits/types'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime } from '@/utils/date'
@@ -44,7 +43,6 @@ const changes = ref<ChangeRow[]>([])
 const invoices = ref<InvoiceRow[]>([])
 const chart = ref<Chart | null>(null)
 const error = ref('')
-const addingVisit = ref(false)
 
 const canSeeMoney = computed(() => auth.can('invoices.view'))
 const canSeeChart = computed(() => auth.can('consultation.view') && auth.can('clinicalrecord.view'))
@@ -84,7 +82,6 @@ async function load() {
 }
 
 function onVisitSaved() {
-  addingVisit.value = false
   load()
 }
 
@@ -166,7 +163,7 @@ const followUp = computed(() => chart.value?.followUps[0] ?? null)
               </li>
             </ul>
             <div class="profile__actions">
-              <button v-if="auth.can('visits.create')" type="button" class="btn btn-primary" @click="addingVisit = true">مراجعه جدید</button>
+              <RouterLink v-if="auth.can('visits.create')" class="btn btn-primary" :to="{ name: 'reception', query: { patient: props.id } }">مراجعه جدید</RouterLink>
               <RouterLink v-if="auth.can('patients.edit')" :to="`/patients/${patient.id}/edit`" class="btn btn-soft">ویرایش</RouterLink>
               <RouterLink v-if="auth.can('patients.print')" :to="`/print/patient/${patient.id}`" target="_blank" class="btn btn-soft">چاپ کارت</RouterLink>
             </div>
@@ -255,9 +252,9 @@ const followUp = computed(() => chart.value?.followUps[0] ?? null)
           <div>
             <div class="overview__head">
               <h4>معاینه آخر</h4>
-              <button v-if="auth.can('visits.create')" type="button" class="btn btn-soft overview__add" aria-label="افزودن مراجعه" title="افزودن مراجعه" @click="addingVisit = true">
+              <RouterLink v-if="auth.can('visits.create')" class="btn btn-soft overview__add" aria-label="افزودن مراجعه" title="افزودن مراجعه" :to="{ name: 'reception', query: { patient: props.id } }">
                 <i class="ri-add-line" aria-hidden="true"></i>
-              </button>
+              </RouterLink>
             </div>
             <table v-for="eye in eyes" :key="eye.code" class="eye">
               <thead>
@@ -319,12 +316,6 @@ const followUp = computed(() => chart.value?.followUps[0] ?? null)
     </UiCard>
   </div>
 
-  <NewVisitModal
-    v-if="addingVisit && patient"
-    :patient="{ id: patient.id, label: `${patient.fileNumber} — ${patientName(patient)}` }"
-    @close="addingVisit = false"
-    @saved="onVisitSaved"
-  />
 </template>
 
 <style scoped>

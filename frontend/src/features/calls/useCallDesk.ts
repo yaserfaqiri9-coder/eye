@@ -2,6 +2,7 @@ import { computed, onMounted, ref } from 'vue'
 import { api, errorMessage } from '@/api/http'
 import { useLiveRefresh } from '@/api/realtime'
 import { useAuthStore } from '@/stores/auth'
+import { MissingClipError, sharedPlayer } from './clipPlayer'
 
 export type CallDeskName = 'Reception' | 'Vision' | 'Doctor' | 'Refraction' | 'Imaging' | 'Lab' | 'Pharmacy' | 'Optical'
 
@@ -15,6 +16,7 @@ export interface CallRow {
   failureReason: string | null
   requestedAt: string
   finishedAt: string | null
+  localClips?: string[] | null
 }
 
 export interface CallQueueRow {
@@ -84,11 +86,24 @@ export function useCallDesk(desk: CallDeskName) {
 
   const isSending = (row: CallQueueRow) => sending.value.some((r) => r.visitId === row.visitId && r.tokenId === row.tokenId)
 
+  /** No station was online, so this computer announces it. The result is reported either way so the desk sees what was heard. */
+  async function playHere(call: CallRow, clips: string[]) {
+    let reason: string | null = null
+    try {
+      await sharedPlayer.play(clips)
+    } catch (cause) {
+      reason = cause instanceof MissingClipError ? cause.message : 'پخش صدا در این رایانه ناموفق بود. بلندگوی رایانه را بررسی کنید.'
+      error.value = reason
+    }
+    await api(`/calls/${call.id}/local-result`, { method: 'POST', body: { played: reason === null, reason } })
+  }
+
   async function act(row: CallQueueRow, path: string, body: unknown) {
     sending.value.push(row)
     error.value = ''
     try {
-      await api(path, { method: 'POST', body })
+      const result = await api<CallRow | undefined>(path, { method: 'POST', body })
+      if (result?.localClips?.length) await playHere(result, result.localClips)
     } catch (cause) {
       error.value = errorMessage(cause)
     } finally {
@@ -97,7 +112,12 @@ export function useCallDesk(desk: CallDeskName) {
     await load()
   }
 
-  const call = (row: CallQueueRow, recall: boolean) => act(row, '/calls', { desk, visitId: row.visitId, tokenId: row.tokenId, recall })
+  function call(row: CallQueueRow, recall: boolean) {
+    // Still inside the click: browsers allow sound only from one, and the answer below decides whether it plays here.
+    void sharedPlayer.unlock()
+    return act(row, '/calls', { desk, visitId: row.visitId, tokenId: row.tokenId, recall })
+  }
+
   const mark = (row: CallQueueRow, outcome: 'Attended' | 'NoShow') => act(row, `/calls/${row.lastCall!.id}/outcome`, { outcome })
 
   // Station activation does not emit a patient event; poll its heartbeat as well as live queue changes.

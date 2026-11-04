@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using AlShifa.Api.Features.Auth;
 using AlShifa.Api.Features.Clinical;
+using AlShifa.Api.Features.Inventory;
 using AlShifa.Api.Features.Patients;
 using AlShifa.Api.Features.Users;
 using AlShifa.Api.Features.Visits;
@@ -96,6 +97,37 @@ public sealed class ClinicalTests(ApiFixture api)
         var chart = await doctor.GetFromJsonAsync<ChartDto>($"/api/consultations/{visit.Id}/chart", JsonOptions);
         Assert.Equal("6/9", chart!.PreExam!.VisualAcuityOd);
         Assert.Equal("16", chart.PreExam.IopOs);
+    }
+
+    [Fact]
+    public async Task Drug_suggestions_list_only_active_drugs_starting_with_the_typed_text()
+    {
+        var stamp = Guid.NewGuid().ToString("N")[..10];
+        var match = $"Z{stamp} قطره";
+        var arabicSpelling = $"ي{stamp} دوا";
+        using (var scope = api.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Product Item(string name, ProductKind kind, bool active = true) =>
+                new() { Code = Guid.NewGuid().ToString("N")[..30], Name = name, Kind = kind, Unit = "عدد", IsActive = active };
+            db.Products.AddRange(
+                Item(match, ProductKind.Drug),
+                Item(arabicSpelling, ProductKind.Drug),
+                Item($"Z{stamp} متوقف", ProductKind.Drug, active: false),
+                Item($"Z{stamp} فریم", ProductKind.Frame),
+                Item($"X Z{stamp} وسط نام", ProductKind.Drug));
+            await db.SaveChangesAsync();
+        }
+
+        var doctor = await UserAsync(Roles.Doctor);
+        Assert.Equal([match], (await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=Z{stamp}"))!);
+        Assert.Equal([match], (await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=z{stamp}"))!);
+        Assert.Equal([arabicSpelling], (await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=ی{stamp}"))!);
+        Assert.Empty((await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=Z{stamp[..3]}%25{stamp[6..]}"))!);
+        Assert.Empty((await doctor.GetFromJsonAsync<string[]>("/api/prescriptions/drugs?q=%20"))!);
+
+        var pharmacist = await UserAsync(Roles.Pharmacist);
+        Assert.Equal(HttpStatusCode.Forbidden, (await pharmacist.GetAsync($"/api/prescriptions/drugs?q=Z{stamp}")).StatusCode);
     }
 
     [Fact]

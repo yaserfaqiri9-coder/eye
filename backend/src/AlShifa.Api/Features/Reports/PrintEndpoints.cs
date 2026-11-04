@@ -37,13 +37,18 @@ public static class PrintEndpoints
                 .Select(x => new { x.VisitNumber, x.QueueNumber, x.CreatedAt, x.Patient!.FileNumber, x.Patient.FirstName, x.Patient.LastName, Department = x.Department!.Name, Doctor = x.Doctor != null ? x.Doctor.FullName : null })
                 .SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
 
+            if (v.QueueNumber is null)
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "no_queue_number", "پیش از پرداخت فیس، رسید نوبت چاپ نمی‌شود.");
+            }
+
             return Results.Ok(new PrintDocument("رسید پذیرش", v.VisitNumber, v.CreatedAt, Receipt, await SettingsEndpoints.LoadAsync(db, ct),
             [
                 new("مریض", Name(v.FirstName, v.LastName)),
                 new("شماره پرونده", v.FileNumber),
                 new("بخش", v.Department),
                 new("داکتر", v.Doctor),
-                new("شماره نوبت", v.QueueNumber.ToString(CultureInfo.InvariantCulture)),
+                new("شماره نوبت", v.QueueNumber.Value.ToString(CultureInfo.InvariantCulture)),
             ], null, null, null, null));
         }).RequirePermission("visits.print");
 
@@ -139,14 +144,16 @@ public static class PrintEndpoints
         {
             var p = await db.Payments.AsNoTracking()
                 .Where(x => x.Id == id)
-                .Select(x => new { x.ReceiptNumber, x.Amount, x.Method, x.CreatedAt, x.Invoice!.InvoiceNumber, x.Invoice.Total, x.Invoice.Discount, x.Invoice.Paid, Patient = x.Invoice.Patient, x.ReceivedByUserId })
+                .Select(x => new { x.ReceiptNumber, x.Amount, x.Method, x.CreatedAt, x.InvoiceId, x.Invoice!.InvoiceNumber, x.Invoice.Total, x.Invoice.Discount, x.Invoice.Paid, Patient = x.Invoice.Patient, x.ReceivedByUserId })
                 .SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
             var cashier = await db.Users.AsNoTracking().Where(u => u.Id == p.ReceivedByUserId).Select(u => u.FullName).SingleOrDefaultAsync(ct);
+            var queueNumber = await db.VisitTokens.AsNoTracking().Where(t => t.InvoiceId == p.InvoiceId).Select(t => t.QueueNumber).FirstOrDefaultAsync(ct);
 
             return Results.Ok(new PrintDocument("رسید پرداخت", p.ReceiptNumber, p.CreatedAt, Receipt, await SettingsEndpoints.LoadAsync(db, ct),
             [
                 new("مریض", p.Patient is null ? null : Name(p.Patient.FirstName, p.Patient.LastName)),
                 new("فاکتور", p.InvoiceNumber),
+                new("شماره نوبت", queueNumber?.ToString(CultureInfo.InvariantCulture)),
                 new("روش", p.Method == PaymentMethod.Cash ? "نقد" : "غیرنقدی"),
                 new("صندوق‌دار", cashier),
             ], null, null,

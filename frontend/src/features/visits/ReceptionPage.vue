@@ -11,13 +11,16 @@ import UiModal from '@/components/UiModal.vue'
 import CallControls from '@/features/calls/CallControls.vue'
 import CallNotice from '@/features/calls/CallNotice.vue'
 import { useCallDesk } from '@/features/calls/useCallDesk'
+import PatientCell from '@/features/patients/PatientCell.vue'
 import PatientPicker from '@/features/patients/PatientPicker.vue'
+import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { formatTime, kabulToUtc, todayIso } from '@/utils/date'
+import { formatDate, formatTime, kabulToUtc, todayIso } from '@/utils/date'
 import { money, quantity } from '@/utils/money'
+import AdmissionFlow from './AdmissionFlow.vue'
 import NewVisitModal from './NewVisitModal.vue'
 import TransferDoctorModal from './TransferDoctorModal.vue'
-import { visitStatusLabels, visitStatusTones, type ReceptionFee, type VisitRow, type VisitToken } from './types'
+import { feeStatusLabels, visitStatusLabels, visitStatusTones, type Admission, type VisitRow, type VisitToken } from './types'
 
 interface AppointmentRow {
   id: number
@@ -34,20 +37,21 @@ interface AppointmentRow {
 const appointmentLabels: Record<string, string> = { Scheduled: 'در انتظار حضور', CheckedIn: 'پذیرش‌شده', Cancelled: 'لغو شده', NoShow: 'نیامده' }
 
 const auth = useAuthStore()
+const route = useRoute()
 const calls = useCallDesk('Reception')
 const visits = ref<VisitRow[]>([])
 const totalVisits = ref(0)
 const appointments = ref<AppointmentRow[]>([])
 const departments = ref<ComboOption[]>([])
 const doctors = ref<ComboOption[]>([])
-const visitFee = ref<number | null>(null)
 const departmentId = ref<number | null>(null)
 const loading = ref(true)
 const error = ref('')
-const addingVisit = ref(false)
 const activeToken = ref<VisitToken | null>(null)
 const tokens = ref<VisitToken[]>([])
-const fees = ref<ReceptionFee[]>([])
+const pending = ref<Admission[]>([])
+const flow = ref<InstanceType<typeof AdmissionFlow> | null>(null)
+const patientFromLink = computed(() => (route.query.patient ? Number(route.query.patient) : null))
 
 interface CashSession {
   id: number
@@ -58,35 +62,22 @@ interface CashSession {
   version: number
 }
 
-const canCollect = computed(() => auth.can('visitfees.create'))
+const canAdmit = computed(() => auth.can('visitfees.create'))
+/** A register opened before all fees moved to the cashier. Reception opens no new ones and can only close this one. */
 const session = ref<CashSession | null>(null)
-const registers = ref<{ id: number; name: string }[]>([])
-const cash = reactive({ registerId: null as number | null, opening: 0, closing: false, counted: 0, saving: false, error: '' })
+const cash = reactive({ closing: false, counted: 0, saving: false, error: '' })
 
 async function loadDesk() {
   if (!auth.can('visitfees.view')) return
-  const [loadedTokens, loadedFees, sessions] = await Promise.all([
+  const [loadedTokens, loadedPending, sessions] = await Promise.all([
     api<VisitToken[]>('/visit-tokens'),
-    api<ReceptionFee[]>('/reception-fees'),
-    api<CashSession[]>('/cash/sessions?mine=true'),
+    api<Admission[]>('/admissions/pending'),
+    auth.can('cash.view') ? api<CashSession[]>('/cash/sessions?mine=true') : Promise.resolve([]),
   ])
   tokens.value = loadedTokens
-  fees.value = loadedFees
+  pending.value = loadedPending
   session.value = sessions.find((s) => !s.closedAt) ?? null
   await calls.load()
-}
-
-async function openCash() {
-  cash.saving = true
-  cash.error = ''
-  try {
-    await api('/cash/sessions', { method: 'POST', body: { registerId: cash.registerId, openingAmount: cash.opening } })
-    await loadDesk()
-  } catch (cause) {
-    cash.error = errorMessage(cause)
-  } finally {
-    cash.saving = false
-  }
 }
 
 async function closeCash() {
@@ -103,29 +94,6 @@ async function closeCash() {
   }
 }
 
-const collecting = reactive({ fee: null as ReceptionFee | null, saving: false, error: '', key: '' })
-
-function openFee(fee: ReceptionFee) {
-  Object.assign(collecting, { fee, saving: false, error: '', key: newIdempotencyKey() })
-}
-
-async function submitFee() {
-  collecting.saving = true
-  collecting.error = ''
-  try {
-    const fee = collecting.fee!
-    await api('/reception-fees/pay', { method: 'POST', idempotencyKey: collecting.key, body: { invoiceId: fee.invoiceId, amount: fee.balance, method: 'Cash', invoiceVersion: fee.invoiceVersion } })
-    collecting.fee = null
-    await loadDesk()
-  } catch (cause) {
-    collecting.error = errorMessage(cause)
-    if (cause instanceof ApiError && !cause.outcomeUnknown) collecting.key = newIdempotencyKey()
-    await loadDesk()
-  } finally {
-    collecting.saving = false
-  }
-}
-
 async function cancelToken(token: VisitToken) {
   error.value = ''
   try {
@@ -136,14 +104,25 @@ async function cancelToken(token: VisitToken) {
   await loadDesk()
 }
 
+async function cancelAdmission(row: Admission) {
+  error.value = ''
+  try {
+    const visit = await api<VisitRow>(`/visits/${row.visitId}`)
+    await api(`/visits/${row.visitId}/status`, { method: 'POST', body: { status: 'Cancelled', version: visit.version } })
+  } catch (cause) {
+    error.value = errorMessage(cause)
+  }
+  await refresh()
+}
+
 function closeVisitModal() {
-  addingVisit.value = false
   activeToken.value = null
   loadDesk().catch((cause) => (error.value = errorMessage(cause)))
 }
 
 const counts = computed(() => ({
-  waiting: visits.value.filter((v) => !['Completed', 'Cancelled'].includes(v.status)).length,
+  awaiting: visits.value.filter((v) => v.status === 'AwaitingPayment').length,
+  waiting: visits.value.filter((v) => !['Completed', 'Cancelled', 'AwaitingPayment'].includes(v.status)).length,
   completed: visits.value.filter((v) => v.status === 'Completed').length,
   cancelled: visits.value.filter((v) => v.status === 'Cancelled').length,
 }))
@@ -151,9 +130,18 @@ const counts = computed(() => ({
 async function loadVisits() {
   const params = new URLSearchParams({ pageSize: '100' })
   if (departmentId.value) params.set('departmentId', String(departmentId.value))
-  const page = await api<{ items: VisitRow[]; total: number }>(`/visits?${params}`)
-  visits.value = page.items
-  totalVisits.value = page.total
+  // The whole day: a busy day past the first page must not hide the newest patient or undercount the cards above.
+  const loaded: VisitRow[] = []
+  let total = 0
+  for (let number = 1; ; number++) {
+    params.set('page', String(number))
+    const page = await api<{ items: VisitRow[]; total: number }>(`/visits?${params}`)
+    loaded.push(...page.items)
+    total = page.total
+    if (!page.items.length || loaded.length >= total) break
+  }
+  visits.value = loaded
+  totalVisits.value = total
 }
 
 async function loadAppointments() {
@@ -191,7 +179,6 @@ function onTransferred() {
 }
 
 function onVisitSaved() {
-  addingVisit.value = false
   activeToken.value = null
   refresh()
 }
@@ -217,12 +204,13 @@ async function submitCheckIn() {
   checkIn.saving = true
   checkIn.error = ''
   try {
-    await api(`/appointments/${checkIn.row!.id}/check-in`, {
+    const admission = await api<Admission>(`/appointments/${checkIn.row!.id}/check-in`, {
       method: 'POST',
       idempotencyKey: checkIn.key,
       body: { departmentId: checkIn.departmentId, version: checkIn.row!.version },
     })
     checkIn.row = null
+    flow.value?.resume(admission)
     await refresh()
   } catch (cause) {
     checkIn.error = errorMessage(cause)
@@ -272,22 +260,16 @@ async function submitBooking() {
   }
 }
 
-useLiveRefresh(['VisitCreated', 'VisitStatusChanged', 'PreExamCompleted', 'ConsultationCompleted', 'InvoiceIssued', 'PaymentReceived'], refresh)
+useLiveRefresh(['VisitCreated', 'VisitStatusChanged', 'PreExamCompleted', 'ConsultationCompleted', 'InvoiceIssued', 'PaymentReceived'], () => {
+  flow.value?.refresh()
+  return refresh()
+})
 
 onMounted(async () => {
   try {
-    const [loadedDepartments, loadedDoctors, loadedFee] = await Promise.all([
-      departmentOptions(),
-      doctorOptions(),
-      auth.can('visitfees.view') ? api<{ price: number }>('/visit-tokens/fee') : Promise.resolve(null),
-    ])
+    const [loadedDepartments, loadedDoctors] = await Promise.all([departmentOptions(), doctorOptions()])
     departments.value = loadedDepartments
     doctors.value = loadedDoctors
-    visitFee.value = loadedFee?.price ?? null
-    if (auth.can('cash.create')) {
-      registers.value = await api<typeof registers.value>('/cash/registers')
-      cash.registerId = registers.value.find((r) => r.name === 'صندوق پذیرش')?.id ?? registers.value[0]?.id ?? null
-    }
   } catch (cause) {
     error.value = errorMessage(cause)
   }
@@ -302,67 +284,57 @@ watch(departmentId, refresh)
     <div class="reception-heading">
       <div>
         <h1 class="h4 mb-1">پذیرش امروز</h1>
-        <p class="text-muted mb-0">مریض حضوری را از اینجا پذیرش کنید؛ وقت‌های قبلی در بخش پایین با یک مرحله تکمیل می‌شوند.</p>
+        <p class="text-muted mb-0">مریض را انتخاب کنید و مراجعه را ثبت کنید. فیس در صندوق گرفته می‌شود و با پرداخت آن، شماره نوبت خودکار صادر می‌شود.</p>
       </div>
-      <button v-if="auth.can('visits.create')" type="button" class="btn btn-primary text-nowrap" @click="addingVisit = true">پذیرش مریض حضوری</button>
     </div>
+
+    <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
+
+    <div v-if="session" class="alert alert-warning mb-0 d-flex flex-wrap align-items-center justify-content-between gap-2" role="alert">
+      <span>شما از قبل یک صندوق باز دارید ({{ session.registerName }}). پذیرش دیگر پول نمی‌گیرد؛ پول آن را تحویل دهید و این صندوق را ببندید.</span>
+      <button type="button" class="btn btn-soft text-nowrap" @click="cash.closing = true; cash.counted = 0; cash.error = ''">بستن صندوق</button>
+    </div>
+
+    <UiCard v-if="canAdmit && auth.can('visits.create')" title="پذیرش مریض">
+      <AdmissionFlow ref="flow" :patient-id="patientFromLink" @changed="refresh" />
+    </UiCard>
 
     <div class="reception-stats">
       <StatCard label="مراجعات امروز" :value="totalVisits" icon="ri-group-fill" />
+      <StatCard label="منتظر پرداخت" :value="counts.awaiting" icon="ri-money-dollar-circle-fill" tone="red" />
       <StatCard label="در جریان" :value="counts.waiting" icon="ri-hourglass-fill" tone="orange" />
       <StatCard label="تکمیل‌شده" :value="counts.completed" icon="ri-check-line" tone="cyan" />
       <StatCard label="لغو شده" :value="counts.cancelled" icon="ri-close-line" tone="red" />
     </div>
 
-    <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
-
-    <UiCard v-if="canCollect" title="در انتظار تکمیل پذیرش">
-      <template #actions>
-        <button v-if="session" type="button" class="btn btn-soft text-nowrap" @click="cash.closing = true; cash.counted = 0; cash.error = ''">بستن صندوق</button>
-      </template>
-      <form v-if="!session" class="row g-3 align-items-end" @submit.prevent="openCash">
-        <div class="col-md-4">
-          <label class="form-label" for="r-register">صندوق</label>
-          <select id="r-register" v-model.number="cash.registerId" class="form-select" required>
-            <option v-for="r in registers" :key="r.id" :value="r.id">{{ r.name }}</option>
-          </select>
-        </div>
-        <div class="col-md-4">
-          <label class="form-label" for="r-opening">موجودی شروع</label>
-          <input id="r-opening" v-model.number="cash.opening" class="form-control" type="number" min="0" step="0.01" required />
-        </div>
-        <div class="col-md-4"><button type="submit" class="btn btn-primary xr-field-height" :disabled="cash.saving">باز کردن صندوق</button></div>
-        <div v-if="cash.error" class="col-12"><div class="alert alert-danger mb-0" role="alert">{{ cash.error }}</div></div>
-      </form>
-      <dl v-else class="xr-facts mb-3">
-        <div><dt>صندوق باز</dt><dd>{{ session.registerName }}</dd></div>
-        <div><dt>دریافت نقدی</dt><dd>{{ money(session.cashCollected) }}</dd></div>
-      </dl>
-
+    <UiCard v-if="canAdmit" title="منتظر پرداخت در صندوق">
       <CallNotice :desks="[calls]" />
-      <div v-if="tokens.length === 0 && fees.length === 0" class="xr-state">موردی در انتظار تکمیل پذیرش نیست.</div>
-      <div v-if="tokens.length || fees.length" class="xr-table-wrap" :class="{ 'mt-3': !session }">
+      <div v-if="tokens.length === 0 && pending.length === 0" class="xr-state">مریضی منتظر پرداخت نیست.</div>
+      <div v-else class="xr-table-wrap">
         <table class="xr-table">
-          <thead><tr><th>شماره صف</th><th>نوع کار</th><th>مریض</th><th>وضعیت فیس</th><th>فراخوان</th><th>عملیات</th></tr></thead>
+          <thead><tr><th>شماره نوبت</th><th>نوع کار</th><th>مریض</th><th>وضعیت پرداخت</th><th v-if="tokens.length">فراخوان</th><th>عملیات</th></tr></thead>
           <tbody>
-            <tr v-for="t in tokens" :key="`t${t.id}`">
-              <td>{{ quantity(t.queueNumber) }}</td>
-              <td>پذیرش حضوری — {{ t.departmentName }}</td>
-              <td>مشخصات ثبت نشده</td>
-              <td>{{ t.paid ? 'فیس دریافت شده' : money(t.balance) }}</td>
-              <td><CallControls :desk="calls" :token-id="t.id" /></td>
+            <tr v-for="a in pending" :key="`a${a.visitId}`">
+              <td><span class="xr-queue">{{ quantity(a.queueNumber) }}</span></td>
+              <td>فیس معاینه — {{ a.departmentName }}<span v-if="a.visitDate !== todayIso()" class="text-muted small"> ({{ formatDate(a.visitDate) }})</span></td>
+              <td><PatientCell :name="a.patientName" :file-number="a.patientFileNumber" /></td>
+              <td>{{ a.paid ? 'پرداخت‌شده، نوبت صادر نشده' : `${money(a.balance)}، پرداخت در صندوق` }}</td>
+              <td v-if="tokens.length"></td>
               <td class="text-nowrap">
-                <button type="button" class="btn btn-soft btn-sm" :disabled="!t.paid && !session" @click="activeToken = t">{{ t.paid ? 'ثبت مشخصات' : 'دریافت فیس' }}</button>
-                <button v-if="!t.paid" type="button" class="btn btn-soft-danger btn-sm ms-2" @click="cancelToken(t)">لغو</button>
+                <button type="button" class="btn btn-soft btn-sm" @click="flow?.resume(a)">{{ a.paid ? 'صدور نوبت' : 'مشاهده' }}</button>
+                <button v-if="!a.paid && auth.can('visits.cancel')" type="button" class="btn btn-soft-danger btn-sm ms-2" @click="cancelAdmission(a)">لغو</button>
               </td>
             </tr>
-            <tr v-for="f in fees" :key="`f${f.invoiceId}`">
-              <td>—</td>
-              <td>فیس خدمت — {{ f.description }}</td>
-              <td>{{ f.patientName }} <span class="ltr-num">{{ f.patientFileNumber }}</span></td>
-              <td>{{ money(f.balance) }}</td>
-              <td></td>
-              <td><button type="button" class="btn btn-soft btn-sm" :disabled="!session" @click="openFee(f)">دریافت فیس</button></td>
+            <tr v-for="t in tokens" :key="`t${t.id}`">
+              <td><span class="xr-queue">{{ quantity(t.queueNumber) }}</span></td>
+              <td>نوبت قدیمی — {{ t.departmentName }}</td>
+              <td>مشخصات ثبت نشده</td>
+              <td>{{ t.paid ? 'فیس دریافت شده' : `${money(t.balance)}، پرداخت در صندوق` }}</td>
+              <td><CallControls :desk="calls" :token-id="t.id" /></td>
+              <td class="text-nowrap">
+                <button v-if="t.paid" type="button" class="btn btn-soft btn-sm" @click="activeToken = t">ثبت مشخصات</button>
+                <button v-else type="button" class="btn btn-soft-danger btn-sm" @click="cancelToken(t)">لغو</button>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -384,20 +356,26 @@ watch(departmentId, refresh)
       <div v-else class="xr-table-wrap">
         <table class="xr-table">
           <thead>
-            <tr><th>شماره صف</th><th>مریض</th><th>شماره پرونده</th><th>بخش</th><th>داکتر</th><th>وضعیت</th><th v-if="auth.can('visits.edit') || auth.can('visits.manage')">تغییر وضعیت</th></tr>
+            <tr><th>نوبت</th><th>مریض</th><th>بخش و داکتر</th><th>وضعیت</th><th v-if="auth.can('visits.edit') || auth.can('visits.manage')">عملیات</th></tr>
           </thead>
           <tbody>
             <tr v-for="visit in visits" :key="visit.id">
-              <td>{{ quantity(visit.queueNumber) }}</td>
-              <td><RouterLink :to="`/patients/${visit.patientId}`">{{ visit.patientName }}</RouterLink></td>
-              <td><span class="ltr-num">{{ visit.patientFileNumber }}</span></td>
-              <td>{{ visit.departmentName }}</td>
-              <td>{{ visit.doctorName ?? '—' }}</td>
-              <td><span class="xr-badge" :class="`xr-badge--${visitStatusTones[visit.status]}`">{{ visitStatusLabels[visit.status] }}</span></td>
+              <td><span class="xr-queue">{{ quantity(visit.queueNumber) }}</span></td>
+              <td><PatientCell :name="visit.patientName" :file-number="visit.patientFileNumber" :to="`/patients/${visit.patientId}`" /></td>
+              <td>
+                <div>{{ visit.departmentName }}</div>
+                <div v-if="visit.doctorName" class="xr-meta">{{ visit.doctorName }}</div>
+              </td>
+              <td>
+                <div class="xr-stack">
+                  <span class="xr-badge" :class="`xr-badge--${visitStatusTones[visit.status]}`">{{ visitStatusLabels[visit.status] }}</span>
+                  <span v-if="feeStatusLabels[visit.feeStatus]" class="xr-note" :class="`xr-note--${feeStatusLabels[visit.feeStatus].tone}`">{{ feeStatusLabels[visit.feeStatus].label }}</span>
+                </div>
+              </td>
               <td v-if="auth.can('visits.edit') || auth.can('visits.manage')">
                 <div class="xr-row-actions">
-                  <RouterLink v-if="auth.can('visits.print')" :to="`/print/visit/${visit.id}`" target="_blank" class="btn btn-soft btn-sm text-nowrap">رسید</RouterLink>
-                  <button v-if="auth.can('visits.manage') && visit.nextStatuses.length" type="button" class="btn btn-soft btn-sm text-nowrap" @click="transferring = visit">انتقال داکتر</button>
+                  <RouterLink v-if="auth.can('visits.print') && visit.queueNumber !== null" :to="`/print/visit/${visit.id}`" target="_blank" class="btn btn-quiet btn-sm text-nowrap">رسید</RouterLink>
+                  <button v-if="auth.can('visits.manage') && visit.nextStatuses.length" type="button" class="btn btn-quiet btn-sm text-nowrap" @click="transferring = visit">انتقال داکتر</button>
                   <select
                     v-if="auth.can('visits.edit') && visit.nextStatuses.length"
                     class="form-select form-select-sm"
@@ -415,12 +393,12 @@ watch(departmentId, refresh)
       </div>
     </UiCard>
 
-    <UiCard v-if="auth.can('appointments.view')" title="وقت‌های قبلی امروز">
+    <UiCard v-if="auth.can('appointments.view')" title="وقت‌های ملاقات امروز">
       <template #actions>
         <button v-if="auth.can('appointments.create')" type="button" class="btn btn-soft" @click="openBooking">ثبت وقت</button>
       </template>
-      <div v-if="!session && appointments.some((row) => row.status === 'Scheduled')" class="alert alert-warning" role="status">برای پذیرش وقت قبلی و دریافت فیس، ابتدا صندوق را باز کنید.</div>
-      <div v-if="appointments.length === 0" class="xr-state">برای امروز وقت قبلی ثبت نشده است.</div>
+      <p class="form-hint">وقت ملاقات فقط زمان حضور است و شماره نوبت نیست؛ در روز حضور، فیس به صندوق فرستاده می‌شود و شماره نوبت پس از پرداخت در صندوق صادر می‌شود.</p>
+      <div v-if="appointments.length === 0" class="xr-state">برای امروز وقت ملاقات ثبت نشده است.</div>
       <div v-else class="xr-table-wrap">
         <table class="xr-table">
           <thead>
@@ -434,7 +412,7 @@ watch(departmentId, refresh)
               <td>{{ appointmentLabels[row.status] }}</td>
               <td class="text-nowrap">
                 <template v-if="row.status === 'Scheduled'">
-                  <button v-if="auth.can('visits.create') && auth.can('visitfees.create')" type="button" class="btn btn-primary btn-sm" :disabled="!session" :title="session ? undefined : 'ابتدا صندوق را باز کنید'" @click="openCheckIn(row)">پذیرش و دریافت فیس</button>
+                  <button v-if="auth.can('visits.create') && auth.can('visitfees.create')" type="button" class="btn btn-primary btn-sm" @click="openCheckIn(row)">پذیرش</button>
                   <button v-if="auth.can('appointments.cancel')" type="button" class="btn btn-soft-danger btn-sm ms-2" @click="cancelAppointment(row)">لغو</button>
                 </template>
               </td>
@@ -445,18 +423,7 @@ watch(departmentId, refresh)
     </UiCard>
   </div>
 
-  <NewVisitModal v-if="addingVisit || activeToken" :token="activeToken ?? undefined" @close="closeVisitModal" @changed="loadDesk" @saved="onVisitSaved" />
-
-  <UiModal v-if="collecting.fee" :title="`دریافت ${collecting.fee.description}`" @close="collecting.fee = null">
-    <form @submit.prevent="submitFee">
-      <p>{{ collecting.fee.patientName }}، مبلغ کامل: <strong>{{ money(collecting.fee.balance) }}</strong></p>
-      <div v-if="collecting.error" class="alert alert-danger" role="alert">{{ collecting.error }}</div>
-      <div class="xr-form-actions">
-        <button type="submit" class="btn btn-primary" :disabled="collecting.saving">ثبت دریافت</button>
-        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
-      </div>
-    </form>
-  </UiModal>
+  <NewVisitModal v-if="activeToken" :token="activeToken" @close="closeVisitModal" @saved="onVisitSaved" />
 
   <TransferDoctorModal v-if="transferring" :visit="transferring" @close="transferring = null" @saved="onTransferred" />
 
@@ -473,25 +440,24 @@ watch(departmentId, refresh)
     </form>
   </UiModal>
 
-  <UiModal v-if="checkIn.row" :title="`پذیرش و دریافت فیس — ${checkIn.row.patientName}`" @close="checkIn.row = null">
+  <UiModal v-if="checkIn.row" :title="`پذیرش وقت ملاقات — ${checkIn.row.patientName}`" @close="checkIn.row = null">
     <form @submit.prevent="submitCheckIn">
       <dl class="xr-facts mb-3">
         <div><dt>مریض</dt><dd>{{ checkIn.row.patientName }} <span class="ltr-num">{{ checkIn.row.patientFileNumber }}</span></dd></div>
         <div><dt>داکتر</dt><dd>{{ checkIn.row.doctorName }}</dd></div>
         <div><dt>ساعت</dt><dd><span class="ltr-num">{{ formatTime(checkIn.row.scheduledAt) }}</span></dd></div>
-        <div><dt>فیس ویزیت</dt><dd>{{ visitFee === null ? 'در حال دریافت قیمت…' : money(visitFee) }}</dd></div>
       </dl>
       <div class="mb-3"><UiComboBox v-model="checkIn.departmentId" label="بخش شروع مراجعه" :options="departments" required chip /></div>
-      <p class="form-hint">با تأیید، فیس نقدی دریافت، شماره صف ساخته و مریض مستقیماً وارد مراجعات امروز می‌شود.</p>
+      <p class="form-hint">با تأیید، مراجعه ثبت می‌شود و فیس برای پرداخت به صندوق فرستاده می‌شود.</p>
       <div v-if="checkIn.error" class="alert alert-danger" role="alert">{{ checkIn.error }}</div>
       <div class="xr-form-actions">
-        <button type="submit" class="btn btn-primary" :disabled="checkIn.saving || !checkIn.departmentId || visitFee === null">{{ checkIn.saving ? 'در حال ثبت…' : 'تأیید دریافت فیس و پذیرش' }}</button>
+        <button type="submit" class="btn btn-primary" :disabled="checkIn.saving || !checkIn.departmentId">{{ checkIn.saving ? 'در حال ثبت…' : 'ثبت مراجعه و ارسال فیس به صندوق' }}</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>
   </UiModal>
 
-  <UiModal v-if="booking.open" title="ثبت وقت" @close="booking.open = false">
+  <UiModal v-if="booking.open" title="ثبت وقت ملاقات" @close="booking.open = false">
     <form @submit.prevent="submitBooking">
       <div class="mb-3"><PatientPicker v-model="booking.patientId" required /></div>
       <div class="mb-3">
@@ -532,6 +498,10 @@ watch(departmentId, refresh)
 }
 
 @media (max-width: 575.98px) {
+  .reception-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .reception-heading {
     align-items: stretch;
     flex-direction: column;

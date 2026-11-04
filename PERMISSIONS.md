@@ -28,10 +28,10 @@
 | `invoices` | فاکتور |
 | `payments` | دریافت و برگشت وجه |
 | `cash` | صندوق و جلسه صندوق |
-| `visitfees` | نوبت و دریافت کامل فیس ویزیت، رفرکشن و عکس‌برداری در پذیرش؛ نه فاکتورهای دیگر |
+| `visitfees` | پذیرش مراجعه و ساختن فاکتور فیس ویزیت، بدون دریافت پول. همه فیس‌ها را صندوق‌دار با `payments.create` می‌گیرد |
 | `ledger` | دفتر مالی |
 | `expenses` | مصارف |
-| `reports` | گزارش عملیاتی (`reports.view`) و مالی (`reports.manage`) |
+| `reports` | گزارش‌های کاری، فقط شمارش و بدون نام مریض (`reports.view`). گزارش‌های مالی `ledger.view`، موجودی گدام `inventory.view` و فروش `pharmacy.view` یا `optical.view` می‌خواهند. چاپ `reports.print` و خروجی اکسل `reports.export` |
 | `users` | کاربران، نقش‌ها |
 | `settings` | تنظیمات |
 | `services` | ثبت قیمت خدمات (`services.edit`). هر تغییر با قیمت قبلی و جدید در Audit ثبت می‌شود |
@@ -59,7 +59,7 @@
 | inventory | | V | | | | | | VC | VC | | V | VCEAXPO |
 | invoices | | VO | | | | | | VC | VC | VCXP | VAO | |
 | payments | | VO | | | | | | | | VCP | VAR | |
-| cash | | V | VCE | | | | | | | VCE | V | |
+| cash | | V | VE | | | | | | | VCE | V | |
 | visitfees | | | VC | | | | | | | | | |
 | ledger | | V | | | | | | | | | VCAO | |
 | expenses | | V | | | | | | | | | VCEAX | |
@@ -70,6 +70,8 @@
 | audit | V | V | | | | | | | | | V | |
 
 نقش `AudioStation` (مرکز پخش صوت) فقط `calls.manage` دارد و برای رایانه اسپیکر است. `SuperAdmin` هم برای راه‌اندازی همین صلاحیت را دارد.
+
+پذیرش برای صندوق فقط `view` و `edit` دارد تا صندوقی را که پیش از انتقال همه فیس‌ها به صندوق باز کرده ببندد. صندوق تازه باز نمی‌کند.
 
 توضیح: `Manager` برای نظارت فقط آمار و گزارش می‌بیند و داده طبی جزئی را نمی‌بیند؛ `diagnostics` و `surgery` برای او فقط در سطح وضعیت و شمارش است.
 

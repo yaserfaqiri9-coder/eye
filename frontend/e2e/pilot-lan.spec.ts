@@ -152,9 +152,10 @@ test('two people editing one patient: the second sees a conflict and the first c
 test('a change in one department reaches another open screen without a reload', async ({ browser }) => {
   const stamp = Date.now()
   const admin = await adminPage(browser)
-  await newUsers(admin, stamp, { rec: 'Receptionist', tri: 'Triage' })
+  await newUsers(admin, stamp, { rec: 'Receptionist', tri: 'Triage', cas: 'Cashier' })
   const reception = await staffPage(browser, `rec_${stamp}`)
   const triage = await staffPage(browser, `tri_${stamp}`)
+  const cashier = await staffPage(browser, `cas_${stamp}`)
   await expect(triage).toHaveURL(/\/triage$/)
 
   const departments = await call(reception, 'GET', '/lookups/departments')
@@ -163,10 +164,10 @@ test('a change in one department reaches another open screen without a reload', 
   const patient = await call(reception, 'POST', '/patients', { firstName, gender: 'Female', estimatedAge: 25 })
 
   // A visit needs its fee paid first. The tariff was set by lan-check.mjs, which smoke.ps1 runs before this.
-  const register = await call(admin, 'POST', '/cash/registers', { name: `پذیرش ${stamp}` })
-  await call(reception, 'POST', '/cash/sessions', { registerId: register.id, openingAmount: 0 })
+  const register = await call(admin, 'POST', '/cash/registers', { name: `صندوق زنده ${stamp}` })
+  await call(cashier, 'POST', '/cash/sessions', { registerId: register.id, openingAmount: 0 })
   const token = await call(reception, 'POST', '/visit-tokens', { departmentId })
-  await call(reception, 'POST', '/reception-fees/pay', { invoiceId: token.invoiceId, amount: token.balance, method: 'Cash', invoiceVersion: token.invoiceVersion })
+  await call(cashier, 'POST', '/payments', { invoiceId: token.invoiceId, amount: token.balance, method: 'Cash', invoiceVersion: token.invoiceVersion })
   await call(reception, 'POST', '/visits', { patientId: patient.id, departmentId, tokenId: token.id })
 
   await expect(triage.getByText(firstName)).toBeVisible({ timeout: 10_000 })

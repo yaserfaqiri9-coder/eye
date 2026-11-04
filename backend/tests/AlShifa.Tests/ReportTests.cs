@@ -127,12 +127,12 @@ public sealed class ReportTests(ApiFixture api)
     {
         var doctor = await UserAsync(Roles.Doctor);
         Assert.Equal(HttpStatusCode.Forbidden, (await doctor.GetAsync("/api/reports/financial")).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await doctor.GetAsync("/api/reports/operations")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await doctor.GetAsync("/api/reports/overview")).StatusCode);
 
         var manager = await UserAsync(Roles.Manager);
         Assert.Equal(HttpStatusCode.OK, (await manager.GetAsync("/api/reports/financial")).StatusCode);
 
-        var bad = await manager.GetAsync("/api/reports/operations?from=2026-02-01&to=2026-01-01");
+        var bad = await manager.GetAsync("/api/reports/overview?from=2026-02-01&to=2026-01-01");
         Assert.Contains("invalid_range", await bad.Content.ReadAsStringAsync());
     }
 

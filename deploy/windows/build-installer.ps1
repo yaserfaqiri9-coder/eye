@@ -7,7 +7,10 @@ param(
     [string]$Release,
     # Only for someone holding a Visual Studio licence, which is what Microsoft's terms ask of whoever redistributes this runtime.
     # Without it, the installer takes vc_redist.x64.exe from beside itself when a laptop needs it.
-    [switch]$IncludeVisualCppRuntime
+    [switch]$IncludeVisualCppRuntime,
+    # A folder of voice clips the hospital may use. They install with the system, so calling works with no Import-AlShifa-Voice step.
+    # Off by default: whether a voice's licence allows this is the hospital's decision. See DEPLOYMENT-WINDOWS.md.
+    [string]$VoicePack
 )
 
 . (Join-Path $PSScriptRoot 'common.ps1')
@@ -118,6 +121,11 @@ try {
     '== Package'
     Copy-Item (Join-Path $Release 'app') (Join-Path $package 'app') -Recurse
     Copy-Item (Join-Path $Release 'scripts') (Join-Path $package 'scripts') -Recurse
+    if ($VoicePack) {
+        if (-not (Get-ChildItem (Join-Path $VoicePack '*.mp3') -ErrorAction SilentlyContinue)) { throw "No MP3 files in $VoicePack." }
+        New-Item -ItemType Directory (Join-Path $package 'voice') | Out-Null
+        Copy-Item (Join-Path $VoicePack '*.mp3') (Join-Path $package 'voice')
+    }
     # build-release.ps1 copied this tree earlier; these are always taken fresh so a rebuild of the installer stays in step.
     Copy-Item (Join-Path $PSScriptRoot '*.ps1') (Join-Path $package 'scripts') -Force
     $zip = "$package.zip"

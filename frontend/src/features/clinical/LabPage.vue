@@ -9,6 +9,7 @@ import UiModal from '@/components/UiModal.vue'
 import CallControls from '@/features/calls/CallControls.vue'
 import CallNotice from '@/features/calls/CallNotice.vue'
 import { useCallDesk } from '@/features/calls/useCallDesk'
+import PatientCell from '@/features/patients/PatientCell.vue'
 import PatientPicker from '@/features/patients/PatientPicker.vue'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/date'
@@ -100,15 +101,16 @@ watch(status, load)
     <div v-else class="xr-table-wrap">
       <table class="xr-table">
         <thead>
-          <tr><th>شماره</th><th>مریض</th><th>شماره پرونده</th><th>آزمایش</th><th>توضیح</th><th>زمان درخواست</th><th>وضعیت</th><th>فراخوان</th><th>عملیات</th></tr>
+          <tr><th>شماره</th><th>مریض</th><th>آزمایش</th><th>زمان درخواست</th><th>وضعیت</th><th>فراخوان</th><th>عملیات</th></tr>
         </thead>
         <tbody>
           <tr v-for="row in rows" :key="row.id">
             <td><span class="ltr-num">{{ row.orderNumber }}</span></td>
-            <td>{{ row.patientName }}</td>
-            <td><span class="ltr-num">{{ row.patientFileNumber }}</span></td>
-            <td>{{ row.testName }}</td>
-            <td>{{ row.note ?? '—' }}</td>
+            <td><PatientCell :name="row.patientName" :file-number="row.patientFileNumber" /></td>
+            <td>
+              <div>{{ row.testName }}</div>
+              <div v-if="row.note" class="xr-meta">{{ row.note }}</div>
+            </td>
             <td>{{ formatDateTime(row.createdAt) }}</td>
             <td><span class="xr-badge" :class="`xr-badge--${diagnosticStatusTones[row.status]}`">{{ diagnosticStatusLabels[row.status] }}</span></td>
             <td><CallControls v-if="['Requested', 'InProgress'].includes(row.status)" :desk="row.kind === 'Imaging' ? imagingCalls : labCalls" :visit-id="row.visitId" /></td>

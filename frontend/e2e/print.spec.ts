@@ -1,4 +1,4 @@
-import { collectFee, ensureTariffs, openDesk, pick } from './helpers'
+import { admitFromRecord, ensureTariffs, openDesk } from './helpers'
 import { expect, test, type Page } from '@playwright/test'
 
 const adminUser = process.env.ALSHIFA_E2E_USER!
@@ -63,13 +63,7 @@ test('admin configures the hospital, a charged visit prints a slip and an A4 inv
   await reception.getByLabel('نام', { exact: true }).fill(firstName)
   await reception.getByRole('button', { name: 'ذخیره' }).click()
   await expect(reception).toHaveURL(/\/patients\/\d+$/)
-  await reception.getByRole('button', { name: 'مراجعه جدید' }).click()
-  const vd = reception.getByRole('dialog')
-  await pick(reception, vd, 'بخش', 'داکتر')
-  await collectFee(vd)
-  await pick(reception, vd, 'خدمت اضافی قابل پرداخت (اختیاری)', serviceName)
-  await vd.getByRole('button', { name: 'ثبت مراجعه' }).click()
-  await expect(vd).toBeHidden()
+  await admitFromRecord(reception, 'داکتر', serviceName)
 
   // Admission slip carries hospital details and the queue, in Dari, with no controls in print mode.
   await reception.goto('/reception')
@@ -116,7 +110,7 @@ test('reports and dashboard load for the manager and show no error', async ({ pa
   await expect(manager.getByRole('alert')).toHaveCount(0)
 
   await manager.getByRole('link', { name: 'گزارش‌ها' }).click()
-  await expect(manager.getByText('گزارش مالی')).toBeVisible()
-  await expect(manager.getByText('درآمد خالص')).toBeVisible()
+  await expect(manager.getByRole('heading', { name: 'خلاصه کار', level: 1 })).toBeVisible()
+  await expect(manager.getByText('پول دریافت‌شده')).toBeVisible()
   await expect(manager.getByRole('alert')).toHaveCount(0)
 })

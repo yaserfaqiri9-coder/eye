@@ -68,15 +68,13 @@ async function workflow() {
   const services = await admin.json('/services')
   const visitFee = services.find((s) => s.code === 'VISIT-FEE')
   if (!visitFee.currentPrice) await admin.json(`/services/${visitFee.id}/price`, { method: 'POST', body: { price: 100 } }, [204])
-  const desk = await admin.json('/cash/registers', { method: 'POST', body: { name: `پذیرش ${suffix}` } })
-  await reception.json('/cash/sessions', { method: 'POST', body: { registerId: desk.id, openingAmount: 0 } })
 
   const departments = await reception.json('/lookups/departments')
   const departmentId = departments.find((d) => d.name === 'داکتر').id
 
   const patient = await reception.json('/patients', { method: 'POST', idempotent: true, body: { firstName: 'مریض آزمایشی', gender: 'Male', estimatedAge: 40 } })
   const token = await reception.json('/visit-tokens', { method: 'POST', idempotent: true, body: { departmentId } })
-  await reception.json('/reception-fees/pay', { method: 'POST', idempotent: true, body: { invoiceId: token.invoiceId, amount: token.balance, method: 'Cash', invoiceVersion: token.invoiceVersion } })
+  await cashier.json('/payments', { method: 'POST', idempotent: true, body: { invoiceId: token.invoiceId, amount: token.balance, method: 'Cash', invoiceVersion: token.invoiceVersion } })
   const visit = await reception.json('/visits', { method: 'POST', idempotent: true, body: { patientId: patient.id, departmentId, serviceId: service.id, tokenId: token.id } })
   if ((await doctor.json(`/patients/${patient.id}`)).fileNumber !== patient.fileNumber) throw new Error('Doctor saw another patient')
 

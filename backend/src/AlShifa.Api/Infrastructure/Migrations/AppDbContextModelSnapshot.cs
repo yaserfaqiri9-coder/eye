@@ -48,6 +48,11 @@ namespace AlShifa.Api.Infrastructure.Migrations
                     b.Property<bool>("IsRecall")
                         .HasColumnType("tinyint(1)");
 
+                    b.Property<bool>("LocalPlayback")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false);
+
                     b.Property<string>("Outcome")
                         .HasMaxLength(30)
                         .HasColumnType("varchar(30)");
@@ -2192,7 +2197,7 @@ namespace AlShifa.Api.Infrastructure.Migrations
                     b.Property<long>("PatientId")
                         .HasColumnType("bigint");
 
-                    b.Property<int>("QueueNumber")
+                    b.Property<int?>("QueueNumber")
                         .HasColumnType("int");
 
                     b.Property<string>("Reason")
@@ -2290,7 +2295,7 @@ namespace AlShifa.Api.Infrastructure.Migrations
                     b.Property<long>("InvoiceId")
                         .HasColumnType("bigint");
 
-                    b.Property<int>("QueueNumber")
+                    b.Property<int?>("QueueNumber")
                         .HasColumnType("int");
 
                     b.Property<DateTime>("TokenDate")
@@ -2315,6 +2320,9 @@ namespace AlShifa.Api.Infrastructure.Migrations
                     b.HasIndex("TokenDate");
 
                     b.HasIndex("VisitId")
+                        .IsUnique();
+
+                    b.HasIndex("TokenDate", "QueueNumber")
                         .IsUnique();
 
                     b.ToTable("VisitTokens");

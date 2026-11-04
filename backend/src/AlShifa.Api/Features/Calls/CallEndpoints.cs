@@ -14,7 +14,8 @@ public sealed record CreateCallRequest(CallDesk Desk, long? VisitId, long? Token
 
 public sealed record CallOutcomeRequest(CallOutcome Outcome);
 
-public sealed record CallRow(long Id, int QueueNumber, string Destination, bool IsRecall, string Status, string? Outcome, string? FailureReason, DateTime RequestedAt, DateTime? FinishedAt);
+/// <param name="LocalClips">Set when no station is online: the desk that made the call plays these and reports the result.</param>
+public sealed record CallRow(long Id, int QueueNumber, string Destination, bool IsRecall, string Status, string? Outcome, string? FailureReason, DateTime RequestedAt, DateTime? FinishedAt, IReadOnlyList<string>? LocalClips = null);
 
 public sealed record CallQueueEntry(long? VisitId, long? TokenId, int QueueNumber);
 
@@ -27,6 +28,8 @@ public sealed record ClaimStationRequest([Required, MaxLength(64)] string Statio
 public sealed record NextCallRequest([Required, MaxLength(64)] string StationId);
 
 public sealed record CallResultRequest([Required, MaxLength(64)] string StationId, bool Played, [MaxLength(200)] string? Reason);
+
+public sealed record LocalResultRequest(bool Played, [MaxLength(200)] string? Reason);
 
 public sealed record NextCallDto(long Id, int QueueNumber, string Destination, IReadOnlyList<string> Clips);
 
@@ -44,6 +47,8 @@ public sealed record SaveCallSettingsRequest(IReadOnlyList<CallDeskRoom> Desks, 
 /// Patient calling on top of the existing queues. Only a person pressing the button creates a call: moving a patient
 /// between departments never does. Delivery is at most once: the station claims one row at a time and a claimed or
 /// outdated row is never offered again, so a network outage cannot cause a repeat. Staff recall by hand instead.
+/// With no station online the announcement plays on the computer of the desk that pressed the button, so calling
+/// works on every page whether or not anyone has opened the central station.
 /// </summary>
 public static partial class CallEndpoints
 {
@@ -142,11 +147,7 @@ public static partial class CallEndpoints
                 throw new AppException(StatusCodes.Status409Conflict, "no_previous_call", "این مریض هنوز فراخوان نشده است.");
             }
 
-            if (!IsFresh(await ReadStationAsync(db, ct), now))
-            {
-                throw new AppException(StatusCodes.Status409Conflict, "no_audio_station", "مرکز پخش صوت فعال نیست. فراخوان پخش نمی‌شود؛ رایانه اسپیکر را بررسی کنید.");
-            }
-
+            var playLocally = !IsFresh(await ReadStationAsync(db, ct), now);
             var destination = await DestinationAsync(db, request.Desk, user.Id, ct);
             var clips = VoicePack.Clips(entry.QueueNumber, destination, request.Recall);
             var root = VoicePack.Root(config, env);
@@ -164,15 +165,43 @@ public static partial class CallEndpoints
                 Destination = destination,
                 IsRecall = request.Recall,
                 RequestedByUserId = user.Id,
+                LocalPlayback = playLocally,
+                Status = playLocally ? CallStatus.Playing : CallStatus.Queued,
+                ClaimedAt = playLocally ? now : null,
             };
             db.PatientCalls.Add(call);
             audit.Add(request.Recall ? "PatientRecalled" : "PatientCalled", request.VisitId is null ? nameof(VisitToken) : nameof(Visit), (request.VisitId ?? request.TokenId).ToString(),
                 $"{visitNumber ?? "-"} | {request.Desk} | {destination} | {entry.QueueNumber}");
-            outbox.Add("PatientCallRequested", new { desk = request.Desk.ToString() }, Groups.Audio);
+            if (!playLocally)
+            {
+                outbox.Add("PatientCallRequested", new { desk = request.Desk.ToString() }, Groups.Audio);
+            }
+
             outbox.Add("PatientCallChanged", new { desk = request.Desk.ToString() }, desk.Group);
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
-            return Results.Created($"/api/calls/{call.Id}", ToRow(call, now));
+            return Results.Created($"/api/calls/{call.Id}", ToRow(call, now) with { LocalClips = playLocally ? clips : null });
+        }).RequireAuthorization();
+
+        calls.MapPost("/{id:long}/local-result", async (long id, LocalResultRequest request, AppDbContext db, CurrentUser user, Outbox outbox, CancellationToken ct) =>
+        {
+            var call = await db.PatientCalls.SingleOrDefaultAsync(c => c.Id == id, ct) ?? throw AppException.NotFound();
+            if (!call.LocalPlayback || call.RequestedByUserId != user.Id)
+            {
+                throw new AppException(StatusCodes.Status403Forbidden, "forbidden", "این فراخوان از این رایانه پخش نشده است.");
+            }
+
+            if (call.Status != CallStatus.Playing)
+            {
+                return Results.NoContent();
+            }
+
+            call.Status = request.Played ? CallStatus.Played : CallStatus.Failed;
+            call.FailureReason = request.Played ? null : Text.Clean(request.Reason) ?? "پخش نشد.";
+            call.FinishedAt = DateTime.UtcNow;
+            outbox.Add("PatientCallChanged", new { desk = call.Desk.ToString() }, Desks[call.Desk].Group);
+            await db.SaveChangesAsync(ct);
+            return Results.NoContent();
         }).RequireAuthorization();
 
         // Recording who came changes nothing else: the patient's status stays with the department's own workflow.
@@ -245,7 +274,7 @@ public static partial class CallEndpoints
                 WriteStation(db, row, request.StationId, now);
             }
 
-            var open = await db.PatientCalls.Where(c => c.Status == CallStatus.Queued || c.Status == CallStatus.Playing).OrderBy(c => c.Id).ToListAsync(ct);
+            var open = await db.PatientCalls.Where(c => !c.LocalPlayback && (c.Status == CallStatus.Queued || c.Status == CallStatus.Playing)).OrderBy(c => c.Id).ToListAsync(ct);
             foreach (var stale in open.Where(c => Effective(c, now) == CallStatus.Failed))
             {
                 stale.FailureReason = stale.Status == CallStatus.Playing ? "پخش کامل نشد." : "مرکز پخش به موقع در دسترس نبود.";
@@ -321,8 +350,14 @@ public static partial class CallEndpoints
                 history.Select(h => new StationHistoryRow(h.Call.Id, h.VisitNumber, h.Call.QueueNumber, VoicePack.Label(h.Call.Destination), h.Call.IsRecall, Effective(h.Call, now).ToString(), h.Call.Outcome?.ToString(), h.Call.FailureReason, h.Call.RequestedAt, h.Call.FinishedAt, h.RequestedBy)).ToList()));
         }).RequirePermission("calls.manage");
 
-        calls.MapGet("/voice/{name}", (string name, IConfiguration config, IHostEnvironment env) =>
+        // Any desk may need these when no station is online. A clip holds a number or a destination, never patient data.
+        calls.MapGet("/voice/{name}", (string name, IConfiguration config, IHostEnvironment env, HttpContext http) =>
         {
+            if (!http.User.HasClaim(RolePermissions.ClaimType, "calls.manage") && !Desks.Values.Any(d => http.User.HasClaim(RolePermissions.ClaimType, d.Permission)))
+            {
+                throw new AppException(StatusCodes.Status403Forbidden, "forbidden", "شما اجازه پخش فراخوان را ندارید.");
+            }
+
             // The pattern allows no separator, so a request cannot leave the voice folder.
             var path = Path.Combine(VoicePack.Root(config, env), name);
             if (!ClipName().IsMatch(name) || !File.Exists(path))
@@ -331,7 +366,7 @@ public static partial class CallEndpoints
             }
 
             return Results.File(path, "audio/mpeg");
-        }).RequirePermission("calls.manage");
+        }).RequireAuthorization();
 
         calls.MapGet("/settings", async (AppDbContext db, CancellationToken ct) =>
         {
@@ -388,16 +423,17 @@ public static partial class CallEndpoints
         var today = KabulClock.Today;
         if (desk == CallDesk.Reception)
         {
-            var tokens = db.VisitTokens.AsNoTracking().Where(t => t.TokenDate == today && t.VisitId == null && t.Invoice!.Status != InvoiceStatus.Void && (t.Invoice.Paid == 0 || t.Invoice.Paid > t.Invoice.Refunded));
+            var tokens = db.VisitTokens.AsNoTracking().Where(t => t.TokenDate == today && t.VisitId == null && t.QueueNumber != null
+                && t.Invoice!.Status != InvoiceStatus.Void && t.Invoice.Total - t.Invoice.Discount <= t.Invoice.Paid - t.Invoice.Refunded);
             if (tokenId is { } id)
             {
                 tokens = tokens.Where(t => t.Id == id);
             }
 
-            return tokens.OrderBy(t => t.QueueNumber).Select(t => new CallQueueEntry(null, t.Id, t.QueueNumber));
+            return tokens.OrderBy(t => t.QueueNumber).Select(t => new CallQueueEntry(null, t.Id, t.QueueNumber!.Value));
         }
 
-        var visits = db.Visits.AsNoTracking().Where(v => v.VisitDate == today && v.Status != VisitStatus.Cancelled);
+        var visits = db.Visits.AsNoTracking().Where(v => v.VisitDate == today && v.QueueNumber != null && v.Status != VisitStatus.Cancelled && v.Status != VisitStatus.AwaitingPayment);
         if (visitId is { } oneVisit)
         {
             visits = visits.Where(v => v.Id == oneVisit);
@@ -428,7 +464,7 @@ public static partial class CallEndpoints
             _ => throw new AppException(StatusCodes.Status400BadRequest, "invalid_desk", "بخش انتخاب‌شده معتبر نیست."),
         };
 
-        return queue.OrderBy(v => v.QueueNumber).Select(v => new CallQueueEntry(v.Id, null, v.QueueNumber));
+        return queue.OrderBy(v => v.QueueNumber).Select(v => new CallQueueEntry(v.Id, null, v.QueueNumber!.Value));
     }
 
     private static async Task<string> DestinationAsync(AppDbContext db, CallDesk desk, long userId, CancellationToken ct)

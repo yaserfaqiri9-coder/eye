@@ -5,6 +5,6 @@ export function money(value: number | null | undefined) {
   return value === null || value === undefined ? '—' : `${format.format(value)} افغانی`
 }
 
-export function quantity(value: number) {
-  return format.format(value)
+export function quantity(value: number | null | undefined) {
+  return value === null || value === undefined ? '—' : format.format(value)
 }

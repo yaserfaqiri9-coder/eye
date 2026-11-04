@@ -7,8 +7,8 @@ import UiCard from '@/components/UiCard.vue'
 import UiModal from '@/components/UiModal.vue'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/date'
-import { money } from '@/utils/money'
-import { invoiceStatusLabels, invoiceStatusTones, type InvoiceDetail, type InvoiceRow, type PaymentRow, type SessionRow } from './types'
+import { money, quantity } from '@/utils/money'
+import { invoiceStatusLabels, invoiceStatusTones, invoiceSubject, type InvoiceDetail, type InvoiceRow, type PaymentRow, type SessionRow } from './types'
 
 const auth = useAuthStore()
 const invoices = ref<InvoiceRow[]>([])
@@ -198,12 +198,13 @@ onBeforeUnmount(() => clearTimeout(debounce))
       <div v-else class="xr-table-wrap">
         <table class="xr-table">
           <thead>
-            <tr><th>شماره</th><th>مریض</th><th>مجموع</th><th>پرداخت‌شده</th><th>مانده</th><th>وضعیت</th><th>عملیات</th></tr>
+            <tr><th>شماره</th><th>مریض</th><th>بابت</th><th>مجموع</th><th>پرداخت‌شده</th><th>مانده</th><th>وضعیت</th><th>عملیات</th></tr>
           </thead>
           <tbody>
             <tr v-for="row in invoices" :key="row.id">
               <td><span class="ltr-num">{{ row.invoiceNumber }}</span></td>
               <td>{{ row.patientName ?? 'بدون مریض' }}</td>
+              <td>{{ invoiceSubject(row) }}</td>
               <td>{{ money(row.total - row.discount) }}</td>
               <td>{{ money(row.paid) }}</td>
               <td>{{ money(row.balance) }}</td>
@@ -227,6 +228,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
     <p>مانده: <strong>{{ money(pay.detail.invoice.balance) }}</strong></p>
     <div v-if="pay.receipt" class="alert alert-success" role="status">
       دریافت ثبت شد. شماره رسید: <span class="ltr-num">{{ pay.receipt.receiptNumber }}</span>
+      <template v-if="pay.receipt.queueNumber !== null">، شماره نوبت: <strong>{{ quantity(pay.receipt.queueNumber) }}</strong></template>
       <RouterLink v-if="auth.can('payments.print')" :to="`/print/receipt/${pay.receipt.id}`" target="_blank" class="btn btn-soft btn-sm ms-2">چاپ رسید</RouterLink>
     </div>
     <form v-else @submit.prevent="submitPayment">

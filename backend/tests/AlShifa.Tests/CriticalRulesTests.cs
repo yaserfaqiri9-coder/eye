@@ -141,12 +141,7 @@ public sealed class CriticalRulesTests(ApiFixture api)
         await AssertRefused(await lab.PostAsJsonAsync($"/api/diagnostic-orders/{order.Id}/start", new ChangeOrderStatusRequest(order.Version)), "payment_required");
         await AssertRefused(await lab.PostAsJsonAsync($"/api/diagnostic-orders/{order.Id}/result", new SaveResultRequest("نتیجه", order.Version)), "payment_required");
 
-        // The reception desk's finance stays limited to its own fees.
         var invoiceId = await InvoiceOfAsync(nameof(DiagnosticOrder), order.Id);
-        var desk = await api.FeeDeskAsync();
-        Assert.DoesNotContain((await desk.GetFromJsonAsync<List<ReceptionFeeRow>>("/api/reception-fees", JsonOptions))!, f => f.InvoiceId == invoiceId);
-        await AssertRefused(await desk.SendAsync(ApiFixture.Keyed("/api/reception-fees/pay", new PaymentRequest(invoiceId, 300, PaymentMethod.Cash, null, 0))), "not_a_reception_fee", HttpStatusCode.Forbidden);
-
         await PayAsync(cashier, invoiceId, 100);
         await AssertRefused(await lab.PostAsJsonAsync($"/api/diagnostic-orders/{order.Id}/start", new ChangeOrderStatusRequest(order.Version)), "payment_required");
         await PayAsync(cashier, invoiceId, 200);
@@ -368,8 +363,7 @@ public sealed class CriticalRulesTests(ApiFixture api)
         var tests = await doctor.GetFromJsonAsync<JsonElement>("/api/diagnostic-tests");
         var refraction = tests.EnumerateArray().First(t => t.GetProperty("kind").GetString() == "Refraction").GetProperty("id").GetInt32();
         var order = await Read<DiagnosticOrderDto>(await doctor.SendAsync(ApiFixture.Keyed("/api/diagnostic-orders", new CreateDiagnosticOrderRequest(patient.Id, visit.Id, refraction, null))), HttpStatusCode.Created);
-        var fee = (await desk.GetFromJsonAsync<List<ReceptionFeeRow>>("/api/reception-fees", JsonOptions))!.Single(f => f.PatientFileNumber == patient.FileNumber && f.Description == order.TestName);
-        await AssertStatus(await desk.SendAsync(ApiFixture.Keyed("/api/reception-fees/pay", new PaymentRequest(fee.InvoiceId, fee.Balance, PaymentMethod.Cash, null, fee.InvoiceVersion))), HttpStatusCode.Created);
+        await api.PayFeeAsync(await api.OrderFeeAsync(patient.FileNumber, order.TestName));
 
         await Read<RefractionDto>(await triage.PutAsJsonAsync($"/api/refractions/{visit.Id}", new SaveRefractionRequest("6/18", null, null, null, null, null, null, null, null, [], null)));
         await AssertStatus(await triage.PostAsync($"/api/refractions/{visit.Id}/complete", null), HttpStatusCode.NoContent);

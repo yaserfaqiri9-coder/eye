@@ -199,6 +199,10 @@ public static class DiagnosticEndpoints
                 if (request.VisitId is { } orderedVisit)
                 {
                     await access.EnsureResponsibleAsync(orderedVisit, ct);
+                    if (await db.Visits.AnyAsync(v => v.Id == orderedVisit && v.Status == VisitStatus.AwaitingPayment, ct))
+                    {
+                        throw new AppException(StatusCodes.Status409Conflict, "payment_required", "فیس معاینه این مراجعه هنوز پرداخت نشده است.");
+                    }
                 }
 
                 var test = await db.DiagnosticTests.AsNoTracking().SingleOrDefaultAsync(t => t.Id == request.TestId && t.IsActive, ct)

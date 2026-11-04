@@ -55,12 +55,10 @@ public sealed class RefractionTests(ApiFixture api)
         var doctor = await UserAsync(Roles.Doctor);
         var tests = await doctor.GetFromJsonAsync<JsonElement>("/api/diagnostic-tests");
         var testId = tests.EnumerateArray().First(t => t.GetProperty("kind").GetString() == "Refraction").GetProperty("id").GetInt32();
-        await Read<DiagnosticOrderDto>(await doctor.SendAsync(Post("/api/diagnostic-orders", new CreateDiagnosticOrderRequest(patientId, visitId, testId, null))), HttpStatusCode.Created);
+        var order = await Read<DiagnosticOrderDto>(await doctor.SendAsync(Post("/api/diagnostic-orders", new CreateDiagnosticOrderRequest(patientId, visitId, testId, null))), HttpStatusCode.Created);
 
-        var desk = await api.FeeDeskAsync();
-        var fees = await desk.GetFromJsonAsync<List<ReceptionFeeRow>>("/api/reception-fees", JsonOptions);
-        var fee = fees!.Last();
-        await Read<JsonElement>(await desk.SendAsync(Post("/api/reception-fees/pay", new PaymentRequest(fee.InvoiceId, fee.Balance, PaymentMethod.Cash, null, fee.InvoiceVersion))), HttpStatusCode.Created);
+        var fileNumber = (await doctor.GetFromJsonAsync<PatientDto>($"/api/patients/{patientId}", JsonOptions))!.FileNumber;
+        await api.PayFeeAsync(await api.OrderFeeAsync(fileNumber, order.TestName));
     }
 
     private static SaveRefractionRequest Sample(int? version, string finalSphere = "-1.25") => new(

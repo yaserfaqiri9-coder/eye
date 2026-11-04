@@ -1,17 +1,3 @@
-export interface OperationsReport {
-  from: string
-  to: string
-  visits: number
-  completedVisits: number
-  visitsByDepartment: { name: string; count: number }[]
-  doctors: { doctor: string; visits: number; finalized: number }[]
-  diagnosticsByTest: { name: string; count: number }[]
-  surgeries: number
-  prescriptions: number
-  opticalOrders: number
-  lowStockProducts: number
-}
-
 export interface DashboardDay {
   date: string
   completed: number
@@ -27,22 +13,51 @@ export interface DashboardReport {
   days: DashboardDay[]
   visitsByDepartment: { name: string; count: number }[]
   todayByStatus: { name: string; count: number }[]
+  lowStockProducts: number
 }
 
 export interface FinancialReport {
-  from: string
-  to: string
-  serviceRevenue: number
-  pharmacyRevenue: number
-  opticalRevenue: number
-  discounts: number
-  refunds: number
-  netRevenue: number
-  costOfGoods: number
-  expenses: number
   receipts: number
-  receiptsByCashier: { cashier: string; total: number }[]
+  expenses: number
   outstandingNow: number
-  openInvoicesNow: number
-  stockValueNow: number
+}
+
+export type ReportValueKind = 'count' | 'money' | 'quantity' | 'text' | 'date' | 'datetime'
+
+export type ReportCell = string | number | null
+
+export interface ReportTile {
+  label: string
+  value: number
+  kind: ReportValueKind
+}
+
+export interface ReportColumn {
+  label: string
+  kind: ReportValueKind
+}
+
+export interface ReportTable {
+  title: string
+  columns: ReportColumn[]
+  rows: ReportCell[][]
+  total: ReportCell[] | null
+  note: string | null
+}
+
+export interface ReportTrend {
+  title: string
+  kind: ReportValueKind
+  points: { date: string; value: number }[]
+}
+
+/** One report in the single shape the page shows, prints and exports. From and to are null on a report of the present moment. */
+export interface ReportDocument {
+  title: string
+  description: string
+  from: string | null
+  to: string | null
+  tiles: ReportTile[]
+  trend: ReportTrend | null
+  tables: ReportTable[]
 }

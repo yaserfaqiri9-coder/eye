@@ -1,4 +1,5 @@
 using AlShifa.Api.Features.Auth;
+using AlShifa.Api.Features.Inventory;
 using AlShifa.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
@@ -25,6 +26,31 @@ public static class PrescriptionEndpoints
 
             return Results.Ok(await QueryAsync(db, query.OrderByDescending(p => p.Id).Take(100), ct));
         }).RequirePermission("prescriptions.view");
+
+        // Doctors have no inventory access, so this exposes drug names only: no stock, cost or price.
+        medical.MapGet("/drugs", async (AppDbContext db, string? q, CancellationToken ct) =>
+        {
+            var term = q?.Trim();
+            if (string.IsNullOrEmpty(term))
+            {
+                return Results.Ok(Array.Empty<string>());
+            }
+
+            // Persian and Arabic keyboards type these letters differently, and either form may be stored.
+            var escaped = term.Replace("|", "||").Replace("%", "|%").Replace("_", "|_");
+            var persian = escaped.Replace('ي', 'ی').Replace('ك', 'ک') + "%";
+            var arabic = escaped.Replace('ی', 'ي').Replace('ک', 'ك') + "%";
+
+            // LIKE follows the column's case-insensitive collation, so "t" finds "Timolol"; StartsWith here would not.
+            var names = await db.Products.AsNoTracking()
+                .Where(p => p.IsActive && p.Kind == ProductKind.Drug && (EF.Functions.Like(p.Name, persian, "|") || EF.Functions.Like(p.Name, arabic, "|")))
+                .Select(p => p.Name)
+                .Distinct()
+                .OrderBy(name => name)
+                .Take(30)
+                .ToListAsync(ct);
+            return Results.Ok(names);
+        }).RequirePermission("prescriptions.create");
 
         medical.MapPost("/", async (CreatePrescriptionRequest request, AppDbContext db, ClinicalAccess access, Idempotency idempotency, NumberService numbers, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
             await idempotency.RunAsync(request, async () =>

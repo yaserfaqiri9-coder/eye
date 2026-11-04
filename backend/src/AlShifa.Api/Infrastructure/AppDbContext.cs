@@ -143,6 +143,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
             e.HasIndex(x => x.InvoiceId).IsUnique();
             e.HasIndex(x => x.VisitId).IsUnique();
             e.HasIndex(x => x.TokenDate);
+
+            // The sequence is the first guard and this the last: a number announced over the speaker must mean one patient.
+            e.HasIndex(x => new { x.TokenDate, x.QueueNumber }).IsUnique();
             e.HasOne(x => x.Doctor).WithMany().HasForeignKey(x => x.DoctorStaffId);
         });
 
@@ -154,6 +157,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
             e.HasIndex(x => new { x.Status, x.Id });
             e.HasIndex(x => new { x.VisitId, x.Desk, x.Id });
             e.HasIndex(x => new { x.VisitTokenId, x.Desk, x.Id });
+            e.Property(x => x.LocalPlayback).HasDefaultValue(false);
             e.HasIndex(x => x.RequestedAt);
         });
 

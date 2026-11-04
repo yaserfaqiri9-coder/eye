@@ -83,19 +83,9 @@ public sealed class VisitFlowTests(ApiFixture api)
         await Read<DiagnosticOrderDto>(await doctor.SendAsync(ApiFixture.Keyed("/api/diagnostic-orders",
             new CreateDiagnosticOrderRequest(patient.Id, visit.Id, await TestIdAsync(doctor, kind), null, returnToDoctor))), HttpStatusCode.Created);
 
-    private async Task<ReceptionFeeRow> FeeOfAsync(PatientDto patient, string description)
-    {
-        var desk = await api.FeeDeskAsync();
-        var fees = await desk.GetFromJsonAsync<List<ReceptionFeeRow>>("/api/reception-fees", JsonOptions);
-        return fees!.Single(f => f.PatientFileNumber == patient.FileNumber && f.Description == description);
-    }
+    private Task<OrderFee> FeeOfAsync(PatientDto patient, string description) => api.OrderFeeAsync(patient.FileNumber, description);
 
-    private async Task<JsonElement> PayAsync(ReceptionFeeRow fee)
-    {
-        var desk = await api.FeeDeskAsync();
-        return await Read<JsonElement>(await desk.SendAsync(ApiFixture.Keyed("/api/reception-fees/pay",
-            new PaymentRequest(fee.InvoiceId, fee.Balance, PaymentMethod.Cash, null, fee.InvoiceVersion))), HttpStatusCode.Created);
-    }
+    private Task<JsonElement> PayAsync(OrderFee fee) => api.PayFeeAsync(fee);
 
     /// <summary>Visit in consultation, with findings and a diagnosis on file.</summary>
     private async Task<(HttpClient Doctor, PatientDto Patient, VisitRow Visit, ConsultationDto Consult)> InConsultationAsync()
@@ -126,11 +116,17 @@ public sealed class VisitFlowTests(ApiFixture api)
         await AssertRefused(await desk.SendAsync(ApiFixture.Keyed("/api/visits", Visit(null))), "visit_fee_required");
         await AssertRefused(await desk.SendAsync(ApiFixture.Keyed("/api/visits", Visit(token.Id))), "visit_fee_required");
 
-        await Read<JsonElement>(await desk.SendAsync(ApiFixture.Keyed("/api/reception-fees/pay",
+        var feeCashier = await api.FeeCashierAsync();
+        await Read<JsonElement>(await feeCashier.SendAsync(ApiFixture.Keyed("/api/payments",
             new PaymentRequest(token.InvoiceId, token.Balance, PaymentMethod.Cash, null, token.InvoiceVersion))), HttpStatusCode.Created);
 
+        // The number comes from the payment, never before it.
+        Assert.Null(token.QueueNumber);
+        var numbered = await desk.GetFromJsonAsync<VisitTokenRow>($"/api/visit-tokens/{token.Id}", JsonOptions);
+        Assert.NotNull(numbered!.QueueNumber);
+
         var visit = await Read<VisitRow>(await desk.SendAsync(ApiFixture.Keyed("/api/visits", Visit(token.Id))), HttpStatusCode.Created);
-        Assert.Equal(token.QueueNumber, visit.QueueNumber);
+        Assert.Equal(numbered.QueueNumber, visit.QueueNumber);
 
         var invoice = await InDbAsync(db => db.Invoices.AsNoTracking().SingleAsync(i => i.Id == token.InvoiceId));
         Assert.Equal(patient.Id, invoice.PatientId);
@@ -147,43 +143,33 @@ public sealed class VisitFlowTests(ApiFixture api)
     }
 
     [Fact]
-    public async Task Reception_collects_only_fees_in_full_and_a_repeat_is_recorded_once()
+    public async Task Reception_takes_no_money_and_every_fee_is_collected_at_the_cashier()
     {
         var desk = await api.FeeDeskAsync();
         var token = await api.NewTokenAsync();
 
-        // The limited permission opens neither the general payment door nor the invoice list.
+        // Reception can neither pay an invoice, nor list invoices, nor open a register.
         await AssertRefused(await desk.SendAsync(ApiFixture.Keyed("/api/payments", new PaymentRequest(token.InvoiceId, token.Balance, PaymentMethod.Cash, null))), "", HttpStatusCode.Forbidden);
         Assert.Equal(HttpStatusCode.Forbidden, (await desk.GetAsync("/api/invoices")).StatusCode);
+        var register = await InDbAsync(db => db.CashRegisters.Where(r => r.IsActive).Select(r => r.Id).FirstAsync());
+        Assert.Equal(HttpStatusCode.Forbidden, (await desk.PostAsJsonAsync("/api/cash/sessions", new OpenSessionRequest(register, 0))).StatusCode);
 
-        await AssertRefused(await desk.SendAsync(ApiFixture.Keyed("/api/reception-fees/pay",
-            new PaymentRequest(token.InvoiceId, 40, PaymentMethod.Cash, null, token.InvoiceVersion))), "full_payment_required");
+        // Refraction and imaging reach the cashier's list like every other fee, and paying there opens the service.
+        var (doctor, patient, visit, _) = await InConsultationAsync();
+        foreach (var kind in new[] { "Imaging", "Refraction" })
+        {
+            var order = await RequestAsync(doctor, patient, visit, kind);
+            var fee = await FeeOfAsync(patient, order.TestName);
+            var cashier = await api.FeeCashierAsync();
+            var waiting = await cashier.GetFromJsonAsync<PagedResult<InvoiceRow>>($"/api/invoices?unpaid=true&q={patient.FileNumber}", JsonOptions);
+            var row = waiting!.Items.Single(i => i.Id == fee.InvoiceId);
+            Assert.Equal(order.TestName, row.Description);
+            Assert.Equal(1, row.ItemCount);
 
-        var cashier = await UserAsync(Roles.Cashier);
-        var admin = await UserAsync(Roles.SuperAdmin);
-        var service = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(Name("S"), Name("خدمت"), null, true, 30));
-        var serviceId = JsonDocument.Parse(await service.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
-        var other = await Read<InvoiceRow>(await cashier.SendAsync(ApiFixture.Keyed("/api/invoices", new CreateInvoiceRequest(null, null, [new InvoiceLineInput(serviceId, 1)]))), HttpStatusCode.Created);
-        await AssertRefused(await desk.SendAsync(ApiFixture.Keyed("/api/reception-fees/pay",
-            new PaymentRequest(other.Id, 30, PaymentMethod.Cash, null, other.Version))), "not_a_reception_fee", HttpStatusCode.Forbidden);
+            await PayAsync(fee);
+            Assert.True((await doctor.GetFromJsonAsync<PagedResult<DiagnosticOrderDto>>($"/api/diagnostic-orders?visitId={visit.Id}", JsonOptions))!.Items.Single(o => o.Id == order.Id).Paid);
+        }
 
-        // Two clicks with different keys, as from two screens, and a retry of the first with its own key.
-        var request = new PaymentRequest(token.InvoiceId, token.Balance, PaymentMethod.Cash, null, token.InvoiceVersion);
-        const string retryKey = "reception-retry-key-1";
-        var responses = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => desk.SendAsync(ApiFixture.Keyed("/api/reception-fees/pay", request))));
-        Assert.Single(responses, r => r.StatusCode == HttpStatusCode.Created);
-        Assert.All(responses.Where(r => r.StatusCode != HttpStatusCode.Created), r => Assert.Equal(HttpStatusCode.Conflict, r.StatusCode));
-        Assert.Equal(1, await InDbAsync(db => db.Payments.CountAsync(p => p.InvoiceId == token.InvoiceId)));
-
-        var second = await api.NewTokenAsync();
-        var replay = new PaymentRequest(second.InvoiceId, second.Balance, PaymentMethod.Cash, null, second.InvoiceVersion);
-        var first = await Read<JsonElement>(await desk.SendAsync(ApiFixture.Keyed("/api/reception-fees/pay", replay, retryKey + second.Id)), HttpStatusCode.Created);
-        var again = await Read<JsonElement>(await desk.SendAsync(ApiFixture.Keyed("/api/reception-fees/pay", replay, retryKey + second.Id)), HttpStatusCode.Created);
-        Assert.Equal(first.GetProperty("receiptNumber").GetString(), again.GetProperty("receiptNumber").GetString());
-        Assert.Equal(1, await InDbAsync(db => db.Payments.CountAsync(p => p.InvoiceId == second.InvoiceId)));
-
-        var key = second.InvoiceId.ToString();
-        Assert.True(await InDbAsync(db => db.AuditLogs.AnyAsync(a => a.Action == "ReceptionFeeCollected" && a.EntityId == key && a.UserId != null)));
         await AssertLedgerReconciles();
     }
 
@@ -209,12 +195,13 @@ public sealed class VisitFlowTests(ApiFixture api)
         Assert.Equal(80, detail.Invoice.Balance);
 
         // An amount decided before the discount is refused rather than overcharging.
-        await AssertRefused(await desk.SendAsync(ApiFixture.Keyed("/api/reception-fees/pay",
+        var cashier = await api.FeeCashierAsync();
+        await AssertRefused(await cashier.SendAsync(ApiFixture.Keyed("/api/payments",
             new PaymentRequest(token.InvoiceId, 100, PaymentMethod.Cash, null, token.InvoiceVersion))), "invoice_changed");
 
         var fresh = await desk.GetFromJsonAsync<VisitTokenRow>($"/api/visit-tokens/{token.Id}", JsonOptions);
         Assert.Equal(80, fresh!.Balance);
-        await Read<JsonElement>(await desk.SendAsync(ApiFixture.Keyed("/api/reception-fees/pay",
+        await Read<JsonElement>(await cashier.SendAsync(ApiFixture.Keyed("/api/payments",
             new PaymentRequest(token.InvoiceId, fresh.Balance, PaymentMethod.Cash, null, fresh.InvoiceVersion))), HttpStatusCode.Created);
 
         var paid = await desk.GetFromJsonAsync<VisitTokenRow>($"/api/visit-tokens/{token.Id}", JsonOptions);

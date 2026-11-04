@@ -6,6 +6,7 @@ import UiCard from '@/components/UiCard.vue'
 import CallControls from '@/features/calls/CallControls.vue'
 import CallNotice from '@/features/calls/CallNotice.vue'
 import { useCallDesk } from '@/features/calls/useCallDesk'
+import PatientCell from '@/features/patients/PatientCell.vue'
 import { quantity } from '@/utils/money'
 
 interface QueueRow {
@@ -56,14 +57,13 @@ onMounted(load)
     <div v-else class="xr-table-wrap">
       <table class="xr-table">
         <thead>
-          <tr><th>نوبت</th><th>مریض</th><th>شماره پرونده</th><th>وضعیت</th><th>فراخوان</th><th>عملیات</th></tr>
+          <tr><th>نوبت</th><th>مریض</th><th>وضعیت</th><th>فراخوان</th><th>عملیات</th></tr>
         </thead>
         <tbody>
           <tr v-for="row in visible" :key="row.id">
-            <td>{{ quantity(row.queueNumber) }}</td>
-            <td>{{ row.patientName }}</td>
-            <td><span class="ltr-num">{{ row.patientFileNumber }}</span></td>
-            <td>{{ row.status === 'InProgress' ? 'در جریان' : 'درخواست‌شده' }}</td>
+            <td><span class="xr-queue">{{ quantity(row.queueNumber) }}</span></td>
+            <td><PatientCell :name="row.patientName" :file-number="row.patientFileNumber" /></td>
+            <td><span class="xr-badge" :class="row.status === 'InProgress' ? 'xr-badge--primary' : 'xr-badge--cyan'">{{ row.status === 'InProgress' ? 'در جریان' : 'درخواست‌شده' }}</span></td>
             <td><CallControls :desk="calls" :visit-id="row.visitId" /></td>
             <td>
               <RouterLink v-if="row.paid || row.status === 'InProgress'" :to="`/refraction/${row.visitId}`" class="btn btn-soft btn-sm text-nowrap">ثبت رفرکشن</RouterLink>

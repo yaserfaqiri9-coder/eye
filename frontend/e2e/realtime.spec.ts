@@ -1,4 +1,4 @@
-import { pick } from './helpers'
+import { admitFromRecord, ensureTariffs, openDesk } from './helpers'
 import { expect, test, type Browser, type Page } from '@playwright/test'
 
 const adminUser = process.env.ALSHIFA_E2E_USER!
@@ -38,11 +38,7 @@ async function registerVisit(reception: Page, firstName: string) {
   await reception.getByLabel('نام', { exact: true }).fill(firstName)
   await reception.getByRole('button', { name: 'ذخیره' }).click()
   await expect(reception).toHaveURL(/\/patients\/\d+$/)
-  await reception.getByRole('button', { name: 'مراجعه جدید' }).click()
-  const vd = reception.getByRole('dialog')
-  await pick(reception, vd, 'بخش', 'معاینه ابتدایی')
-  await vd.getByRole('button', { name: 'ثبت مراجعه' }).click()
-  await expect(vd).toBeHidden()
+  await admitFromRecord(reception)
 }
 
 test('a visit appears live in triage, and reconnecting after an outage recovers what was missed', async ({ page, browser }) => {
@@ -54,6 +50,8 @@ test('a visit appears live in triage, and reconnecting after an outage recovers 
 
   const { page: reception } = await staffPage(browser, `rlr_${stamp}`)
   const { page: triage, context: triageContext } = await staffPage(browser, `rlt_${stamp}`)
+  await ensureTariffs(page)
+  await openDesk(page, reception)
   await expect(triage).toHaveURL(/\/triage$/)
   await expect(triage.getByText('اتصال زنده قطع است')).toBeHidden()
 

@@ -15,6 +15,9 @@ public enum VisitStatus
     FollowUpRequired,
     Completed,
     Cancelled,
+
+    /// <summary>Registered at the desk, fee not settled: no queue number and in no queue.</summary>
+    AwaitingPayment,
 }
 
 public class Visit
@@ -44,7 +47,8 @@ public class Visit
     /// <summary>Calendar day in Asia/Kabul; the queue number restarts on each day.</summary>
     public DateOnly VisitDate { get; set; }
 
-    public int QueueNumber { get; set; }
+    /// <summary>Issued in the transaction that settles the visit fee, so an unpaid visit never holds one.</summary>
+    public int? QueueNumber { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
@@ -54,14 +58,14 @@ public class Visit
 }
 
 /// <summary>
-/// The paid queue number reception issues before a patient's details are taken. It holds the visit fee's invoice
-/// and becomes a Visit once, so no placeholder patient is ever needed.
+/// The visit fee and the queue number it buys. It holds the fee's invoice; the number appears only once that invoice is
+/// settled. Tokens from before the patient-first flow may still have no visit and are completed from the reception page.
 /// </summary>
 public class VisitToken
 {
     public long Id { get; set; }
 
-    public int QueueNumber { get; set; }
+    public int? QueueNumber { get; set; }
 
     public DateOnly TokenDate { get; set; }
 

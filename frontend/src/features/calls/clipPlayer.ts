@@ -1,5 +1,6 @@
 const CACHE_LIMIT = 120
 const END_GRACE_MS = 3_000
+const RESUME_WAIT_MS = 300
 
 export class MissingClipError extends Error {
   constructor(public readonly clip: string) {
@@ -26,14 +27,19 @@ export function createClipPlayer() {
       gain.gain.value = volume
       gain.connect(context.destination)
     }
-    await context.resume()
+    await resume(context)
     return context.state === 'running'
+  }
+
+  /** A browser still waiting for a click leaves resume() pending forever, which must not stop whoever is waiting on it. */
+  async function resume(target: AudioContext) {
+    await Promise.race([target.resume().catch(() => undefined), new Promise((done) => setTimeout(done, RESUME_WAIT_MS))])
   }
 
   /** False when the browser has suspended audio and only another click can bring it back. */
   async function isRunning() {
     if (!context) return false
-    if (context.state !== 'running') await context.resume().catch(() => undefined)
+    if (context.state !== 'running') await resume(context)
     return context.state === 'running'
   }
 
@@ -88,3 +94,6 @@ export function createClipPlayer() {
 
   return { unlock, isRunning, setVolume, play }
 }
+
+/** One player per tab, so a desk's announcement and the station's can never overlap. */
+export const sharedPlayer = createClipPlayer()

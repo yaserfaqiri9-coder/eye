@@ -6,7 +6,8 @@ import UiCard from '@/components/UiCard.vue'
 import CallControls from '@/features/calls/CallControls.vue'
 import CallNotice from '@/features/calls/CallNotice.vue'
 import { useCallDesk } from '@/features/calls/useCallDesk'
-import { visitStatusLabels, visitStatusTones, type VisitRow } from '@/features/visits/types'
+import PatientCell from '@/features/patients/PatientCell.vue'
+import { feeStatusLabels, visitStatusLabels, visitStatusTones, type VisitRow } from '@/features/visits/types'
 import { quantity } from '@/utils/money'
 
 const calls = useCallDesk('Vision')
@@ -38,15 +39,19 @@ onMounted(load)
     <div v-else class="xr-table-wrap">
       <table class="xr-table">
         <thead>
-          <tr><th>نوبت</th><th>مریض</th><th>شماره پرونده</th><th>علت</th><th>وضعیت</th><th>فراخوان</th><th>عملیات</th></tr>
+          <tr><th>نوبت</th><th>مریض</th><th>علت</th><th>وضعیت</th><th>فراخوان</th><th>عملیات</th></tr>
         </thead>
         <tbody>
           <tr v-for="row in rows" :key="row.id">
-            <td>{{ quantity(row.queueNumber) }}</td>
-            <td>{{ row.patientName }}</td>
-            <td><span class="ltr-num">{{ row.patientFileNumber }}</span></td>
+            <td><span class="xr-queue">{{ quantity(row.queueNumber) }}</span></td>
+            <td><PatientCell :name="row.patientName" :file-number="row.patientFileNumber" /></td>
             <td>{{ row.reason ?? '—' }}</td>
-            <td><span class="xr-badge" :class="`xr-badge--${visitStatusTones[row.status]}`">{{ visitStatusLabels[row.status] }}</span></td>
+            <td>
+              <div class="xr-stack">
+                <span class="xr-badge" :class="`xr-badge--${visitStatusTones[row.status]}`">{{ visitStatusLabels[row.status] }}</span>
+                <span v-if="feeStatusLabels[row.feeStatus]" class="xr-note" :class="`xr-note--${feeStatusLabels[row.feeStatus].tone}`">{{ feeStatusLabels[row.feeStatus].label }}</span>
+              </div>
+            </td>
             <td><CallControls :desk="calls" :visit-id="row.id" /></td>
             <td class="text-nowrap">
               <RouterLink :to="`/triage/${row.id}`" class="btn btn-soft btn-sm">ثبت معاینه</RouterLink>

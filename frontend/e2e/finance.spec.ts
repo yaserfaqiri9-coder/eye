@@ -1,4 +1,4 @@
-import { pick } from './helpers'
+import { call, pick } from './helpers'
 import { expect, test, type Browser, type Page } from '@playwright/test'
 
 const adminUser = process.env.ALSHIFA_E2E_USER!
@@ -55,7 +55,10 @@ test('stock is bought, sold at the pharmacy, paid at the cashier and reconciled 
   await pd.getByRole('button', { name: 'ذخیره' }).click()
   await expect(pd).toBeHidden()
 
+  const supplier = `تأمین${stamp}`
+  await call(inventory, 'POST', '/suppliers', { name: supplier })
   await inventory.getByRole('link', { name: 'ثبت خرید' }).click()
+  await pick(inventory, inventory.locator('body'), 'تأمین‌کننده', supplier)
   await pick(inventory, inventory.locator('body'), 'جنس ردیف 1', drug)
   await inventory.getByLabel('محل ورود').selectOption({ label: 'دواخانه' })
   await inventory.getByLabel('مقدار ردیف 1').fill('5')

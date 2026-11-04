@@ -14,6 +14,9 @@ public static class VisitWorkflow
         [VisitStatus.FollowUpRequired] = [VisitStatus.Completed],
         [VisitStatus.Completed] = [],
         [VisitStatus.Cancelled] = [],
+
+        // Only a settled fee moves a visit on from here, and that happens in VisitFeeService, never by hand.
+        [VisitStatus.AwaitingPayment] = [VisitStatus.Cancelled],
     };
 
     /// <summary>Statuses that put a patient in front of a doctor, which no one may set by hand before Vision is complete.</summary>

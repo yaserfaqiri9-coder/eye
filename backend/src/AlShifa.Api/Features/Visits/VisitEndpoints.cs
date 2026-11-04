@@ -8,13 +8,13 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AlShifa.Api.Features.Visits;
 
-/// <param name="TokenId">The paid token this visit uses. A visit cannot exist without its fee.</param>
+/// <param name="TokenId">The paid token this visit uses. Only for tokens issued before the patient-first flow.</param>
 public sealed record CreateVisitRequest(long PatientId, int DepartmentId, long? DoctorStaffId, [MaxLength(300)] string? Reason, int? ServiceId = null, long? TokenId = null);
 
 public sealed record VisitRow(
-    long Id, string VisitNumber, int QueueNumber, long PatientId, string PatientFileNumber, string PatientName,
+    long Id, string VisitNumber, int? QueueNumber, long PatientId, string PatientFileNumber, string PatientName,
     int DepartmentId, string DepartmentName, string? DoctorName, string Status, string? Reason, DateOnly VisitDate,
-    DateTime CreatedAt, int Version, IReadOnlyList<string> NextStatuses, string PatientGender, long? DoctorStaffId = null);
+    DateTime CreatedAt, int Version, IReadOnlyList<string> NextStatuses, string PatientGender, long? DoctorStaffId = null, string FeeStatus = "None");
 
 public sealed record ChangeVisitStatusRequest(VisitStatus Status, int Version);
 
@@ -26,7 +26,7 @@ public sealed record AppointmentRow(long Id, long PatientId, string PatientFileN
 
 public sealed record LookupItem(long Id, string Name);
 
-public sealed class VisitService(AppDbContext db, DbContextOptions<AppDbContext> options, NumberService numbers, CurrentUser user, AuditService audit, Outbox outbox, InvoiceService invoices)
+public sealed class VisitService(AppDbContext db, DbContextOptions<AppDbContext> options, NumberService numbers, CurrentUser user, AuditService audit, Outbox outbox, InvoiceService invoices, VisitFeeService visitFees)
 {
     public static readonly string[] EventGroups = [Groups.Reception, Groups.Triage, Groups.Doctor, Groups.Management];
 
@@ -41,25 +41,93 @@ public sealed class VisitService(AppDbContext db, DbContextOptions<AppDbContext>
         await db.Visits.FromSqlInterpolated($"SELECT * FROM Visits WHERE Id = {id} FOR UPDATE").SingleOrDefaultAsync(ct)
         ?? throw AppException.NotFound();
 
-    /// <summary>Must run inside a transaction. The patient row lock stops two desks opening two visits, and two fees, for one person.</summary>
-    public async Task<Visit> CreateAsync(CreateVisitRequest request, CancellationToken ct)
+    /// <summary>
+    /// The desk's flow: a visit for a chosen patient, with its fee invoiced and nothing else. It holds no queue number and
+    /// stands in no queue until the fee is settled. Must run inside a transaction.
+    /// </summary>
+    public async Task<Visit> AdmitAsync(CreateAdmissionRequest request, CancellationToken ct)
     {
-        var patientId = request.PatientId;
+        await LockPatientAndValidateAsync(request.PatientId, request.DepartmentId, request.DoctorStaffId, ct);
+        await EnsureNoActiveVisitAsync(request.PatientId, ct);
+
+        var visit = new Visit
+        {
+            PatientId = request.PatientId,
+            DepartmentId = request.DepartmentId,
+            DoctorStaffId = request.DoctorStaffId,
+            Reason = Text.Clean(request.Reason),
+            Status = VisitStatus.AwaitingPayment,
+            VisitDate = KabulClock.Today,
+            VisitNumber = $"V-{await numbers.NextAsync("visit", ct: ct):D7}",
+            CreatedByUserId = user.Id,
+        };
+        db.Visits.Add(visit);
+        await db.SaveChangesAsync(ct);
+
+        await visitFees.CreateTokenAsync(visit.DepartmentId, visit.DoctorStaffId, visit.PatientId, ct, visit.Id);
+        db.VisitStatusHistory.Add(new VisitStatusHistory { VisitId = visit.Id, ToStatus = visit.Status, ChangedByUserId = user.Id });
+        audit.Add("VisitCreated", "Visit", visit.Id.ToString());
+        outbox.Add("VisitCreated", new { visitId = visit.Id }, EventGroups);
+        await db.SaveChangesAsync(ct);
+        await ChargeExtraServiceAsync(visit, request.ServiceId, ct);
+        return visit;
+    }
+
+    /// <summary>The patient row lock stops two desks opening two visits, and two fees, for one person.</summary>
+    private async Task LockPatientAndValidateAsync(long patientId, int departmentId, long? doctorStaffId, CancellationToken ct)
+    {
         var patients = await db.Patients.FromSqlInterpolated($"SELECT * FROM Patients WHERE Id = {patientId} FOR UPDATE").AsNoTracking().ToListAsync(ct);
         if (patients.Count == 0)
         {
             throw new AppException(StatusCodes.Status400BadRequest, "unknown_patient", "مریض پیدا نشد.");
         }
 
-        if (!await db.Departments.AnyAsync(d => d.Id == request.DepartmentId && d.IsActive, ct))
+        if (!await db.Departments.AnyAsync(d => d.Id == departmentId && d.IsActive, ct))
         {
             throw new AppException(StatusCodes.Status400BadRequest, "unknown_department", "بخش انتخاب‌شده معتبر نیست.");
         }
 
-        if (request.DoctorStaffId is { } doctorId && !await db.Staff.AnyAsync(s => s.Id == doctorId && s.IsDoctor && s.IsActive, ct))
+        if (doctorStaffId is { } doctorId && !await db.Staff.AnyAsync(s => s.Id == doctorId && s.IsDoctor && s.IsActive, ct))
         {
             throw new AppException(StatusCodes.Status400BadRequest, "unknown_doctor", "داکتر انتخاب‌شده معتبر نیست.");
         }
+    }
+
+    /// <summary>
+    /// Every step of a patient's day happens inside one open visit, so a second fee is never owed.
+    /// Read on a separate connection. This transaction's snapshot predates the wait for the patient lock, so it would miss
+    /// the visit the first desk just committed; a locking read would take gap locks that deadlock every desk's insert.
+    /// </summary>
+    private async Task EnsureNoActiveVisitAsync(long patientId, CancellationToken ct)
+    {
+        var today = KabulClock.Today;
+        await using var fresh = new AppDbContext(options);
+        var active = await fresh.Visits.AsNoTracking().AnyAsync(v =>
+            v.PatientId == patientId && v.VisitDate == today &&
+            v.Status != VisitStatus.Completed && v.Status != VisitStatus.Cancelled, ct);
+        if (active)
+        {
+            throw new AppException(StatusCodes.Status409Conflict, "duplicate_visit", "این مریض امروز مراجعه فعال دارد. ادامه کار در همان مراجعه انجام شود.");
+        }
+    }
+
+    private async Task ChargeExtraServiceAsync(Visit visit, int? serviceId, CancellationToken ct)
+    {
+        if (serviceId is not { } id)
+        {
+            return;
+        }
+
+        var service = await db.Services.AsNoTracking().SingleOrDefaultAsync(s => s.Id == id && s.IsActive, ct)
+            ?? throw new AppException(StatusCodes.Status400BadRequest, "unknown_service", "خدمت انتخاب‌شده معتبر نیست.");
+        var price = await FinanceEndpoints.CurrentPriceAsync(db, id, ct);
+        await invoices.ChargeVisitAsync(visit.PatientId, visit.Id, new ChargeLine(service.Name, 1, price, Accounts.ServiceRevenue, id, nameof(Visit), visit.Id), ct);
+    }
+
+    /// <summary>Completes a token issued before the patient-first flow. Must run inside a transaction.</summary>
+    public async Task<Visit> CreateAsync(CreateVisitRequest request, CancellationToken ct)
+    {
+        await LockPatientAndValidateAsync(request.PatientId, request.DepartmentId, request.DoctorStaffId, ct);
 
         if (request.TokenId is not { } tokenId)
         {
@@ -79,21 +147,11 @@ public sealed class VisitService(AppDbContext db, DbContextOptions<AppDbContext>
             throw FeeRequired();
         }
 
-        // Every step of a patient's day happens inside one open visit, so a second fee is never owed.
-        // Read on a separate connection. This transaction's snapshot predates the wait for the patient lock, so it would miss
-        // the visit the first desk just committed; a locking read would take gap locks that deadlock every desk's insert.
+        await EnsureNoActiveVisitAsync(request.PatientId, ct);
         var today = KabulClock.Today;
-        await using var fresh = new AppDbContext(options);
-        var active = await fresh.Visits.AsNoTracking().AnyAsync(v =>
-            v.PatientId == patientId && v.VisitDate == today &&
-            v.Status != VisitStatus.Completed && v.Status != VisitStatus.Cancelled, ct);
-        if (active)
-        {
-            throw new AppException(StatusCodes.Status409Conflict, "duplicate_visit", "این مریض امروز مراجعه فعال دارد. ادامه کار در همان مراجعه انجام شود.");
-        }
 
         // The number on the patient's slip stays theirs for the whole visit, even in another department, unless the token is from another day.
-        var keepsNumber = token.TokenDate == today;
+        var keepsNumber = token.TokenDate == today && token.QueueNumber is not null;
 
         var visit = new Visit
         {
@@ -118,14 +176,7 @@ public sealed class VisitService(AppDbContext db, DbContextOptions<AppDbContext>
         outbox.Add("VisitCreated", new { visitId = visit.Id }, EventGroups);
         await db.SaveChangesAsync(ct);
 
-        if (request.ServiceId is { } serviceId)
-        {
-            var service = await db.Services.AsNoTracking().SingleOrDefaultAsync(s => s.Id == serviceId && s.IsActive, ct)
-                ?? throw new AppException(StatusCodes.Status400BadRequest, "unknown_service", "خدمت انتخاب‌شده معتبر نیست.");
-            var price = await FinanceEndpoints.CurrentPriceAsync(db, serviceId, ct);
-            await invoices.ChargeVisitAsync(visit.PatientId, visit.Id, new ChargeLine(service.Name, 1, price, Accounts.ServiceRevenue, serviceId, nameof(Visit), visit.Id), ct);
-        }
-
+        await ChargeExtraServiceAsync(visit, request.ServiceId, ct);
         return visit;
     }
 
@@ -139,17 +190,21 @@ public sealed class VisitService(AppDbContext db, DbContextOptions<AppDbContext>
     public static IQueryable<VisitProjection> QueryRows(AppDbContext db, IQueryable<Visit> visits) => visits.Select(v => new VisitProjection(
         v.Id, v.VisitNumber, v.QueueNumber, v.PatientId, v.Patient!.FileNumber, v.Patient.FirstName, v.Patient.LastName,
         v.DepartmentId, v.Department!.Name, v.Doctor != null ? v.Doctor.FullName : null, v.Status, v.Reason, v.VisitDate, v.CreatedAt, v.Version, v.Patient.Gender, v.DoctorStaffId,
-        db.PreExaminations.Any(p => p.VisitId == v.Id && p.CompletedAt != null)));
+        db.PreExaminations.Any(p => p.VisitId == v.Id && p.CompletedAt != null),
+        db.VisitTokens.Where(t => t.VisitId == v.Id).Select(t => t.Invoice!.Status == InvoiceStatus.Void ? "Unpaid"
+            : t.Invoice.Total - t.Invoice.Discount <= t.Invoice.Paid - t.Invoice.Refunded ? "Paid"
+            : t.Invoice.Paid > 0 && t.Invoice.Paid == t.Invoice.Refunded ? "Refunded"
+            : "Unpaid").FirstOrDefault()));
 
     public static VisitRow ToRow(VisitProjection v) => new(
         v.Id, v.VisitNumber, v.QueueNumber, v.PatientId, v.FileNumber, $"{v.FirstName} {v.LastName}".Trim(),
         v.DepartmentId, v.DepartmentName, v.DoctorName, v.Status.ToString(), v.Reason, v.VisitDate, v.CreatedAt, v.Version,
-        VisitWorkflow.NextOf(v.Status, v.VisionComplete).Select(s => s.ToString()).ToList(), v.Gender.ToString(), v.DoctorStaffId);
+        VisitWorkflow.NextOf(v.Status, v.VisionComplete).Select(s => s.ToString()).ToList(), v.Gender.ToString(), v.DoctorStaffId, v.FeeStatus ?? "None");
 }
 
 public sealed record VisitProjection(
-    long Id, string VisitNumber, int QueueNumber, long PatientId, string FileNumber, string FirstName, string? LastName,
-    int DepartmentId, string DepartmentName, string? DoctorName, VisitStatus Status, string? Reason, DateOnly VisitDate, DateTime CreatedAt, int Version, Patients.Gender Gender, long? DoctorStaffId, bool VisionComplete);
+    long Id, string VisitNumber, int? QueueNumber, long PatientId, string FileNumber, string FirstName, string? LastName,
+    int DepartmentId, string DepartmentName, string? DoctorName, VisitStatus Status, string? Reason, DateOnly VisitDate, DateTime CreatedAt, int Version, Patients.Gender Gender, long? DoctorStaffId, bool VisionComplete, string? FeeStatus);
 
 public static class VisitEndpoints
 {
@@ -194,7 +249,7 @@ public static class VisitEndpoints
                 return (StatusCodes.Status201Created, await service.LoadRowAsync(visit.Id, ct));
             }, ct)).RequirePermission("visits.create");
 
-        visits.MapPost("/{id:long}/status", async (long id, ChangeVisitStatusRequest request, AppDbContext db, ClinicalAccess access, VisitService service, InvoiceService invoices, CurrentUser user, AuditService audit, Outbox outbox, IAuthorizationService authorization, HttpContext http, CancellationToken ct) =>
+        visits.MapPost("/{id:long}/status", async (long id, ChangeVisitStatusRequest request, AppDbContext db, ClinicalAccess access, VisitService service, VisitFeeService visitFees, InvoiceService invoices, CurrentUser user, AuditService audit, Outbox outbox, IAuthorizationService authorization, HttpContext http, CancellationToken ct) =>
         {
             var needed = request.Status == VisitStatus.Cancelled ? "visits.cancel" : "visits.edit";
             if (!http.User.HasClaim(RolePermissions.ClaimType, needed))
@@ -230,6 +285,7 @@ public static class VisitEndpoints
             {
                 // Otherwise an unpaid request of a cancelled visit stays on the fee list and can still be charged.
                 await DiagnosticGate.CloseOpenPrepaidAsync(db, invoices, audit, id, ct);
+                await visitFees.CloseUnpaidFeeAsync(id, ct);
             }
 
             db.VisitStatusHistory.Add(new VisitStatusHistory { VisitId = id, FromStatus = visit.Status, ToStatus = request.Status, ChangedByUserId = user.Id });
@@ -311,7 +367,7 @@ public static class VisitEndpoints
                 var at = request.ScheduledAt.Kind == DateTimeKind.Utc ? request.ScheduledAt : request.ScheduledAt.ToUniversalTime();
                 if (at < DateTime.UtcNow)
                 {
-                    throw new AppException(StatusCodes.Status400BadRequest, "appointment_in_past", "زمان نوبت نمی‌تواند در گذشته باشد.");
+                    throw new AppException(StatusCodes.Status400BadRequest, "appointment_in_past", "زمان وقت ملاقات نمی‌تواند در گذشته باشد.");
                 }
 
                 if (!await db.Patients.AnyAsync(p => p.Id == request.PatientId, ct))
@@ -326,7 +382,7 @@ public static class VisitEndpoints
 
                 if (await db.Appointments.AnyAsync(a => a.DoctorStaffId == request.DoctorStaffId && a.ScheduledAt == at && a.Status == AppointmentStatus.Scheduled, ct))
                 {
-                    throw new AppException(StatusCodes.Status409Conflict, "appointment_taken", "این زمان برای این داکتر قبلاً نوبت دارد.");
+                    throw new AppException(StatusCodes.Status409Conflict, "appointment_taken", "این زمان برای این داکتر قبلاً وقت ملاقات دارد.");
                 }
 
                 var appointment = new Appointment { PatientId = request.PatientId, DoctorStaffId = request.DoctorStaffId, ScheduledAt = at, Note = Text.Clean(request.Note), CreatedByUserId = user.Id };
@@ -343,7 +399,7 @@ public static class VisitEndpoints
             db.Entry(appointment).Property(a => a.Version).OriginalValue = version;
             if (appointment.Status != AppointmentStatus.Scheduled)
             {
-                throw new AppException(StatusCodes.Status409Conflict, "invalid_transition", "این نوبت قابل لغو نیست.");
+                throw new AppException(StatusCodes.Status409Conflict, "invalid_transition", "این وقت ملاقات قابل لغو نیست.");
             }
 
             appointment.Status = AppointmentStatus.Cancelled;
@@ -352,6 +408,7 @@ public static class VisitEndpoints
             return Results.NoContent();
         }).RequirePermission("appointments.cancel");
 
+        // Arrival opens the same visit a walk-in gets. The fee and the queue number follow in the same payment step.
         appointments.MapPost("/{id:long}/check-in", async (long id, CheckInRequest request, AppDbContext db, Idempotency idempotency, VisitService service, VisitFeeService visitFees, AuditService audit, CancellationToken ct) =>
             await idempotency.RunAsync(new { id, request }, async () =>
             {
@@ -362,17 +419,15 @@ public static class VisitEndpoints
                 }
                 if (appointment.Status != AppointmentStatus.Scheduled)
                 {
-                    throw new AppException(StatusCodes.Status409Conflict, "invalid_transition", "برای این نوبت قبلاً پذیرش انجام شده یا لغو شده است.");
+                    throw new AppException(StatusCodes.Status409Conflict, "invalid_transition", "برای این وقت ملاقات قبلاً پذیرش انجام شده یا لغو شده است.");
                 }
 
-                var token = await visitFees.CreateTokenAsync(request.DepartmentId, appointment.DoctorStaffId, appointment.PatientId, ct);
-                await visitFees.CollectFullAsync(token, ct);
-                var visit = await service.CreateAsync(new CreateVisitRequest(appointment.PatientId, request.DepartmentId, appointment.DoctorStaffId, appointment.Note, null, token.Id), ct);
+                var visit = await service.AdmitAsync(new CreateAdmissionRequest(appointment.PatientId, request.DepartmentId, appointment.DoctorStaffId, appointment.Note), ct);
                 appointment.Status = AppointmentStatus.CheckedIn;
                 appointment.VisitId = visit.Id;
                 audit.Add("AppointmentCheckedIn", "Appointment", appointment.Id.ToString(), $"Visit {visit.Id}");
                 await db.SaveChangesAsync(ct);
-                return (StatusCodes.Status201Created, await service.LoadRowAsync(visit.Id, ct));
+                return (StatusCodes.Status201Created, await visitFees.LoadAdmissionAsync(visit.Id, ct));
             }, ct)).RequirePermission("visits.create").RequirePermission("visitfees.create");
 
         app.MapGet("/api/lookups/departments", async (AppDbContext db, CancellationToken ct) =>

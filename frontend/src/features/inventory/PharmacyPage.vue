@@ -95,7 +95,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
           <tbody>
             <tr v-for="rx in openPrescriptions" :key="rx.id">
               <td><span class="ltr-num">{{ rx.rxNumber }}</span></td>
-              <td>{{ rx.patientName }}</td>
+              <td><span class="xr-person__name">{{ rx.patientName }}</span></td>
               <td>
                 <div v-for="item in rx.items" :key="item.id" class="small">
                   {{ item.drugName }} — {{ [item.dose, item.route, item.duration, item.instructions].filter(Boolean).join('، ') }} ({{ item.dispensedQuantity }} از {{ item.quantity }})

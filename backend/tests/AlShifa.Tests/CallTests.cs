@@ -198,15 +198,12 @@ public sealed class CallTests(ApiFixture api)
 
         var tests = await doctor.GetFromJsonAsync<JsonElement>("/api/diagnostic-tests");
         var testId = tests.EnumerateArray().First(t => t.GetProperty("kind").GetString() == "Refraction").GetProperty("id").GetInt32();
-        await Read<DiagnosticOrderDto>(await doctor.SendAsync(Keyed("/api/diagnostic-orders", new CreateDiagnosticOrderRequest(patient.Id, visit.Id, testId, null))), HttpStatusCode.Created);
+        var order = await Read<DiagnosticOrderDto>(await doctor.SendAsync(Keyed("/api/diagnostic-orders", new CreateDiagnosticOrderRequest(patient.Id, visit.Id, testId, null))), HttpStatusCode.Created);
 
         await AssertRefused(await Call(triage, CallDesk.Refraction, visit.Id), "not_in_queue");
         await AssertRefused(await Call(doctor, CallDesk.Doctor, visit.Id), "not_in_queue");
 
-        var desk = await api.FeeDeskAsync();
-        var fees = await desk.GetFromJsonAsync<List<ReceptionFeeRow>>("/api/reception-fees", JsonOptions);
-        var fee = fees!.Last();
-        await Read<JsonElement>(await desk.SendAsync(Keyed("/api/reception-fees/pay", new PaymentRequest(fee.InvoiceId, fee.Balance, PaymentMethod.Cash, null, fee.InvoiceVersion))), HttpStatusCode.Created);
+        await api.PayFeeAsync(await api.OrderFeeAsync(patient.FileNumber, order.TestName));
 
         var called = await Read<CallRow>(await Call(triage, CallDesk.Refraction, visit.Id), HttpStatusCode.Created);
         var next = await NextAsync(station, stationId);
@@ -245,7 +242,8 @@ public sealed class CallTests(ApiFixture api)
 
         Assert.Equal(HttpStatusCode.Forbidden, (await triage.PostAsJsonAsync("/api/calls/station/next", new NextCallRequest(stationId))).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await triage.PostAsJsonAsync("/api/calls/station/claim", new ClaimStationRequest("x", true))).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, (await triage.GetAsync("/api/calls/voice/to-vision.mp3")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await triage.GetAsync("/api/calls/voice/to-vision.mp3")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await (await UserAsync(Roles.Accountant)).GetAsync("/api/calls/voice/to-vision.mp3")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await api.NewClient().GetAsync("/api/calls/voice/to-vision.mp3")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await station.GetAsync("/api/calls/voice/..%2F..%2Fsecret.mp3")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await station.GetAsync("/api/calls/voice/to-vision.mp3")).StatusCode);
@@ -356,8 +354,22 @@ public sealed class CallTests(ApiFixture api)
 
         var stale = DateTime.UtcNow.AddMinutes(-10).Ticks;
         await InDbAsync(db => db.Settings.Where(s => s.Key == "calls.station").ExecuteUpdateAsync(s => s.SetProperty(x => x.Value, $"{secondId}|{stale}")));
-        await AssertRefused(await Call(triage, CallDesk.Vision, visit.Id), "no_audio_station");
         Assert.False((await Read<CallDeskView>(await triage.GetAsync("/api/calls/desk/Vision"))).StationOnline);
+
+        // No station online: the desk that pressed the button announces it, and a station returning later does not repeat it.
+        var local = await Read<CallRow>(await Call(triage, CallDesk.Vision, visit.Id), HttpStatusCode.Created);
+        Assert.Equal([$"number-{visit.QueueNumber:D4}.mp3", "to-vision.mp3"], local.LocalClips);
+        Assert.Equal(nameof(CallStatus.Playing), local.Status);
+        await AssertRefused(await Call(triage, CallDesk.Vision, visit.Id), "already_calling");
+
+        var colleague = await UserAsync(Roles.Triage);
+        Assert.Equal(HttpStatusCode.Forbidden, (await colleague.PostAsJsonAsync($"/api/calls/{local.Id}/local-result", new LocalResultRequest(true, null))).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await triage.PostAsJsonAsync($"/api/calls/{local.Id}/local-result", new LocalResultRequest(true, null))).StatusCode);
+        var row = (await Read<CallDeskView>(await triage.GetAsync("/api/calls/desk/Vision"))).Rows.Single(r => r.VisitId == visit.Id);
+        Assert.Equal(nameof(CallStatus.Played), row.LastCall!.Status);
+
+        Assert.True((await second.PostAsJsonAsync("/api/calls/station/claim", new ClaimStationRequest(secondId, true))).IsSuccessStatusCode);
+        Assert.Null(await NextAsync(second, secondId));
     }
 
     [Fact]
@@ -390,12 +402,14 @@ public sealed class CallTests(ApiFixture api)
     {
         var (station, stationId) = await StationAsync();
         var desk = await api.FeeDeskAsync();
-        var token = await api.NewTokenAsync();
+        var unpaid = await api.NewTokenAsync();
+        var tokenId = await api.PaidTokenAsync();
 
         var view = await Read<CallDeskView>(await desk.GetAsync("/api/calls/desk/Reception"));
-        Assert.Contains(view.Rows, r => r.TokenId == token.Id && r.QueueNumber == token.QueueNumber);
+        Assert.Contains(view.Rows, r => r.TokenId == tokenId && r.QueueNumber > 0);
+        Assert.DoesNotContain(view.Rows, r => r.TokenId == unpaid.Id);
 
-        await Read<CallRow>(await desk.PostAsJsonAsync("/api/calls", new CreateCallRequest(CallDesk.Reception, null, token.Id, false)), HttpStatusCode.Created);
+        await Read<CallRow>(await desk.PostAsJsonAsync("/api/calls", new CreateCallRequest(CallDesk.Reception, null, tokenId, false)), HttpStatusCode.Created);
         Assert.Equal("to-reception.mp3", (await NextAsync(station, stationId))!.Clips[1]);
 
         var admin = await UserAsync(Roles.SuperAdmin);
@@ -426,15 +440,20 @@ public sealed class CallTests(ApiFixture api)
     {
         var triageToken = await api.NewTokenAsync("triage");
         var doctorToken = await api.NewTokenAsync("doctor");
-        Assert.NotEqual(triageToken.QueueNumber, doctorToken.QueueNumber);
+        Assert.Null(doctorToken.QueueNumber);
 
         // The department changes at registration; the number on the patient's slip does not.
         var desk = await api.FeeDeskAsync();
         var patient = await Read<PatientDto>(await desk.SendAsync(Keyed("/api/patients", new SavePatientRequest(Name("احمد"), null, "محمود", Gender.Male, null, 30, null, null))), HttpStatusCode.Created);
-        var paid = await desk.SendAsync(Keyed("/api/reception-fees/pay", new PaymentRequest(doctorToken.InvoiceId, doctorToken.Balance, PaymentMethod.Cash, null, doctorToken.InvoiceVersion)));
+        var cashier = await api.FeeCashierAsync();
+        var paid = await cashier.SendAsync(Keyed("/api/payments", new PaymentRequest(doctorToken.InvoiceId, doctorToken.Balance, PaymentMethod.Cash, null, doctorToken.InvoiceVersion)));
         Assert.True(paid.IsSuccessStatusCode);
+        var paidOther = await cashier.SendAsync(Keyed("/api/payments", new PaymentRequest(triageToken.InvoiceId, triageToken.Balance, PaymentMethod.Cash, null, triageToken.InvoiceVersion)));
+        Assert.True(paidOther.IsSuccessStatusCode);
+        var number = (await Read<VisitTokenRow>(await desk.GetAsync($"/api/visit-tokens/{doctorToken.Id}"))).QueueNumber;
+        Assert.NotEqual((await Read<VisitTokenRow>(await desk.GetAsync($"/api/visit-tokens/{triageToken.Id}"))).QueueNumber, number);
         var visit = await Read<VisitRow>(await desk.SendAsync(Keyed("/api/visits", new CreateVisitRequest(patient.Id, await api.DepartmentIdAsync("triage"), null, null, null, doctorToken.Id))), HttpStatusCode.Created);
-        Assert.Equal(doctorToken.QueueNumber, visit.QueueNumber);
+        Assert.Equal(number, visit.QueueNumber);
     }
 
     [Fact]

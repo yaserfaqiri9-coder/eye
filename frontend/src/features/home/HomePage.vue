@@ -5,7 +5,7 @@ import { useLiveRefresh } from '@/api/realtime'
 import StatCard from '@/components/StatCard.vue'
 import UiAvatar from '@/components/UiAvatar.vue'
 import UiCard from '@/components/UiCard.vue'
-import type { DashboardReport, FinancialReport, OperationsReport } from '@/features/reports/types'
+import type { DashboardReport, FinancialReport } from '@/features/reports/types'
 import { visitStatusLabels, visitStatusTones, type VisitRow } from '@/features/visits/types'
 import { useAuthStore } from '@/stores/auth'
 import { formatTime } from '@/utils/date'
@@ -17,7 +17,6 @@ import PatientsInChart from './PatientsInChart.vue'
 
 const auth = useAuthStore()
 const dashboard = ref<DashboardReport | null>(null)
-const operations = ref<OperationsReport | null>(null)
 const financial = ref<FinancialReport | null>(null)
 const visits = ref<VisitRow[]>([])
 const error = ref('')
@@ -25,14 +24,12 @@ const queueTab = ref('waiting')
 
 async function load() {
   try {
-    const [nextDashboard, nextOperations, nextFinancial, nextVisits] = await Promise.all([
+    const [nextDashboard, nextFinancial, nextVisits] = await Promise.all([
       auth.can('reports.view') ? api<DashboardReport>('/reports/dashboard') : null,
-      auth.can('reports.view') ? api<OperationsReport>('/reports/operations') : null,
       auth.can('ledger.view') ? api<FinancialReport>('/reports/financial') : null,
       auth.can('visits.view') ? api<{ items: VisitRow[] }>('/visits?pageSize=100').then((r) => r.items) : [],
     ])
     dashboard.value = nextDashboard
-    operations.value = nextOperations
     financial.value = nextFinancial
     visits.value = nextVisits
     error.value = ''
@@ -167,8 +164,8 @@ const timeline = computed(() => [...visits.value].sort((a, b) => b.createdAt.loc
   </div>
 
   <!-- Below the fold of the reference layout: today's money and stock figures for the roles that may see them. -->
-  <div v-if="operations" class="home-stats">
-    <StatCard label="اجناس کم‌موجود" :value="operations.lowStockProducts" icon="ri-archive-fill" tone="orange" />
+  <div v-if="dashboard" class="home-stats">
+    <StatCard label="اجناس کم‌موجود" :value="dashboard.lowStockProducts" icon="ri-archive-fill" tone="orange" />
     <StatCard v-if="financial" label="دریافت امروز" :value="money(financial.receipts)" icon="ri-money-dollar-circle-fill" />
     <StatCard v-if="financial" label="مصارف امروز" :value="money(financial.expenses)" icon="ri-wallet-3-fill" tone="red" />
     <StatCard v-if="financial" label="باقی حساب‌ها" :value="money(financial.outstandingNow)" icon="ri-receipt-fill" tone="orange" />

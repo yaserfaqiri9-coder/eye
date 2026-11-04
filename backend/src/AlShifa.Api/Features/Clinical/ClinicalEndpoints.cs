@@ -464,7 +464,7 @@ public static class ClinicalEndpoints
                 || ((v.Doctor == null || v.Doctor.UserId == null)
                     && (db.Consultations.Any(c => c.VisitId == v.Id && c.AuthorUserId == userId)
                         || (!db.Consultations.Any(c => c.VisitId == v.Id) && (v.Department!.Code == "doctor" || v.Status == VisitStatus.ReadyForDoctor))))) &&
-            v.Status != VisitStatus.Completed && v.Status != VisitStatus.Cancelled &&
+            v.Status != VisitStatus.Completed && v.Status != VisitStatus.Cancelled && v.Status != VisitStatus.AwaitingPayment &&
             v.Status != VisitStatus.Registered && v.Status != VisitStatus.Waiting && v.Status != VisitStatus.InPreExam);
 
     private static void MoveVisit(AppDbContext db, Visit visit, VisitStatus to, long userId)
@@ -484,6 +484,11 @@ public static class ClinicalEndpoints
         if (visit.Status == VisitStatus.Cancelled)
         {
             throw new AppException(StatusCodes.Status409Conflict, "visit_closed", "این مراجعه لغو شده است.");
+        }
+
+        if (visit.Status == VisitStatus.AwaitingPayment)
+        {
+            throw new AppException(StatusCodes.Status409Conflict, "payment_required", "فیس معاینه این مراجعه هنوز پرداخت نشده است.");
         }
     }
 

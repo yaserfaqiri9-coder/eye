@@ -1,4 +1,4 @@
-import { call, collectFee, ensureTariffs, openDesk, pick } from './helpers'
+import { admitFromRecord, call, collectPatientFee, ensureTariffs, openDesk, paidToken, pick } from './helpers'
 import { expect, test, type Browser, type Page } from '@playwright/test'
 
 const adminUser = process.env.ALSHIFA_E2E_USER!
@@ -33,6 +33,75 @@ async function staffPage(browser: Browser, userName: string, errors: string[]) {
   return page
 }
 
+test('drug name field suggests by first letters, without replacing what the doctor typed', async ({ page, browser }) => {
+  test.setTimeout(120_000)
+  const errors: string[] = []
+  const stamp = Date.now()
+  const first = `Q${stamp} Alpha 0.25%`
+  const second = `Q${stamp} Alpha 0.5%`
+
+  await login(page, adminUser, adminPassword)
+  await expect(page).not.toHaveURL(/\/login/)
+  for (const [userName, role] of [[`drg_r${stamp}`, 'Receptionist'], [`drg_d${stamp}`, 'Doctor'], [`drg_i${stamp}`, 'Inventory']]) {
+    await call(page, 'POST', '/users', { userName, fullName: `کارمند ${role}`, password, roles: [role] })
+  }
+  const inventory = await staffPage(browser, `drg_i${stamp}`, errors)
+  for (const [index, name] of [first, second].entries()) {
+    await call(inventory, 'POST', '/inventory/products', { code: `DRG${stamp}${index}`, name, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10, isActive: true })
+  }
+
+  const reception = await staffPage(browser, `drg_r${stamp}`, errors)
+  const patient = await call<{ id: number }>(reception, 'POST', '/patients', { firstName: `نسخه${stamp}`, gender: 'Male', confirmNotDuplicate: true })
+  const departments = await call<{ id: number; name: string }[]>(reception, 'GET', '/lookups/departments')
+  await ensureTariffs(page)
+  await openDesk(page, reception)
+  const departmentId = departments.find((d) => d.name === 'معاینه ابتدایی')!.id
+  const visit = await call<{ id: number }>(reception, 'POST', '/visits', { patientId: patient.id, departmentId, tokenId: await paidToken(reception, departmentId) })
+
+  const doctor = await staffPage(browser, `drg_d${stamp}`, errors)
+  await doctor.goto(`/chart/${visit.id}`)
+  await doctor.getByRole('tab', { name: 'نسخه دوا' }).click()
+  const field = doctor.getByRole('combobox', { name: 'نام دوا 1' })
+  const list = doctor.getByRole('listbox', { name: 'نام دوا 1' })
+
+  // The very first letter already opens the list.
+  await field.pressSequentially('q')
+  await expect(list.getByRole('option').first()).toBeVisible()
+  await field.fill('')
+  await expect(list).toHaveCount(0)
+
+  // Typing the first characters lists every drug starting with them; a click fills the whole name.
+  await field.pressSequentially(`q${stamp}`)
+  await expect(list.getByRole('option')).toHaveText([first, second])
+  await list.getByRole('option', { name: second }).click()
+  await expect(field).toHaveValue(second)
+  await expect(list).toHaveCount(0)
+
+  // The keyboard reaches the same choice.
+  await field.fill(`Q${stamp}`)
+  await expect(list.getByRole('option')).toHaveCount(2)
+  await field.press('ArrowDown')
+  await field.press('Enter')
+  await expect(field).toHaveValue(first)
+
+  // Enter never swaps typed text for a similar strength, and does not submit the prescription.
+  await field.fill(`Q${stamp} Alpha`)
+  await expect(list.getByRole('option')).toHaveCount(2)
+  await field.press('Enter')
+  await expect(field).toHaveValue(`Q${stamp} Alpha`)
+  await expect(list).toHaveCount(0)
+  await expect(doctor.getByText('نسخه ثبت و برای دواخانه ارسال شد.')).toHaveCount(0)
+
+  // A drug outside the pharmacy list can still be prescribed.
+  await field.fill(`بیرون از گدام ${stamp}`)
+  await expect(doctor.getByText('موردی پیدا نشد؛ می‌توانید نام را کامل بنویسید.')).toBeVisible()
+  await doctor.getByRole('button', { name: 'ثبت نسخه' }).click()
+  await expect(doctor.getByText('نسخه ثبت و برای دواخانه ارسال شد.')).toBeVisible()
+  await expect(doctor.getByText(`بیرون از گدام ${stamp}`)).toBeVisible()
+  await expect(field).toHaveValue('')
+  expect(errors).toEqual([])
+})
+
 test('full clinical journey crosses departments without re-entering data', async ({ page, browser }) => {
   test.setTimeout(180_000)
   const errors: string[] = []
@@ -64,12 +133,7 @@ test('full clinical journey crosses departments without re-entering data', async
   await reception.getByLabel('یا سن تخمینی').fill('55')
   await reception.getByRole('button', { name: 'ذخیره' }).click()
   await expect(reception).toHaveURL(/\/patients\/\d+$/)
-  await reception.getByRole('button', { name: 'مراجعه جدید' }).click()
-  const vd = reception.getByRole('dialog')
-  await pick(reception, vd, 'بخش', 'معاینه ابتدایی')
-  await collectFee(vd)
-  await vd.getByRole('button', { name: 'ثبت مراجعه' }).click()
-  await expect(vd).toBeHidden()
+  await admitFromRecord(reception)
 
   // Triage lands on their queue, records values, sends to doctor.
   const triage = await staffPage(browser, `tri_${stamp}`, errors)
@@ -92,7 +156,7 @@ test('full clinical journey crosses departments without re-entering data', async
   await triage.getByRole('button', { name: 'ذخیره و ارسال به داکتر' }).click()
   await expect(triage).toHaveURL(/\/triage$/)
 
-  // Vision reached the doctor, who asks for refraction; reception collects its own fee before it can start.
+  // Vision reached the doctor, who asks for refraction; the cashier collects its fee before it can start.
   const doctor = await staffPage(browser, `doc_${stamp}`, errors)
   await expect(doctor).toHaveURL(/\/doctor$/)
   const docRow = doctor.getByRole('row', { name: new RegExp(firstName) }).filter({ hasText: 'آماده برای داکتر' })
@@ -100,10 +164,7 @@ test('full clinical journey crosses departments without re-entering data', async
   const visitRow = await call<{ patientId: number; patientFileNumber: string }>(doctor, 'GET', `/visits/${visitId}`)
   const tests = await call<{ id: number; kind: string }[]>(doctor, 'GET', '/diagnostic-tests')
   await call(doctor, 'POST', '/diagnostic-orders', { patientId: visitRow.patientId, visitId: Number(visitId), testId: tests.find((t) => t.kind === 'Refraction')!.id })
-  await reception.goto('/reception')
-  await reception.getByRole('row', { name: new RegExp(firstName) }).filter({ hasText: 'رفرکشن' }).getByRole('button', { name: 'دریافت فیس' }).click()
-  await reception.getByRole('dialog').getByRole('button', { name: 'ثبت دریافت' }).click()
-  await expect(reception.getByRole('dialog')).toBeHidden()
+  await collectPatientFee(reception, visitRow.patientFileNumber)
 
   // The optometrist records stages separately; completing sends the patient back to the same doctor.
   await triage.goto(`/refraction/${visitId}`)

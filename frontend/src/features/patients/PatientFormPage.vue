@@ -35,7 +35,9 @@ const key = newIdempotencyKey()
 const confirmKey = newIdempotencyKey()
 
 const today = todayIso()
-const backTo = computed(() => (props.id ? `/patients/${props.id}` : '/patients'))
+/** Registering from the reception flow returns there with this patient chosen, so the desk keeps its place. */
+const admitting = computed(() => !props.id && route.query.admit === '1')
+const backTo = computed(() => (props.id ? `/patients/${props.id}` : admitting.value ? '/reception' : '/patients'))
 
 async function load() {
   if (!props.id) return
@@ -79,7 +81,7 @@ async function save(confirmNotDuplicate = false) {
       await useToken(saved.id, String(route.query.token))
       return
     }
-    await router.push(`/patients/${saved.id}`)
+    await router.push(admitting.value ? { name: 'reception', query: { patient: saved.id } } : `/patients/${saved.id}`)
   } catch (cause) {
     if (cause instanceof ApiError && cause.code === 'possible_duplicate') {
       matches.value = (cause.problem?.matches as PatientListItem[]) ?? []
@@ -110,7 +112,7 @@ onMounted(load)
   <UiFormPage
     :title="id ? 'ویرایش مریض' : 'ثبت مریض جدید'"
     :back-to="backTo"
-    :back-label="id ? 'بازگشت به پرونده' : 'بازگشت به مریضان'"
+    :back-label="id ? 'بازگشت به پرونده' : admitting ? 'بازگشت به پذیرش' : 'بازگشت به مریضان'"
     :dirty="dirty"
     :saving="saving"
     :error="error"
@@ -118,10 +120,10 @@ onMounted(load)
     @submit="save()"
   >
     <div v-if="matches.length" role="alert">
-      <div class="alert alert-warning">مریض مشابه پیدا شد. اگر همان شخص است، از پرونده موجود استفاده کنید تا برای یک نفر دو پرونده ساخته نشود.</div>
+      <div class="alert alert-warning">مریض مشابه پیدا شد. اگر همان شخص است، همان پرونده را انتخاب کنید تا برای یک نفر دو پرونده ساخته نشود.</div>
       <ul class="list-unstyled">
         <li v-for="match in matches" :key="match.id" class="mb-2">
-          <RouterLink :to="`/patients/${match.id}`">
+          <RouterLink :to="admitting ? { name: 'reception', query: { patient: match.id } } : `/patients/${match.id}`">
             <span class="ltr-num">{{ match.fileNumber }}</span> — {{ patientName(match) }}، پدر: {{ match.fatherName ?? '—' }}
           </RouterLink>
         </li>

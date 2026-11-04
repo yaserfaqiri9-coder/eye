@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { call, collectFee, ensureTariffs, openDesk } from './helpers'
+import { call, ensureTariffs, openDesk, pick } from './helpers'
 
 const adminUser = process.env.ALSHIFA_E2E_USER!
 const adminPassword = process.env.ALSHIFA_E2E_PASSWORD!
@@ -33,8 +33,9 @@ test('searchable field: typing, keyboard, tag, clearing, no results, and only re
   await booking.getByRole('button', { name: 'انصراف' }).click()
   await expect(booking).toBeHidden()
 
-  await reception.getByRole('button', { name: 'پذیرش مریض حضوری' }).click()
-  const dialog = reception.getByRole('dialog')
+  // Server search, with the same field type.
+  await pick(reception, reception, 'مریض', `فهرست${stamp}`)
+  const dialog = reception.locator('form').filter({ has: reception.getByRole('button', { name: 'ثبت مراجعه' }) })
   const department = dialog.getByRole('combobox', { name: 'بخش' })
   const list = reception.getByRole('listbox', { name: 'بخش' })
 
@@ -45,12 +46,12 @@ test('searchable field: typing, keyboard, tag, clearing, no results, and only re
   await expect(list).toBeVisible()
   expect(await department.getAttribute('aria-controls')).toBe(await list.getAttribute('id'))
 
-  // The list sits fully on screen and above the dialog.
+  // The list sits fully on screen and above everything else.
   const box = (await list.boundingBox())!
   expect(box.y + box.height).toBeLessThanOrEqual(768)
   expect(await list.evaluate((el) => el.contains(document.elementFromPoint(el.getBoundingClientRect().left + 10, el.getBoundingClientRect().top + 10)))).toBe(true)
 
-  // Esc closes the list and leaves the dialog open.
+  // Esc closes the list and leaves the form open.
   await reception.keyboard.press('Escape')
   await expect(list).toBeHidden()
   await expect(dialog).toBeVisible()
@@ -89,22 +90,10 @@ test('searchable field: typing, keyboard, tag, clearing, no results, and only re
   await reception.keyboard.press('Escape')
   await expect(doctor).toHaveValue('')
 
-  // Server search, with the same field type.
-  await collectFee(dialog)
-  const patientField = dialog.getByRole('combobox', { name: 'مریض', exact: true })
-  await patientField.fill(`فهرست${stamp}`)
-  await reception.getByRole('listbox').getByRole('option', { name: new RegExp(patient.fileNumber) }).click()
-  await expect(dialog.locator('.xr-chip').first()).toContainText(patient.fileNumber)
-
-  // Choosing marks the dialog as edited, so closing asks first.
-  await reception.keyboard.press('Escape')
-  await expect(dialog.getByRole('alert')).toContainText('ذخیره نشده')
-  await dialog.getByRole('button', { name: 'ادامه ویرایش' }).click()
-
   // The chosen ids are what reach the server.
   const posted: Record<string, unknown>[] = []
   reception.on('request', (request) => {
-    if (request.method() === 'POST' && request.url().endsWith('/api/visits')) posted.push(request.postDataJSON())
+    if (request.method() === 'POST' && request.url().endsWith('/api/admissions')) posted.push(request.postDataJSON())
   })
   await dialog.getByRole('button', { name: 'ثبت مراجعه' }).click()
   await expect(dialog).toBeHidden()

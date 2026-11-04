@@ -79,36 +79,78 @@ public sealed class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
 
     private readonly SemaphoreSlim deskLock = new(1, 1);
     private HttpClient? feeDesk;
+    private HttpClient? feeCashier;
 
-    /// <summary>A receptionist with an open cash session on a register of their own.</summary>
+    /// <summary>A receptionist. Reception admits patients and takes no money.</summary>
     public async Task<HttpClient> FeeDeskAsync()
     {
         await deskLock.WaitAsync();
         try
         {
-            if (feeDesk is not null)
+            if (feeDesk is null)
             {
-                return feeDesk;
+                var name = $"desk_{Guid.NewGuid():N}"[..20];
+                await CreateUserAsync(name, Roles.Receptionist);
+                feeDesk = await LoginAsync(name);
             }
 
-            var name = $"desk_{Guid.NewGuid():N}"[..20];
-            await CreateUserAsync(name, Roles.Receptionist);
-            var desk = await LoginAsync(name);
-
-            using var scope = Services.CreateScope();
-            var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var register = new CashRegister { Name = name };
-            context.CashRegisters.Add(register);
-            await context.SaveChangesAsync();
-
-            var opened = await desk.PostAsJsonAsync("/api/cash/sessions", new OpenSessionRequest(register.Id, 0));
-            Assert.True(opened.IsSuccessStatusCode, await opened.Content.ReadAsStringAsync());
-            return feeDesk = desk;
+            return feeDesk;
         }
         finally
         {
             deskLock.Release();
         }
+    }
+
+    /// <summary>A cashier with an open cash session on a register of their own. Every fee is collected here.</summary>
+    public async Task<HttpClient> FeeCashierAsync()
+    {
+        await deskLock.WaitAsync();
+        try
+        {
+            if (feeCashier is null)
+            {
+                var name = $"cash_{Guid.NewGuid():N}"[..20];
+                await CreateUserAsync(name, Roles.Cashier);
+                var cashier = await LoginAsync(name);
+
+                using var scope = Services.CreateScope();
+                var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var register = new CashRegister { Name = name };
+                context.CashRegisters.Add(register);
+                await context.SaveChangesAsync();
+
+                var opened = await cashier.PostAsJsonAsync("/api/cash/sessions", new OpenSessionRequest(register.Id, 0));
+                Assert.True(opened.IsSuccessStatusCode, await opened.Content.ReadAsStringAsync());
+                feeCashier = cashier;
+            }
+
+            return feeCashier;
+        }
+        finally
+        {
+            deskLock.Release();
+        }
+    }
+
+    /// <summary>The unpaid invoice of one patient's prepaid request, as the cashier's list would show it.</summary>
+    public async Task<OrderFee> OrderFeeAsync(string fileNumber, string testName)
+    {
+        using var scope = Services.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return await context.DiagnosticOrders.AsNoTracking()
+            .Where(o => o.Patient!.FileNumber == fileNumber && o.Test!.Name == testName && o.Invoice != null && o.Invoice.Status != InvoiceStatus.Void && o.Invoice.Total - o.Invoice.Discount - o.Invoice.Paid > 0)
+            .Select(o => new OrderFee(o.Invoice!.Id, o.Invoice.Total - o.Invoice.Discount - o.Invoice.Paid, o.Invoice.Version))
+            .SingleAsync();
+    }
+
+    public async Task<JsonElement> PayFeeAsync(OrderFee fee)
+    {
+        var cashier = await FeeCashierAsync();
+        var response = await cashier.SendAsync(Keyed("/api/payments", new PaymentRequest(fee.InvoiceId, fee.Balance, PaymentMethod.Cash, null, fee.InvoiceVersion)));
+        var text = await response.Content.ReadAsStringAsync();
+        Assert.True(response.StatusCode == System.Net.HttpStatusCode.Created, text);
+        return JsonSerializer.Deserialize<JsonElement>(text);
     }
 
     public static HttpRequestMessage Keyed(string url, object body, string? key = null)
@@ -133,12 +175,12 @@ public sealed class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
         return JsonSerializer.Deserialize<VisitTokenRow>(text, JsonSerializerOptions.Web)!;
     }
 
-    /// <summary>What reception does before a visit can exist: a token with its visit fee fully paid.</summary>
+    /// <summary>What must happen before a visit can exist: a token from reception, with its visit fee fully paid at the cashier.</summary>
     public async Task<long> PaidTokenAsync(string department = "triage")
     {
         var token = await NewTokenAsync(department);
-        var desk = await FeeDeskAsync();
-        var paid = await desk.SendAsync(Keyed("/api/reception-fees/pay", new PaymentRequest(token.InvoiceId, token.Balance, PaymentMethod.Cash, null, token.InvoiceVersion)));
+        var cashier = await FeeCashierAsync();
+        var paid = await cashier.SendAsync(Keyed("/api/payments", new PaymentRequest(token.InvoiceId, token.Balance, PaymentMethod.Cash, null, token.InvoiceVersion)));
         Assert.True(paid.IsSuccessStatusCode, await paid.Content.ReadAsStringAsync());
         return token.Id;
     }
@@ -207,3 +249,6 @@ public sealed class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
 
 [CollectionDefinition("api")]
 public sealed class ApiCollection : ICollectionFixture<ApiFixture>;
+
+/// <summary>What the cashier needs to collect one prepaid request.</summary>
+public sealed record OrderFee(long InvoiceId, decimal Balance, int InvoiceVersion);

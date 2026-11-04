@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/api/http'
 import { warmLookups } from '@/api/lookups'
+import { useAudioStation, useAudioStationHost } from '@/features/calls/audioStation'
 import { connectRealtime, disconnectRealtime, liveConnected } from '@/api/realtime'
 import { prefetchForRoles } from '@/router/pages'
 import { useAuthStore } from '@/stores/auth'
@@ -15,6 +16,8 @@ const MINI_KEY = 'alshifa.sidebar.mini'
 const BACKUP_CHECK_MS = 10 * 60_000
 
 const auth = useAuthStore()
+useAudioStationHost()
+const { needsAttention: stationNeedsClick } = useAudioStation()
 const sidebarOpen = ref(false)
 const sidebarMini = ref(readMini())
 const sidebarCollapsed = ref(sidebarMini.value)
@@ -100,11 +103,8 @@ onBeforeUnmount(() => {
         <div v-if="backupProblem" class="alert alert-danger" role="alert">
           پشتیبان‌گیری خودکار مشکل دارد. آخرین پشتیبان موفق: {{ formatDateTime(backupProblem.lastSuccessAt) }}. به مسئول سیستم اطلاع دهید.
         </div>
-        <RouterView v-slot="{ Component }">
-          <KeepAlive include="AudioStationPage">
-            <component :is="Component" />
-          </KeepAlive>
-        </RouterView>
+        <div v-if="stationNeedsClick" class="alert alert-warning" role="status">این رایانه مرکز پخش صوت است. برای فعال‌شدن صدا یک بار روی صفحه کلیک کنید.</div>
+        <RouterView />
       </main>
       <AppFooter />
     </div>

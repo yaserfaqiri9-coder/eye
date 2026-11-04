@@ -1,7 +1,7 @@
 export interface VisitRow {
   id: number
   visitNumber: string
-  queueNumber: number
+  queueNumber: number | null
   patientId: number
   patientFileNumber: string
   patientName: string
@@ -16,11 +16,12 @@ export interface VisitRow {
   version: number
   nextStatuses: string[]
   patientGender: string
+  feeStatus: 'Paid' | 'Unpaid' | 'Refunded' | 'None'
 }
 
 export interface VisitToken {
   id: number
-  queueNumber: number
+  queueNumber: number | null
   tokenDate: string
   departmentId: number
   departmentName: string
@@ -36,16 +37,26 @@ export interface VisitToken {
   version: number
 }
 
-export interface ReceptionFee {
+/** One visit at the desk: who, where it stands, what is owed and the number it earned. */
+export interface Admission {
+  visitId: number
+  visitNumber: string
+  queueNumber: number | null
+  patientId: number
+  patientFileNumber: string
+  patientName: string
+  departmentName: string
+  doctorName: string | null
+  status: string
+  visitDate: string
   invoiceId: number
   invoiceNumber: string
-  patientName: string | null
-  patientFileNumber: string | null
-  description: string
   total: number
   discount: number
   balance: number
   invoiceVersion: number
+  paid: boolean
+  receiptNumber: string | null
 }
 
 export interface LookupItem {
@@ -54,6 +65,7 @@ export interface LookupItem {
 }
 
 export const visitStatusLabels: Record<string, string> = {
+  AwaitingPayment: 'منتظر پرداخت',
   Registered: 'ثبت‌شده',
   Waiting: 'در انتظار',
   InPreExam: 'معاینه ابتدایی',
@@ -66,6 +78,7 @@ export const visitStatusLabels: Record<string, string> = {
 }
 
 export const visitStatusTones: Record<string, string> = {
+  AwaitingPayment: 'red',
   Registered: 'cyan',
   Waiting: 'orange',
   InPreExam: 'primary',
@@ -75,4 +88,10 @@ export const visitStatusTones: Record<string, string> = {
   FollowUpRequired: 'orange',
   Completed: 'green',
   Cancelled: 'red',
+}
+
+export const feeStatusLabels: Record<string, { label: string; tone: string }> = {
+  Paid: { label: 'پرداخت‌شده', tone: 'green' },
+  Unpaid: { label: 'پرداخت‌نشده', tone: 'red' },
+  Refunded: { label: 'برگشت‌شده', tone: 'orange' },
 }

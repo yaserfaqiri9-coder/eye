@@ -5,6 +5,7 @@ import { testOptions } from '@/api/lookups'
 import AttachmentPanel from '@/components/AttachmentPanel.vue'
 import ShamsiDateInput from '@/components/ShamsiDateInput.vue'
 import UiCard from '@/components/UiCard.vue'
+import UiAutocomplete from '@/components/UiAutocomplete.vue'
 import UiComboBox, { type ComboOption } from '@/components/UiComboBox.vue'
 import TransferDoctorModal from '@/features/visits/TransferDoctorModal.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -284,6 +285,9 @@ async function submitAmend() {
 }
 
 const rx = reactive({ notes: '', items: [{ drugName: '', dose: '', route: '', duration: '', instructions: '', quantity: 1 }], key: newIdempotencyKey(), saving: false })
+
+const searchDrugs = (query: string, signal: AbortSignal) =>
+  api<string[]>(`/prescriptions/drugs?${new URLSearchParams({ q: query })}`, { signal })
 
 async function submitRx() {
   rx.saving = true
@@ -749,10 +753,10 @@ watch(() => props.visitId, load)
           <form @submit.prevent="submitRx">
             <div class="xr-table-wrap mb-2">
               <table class="xr-clinical-table">
-                <thead><tr><th>نام دوا <span class="text-danger">*</span></th><th>مقدار</th><th>روش مصرف</th><th>مدت</th><th>توضیح</th><th>تعداد <span class="text-danger">*</span></th><th></th></tr></thead>
+                <thead><tr><th class="rx-drug">نام دوا <span class="text-danger">*</span></th><th>مقدار</th><th>روش مصرف</th><th>مدت</th><th>توضیح</th><th>تعداد <span class="text-danger">*</span></th><th></th></tr></thead>
                 <tbody>
                   <tr v-for="(item, i) in rx.items" :key="i">
-                    <td><input v-model="item.drugName" class="form-control" :aria-label="`نام دوا ${i + 1}`" maxlength="200" required /></td>
+                    <td><UiAutocomplete v-model="item.drugName" :label="`نام دوا ${i + 1}`" :search="searchDrugs" :maxlength="200" required placeholder="حرف اول نام دوا را بنویسید" /></td>
                     <td><input v-model="item.dose" class="form-control" :aria-label="`مقدار ${i + 1}`" maxlength="100" /></td>
                     <td><input v-model="item.route" class="form-control" :aria-label="`روش مصرف ${i + 1}`" maxlength="100" /></td>
                     <td><input v-model="item.duration" class="form-control" :aria-label="`مدت ${i + 1}`" maxlength="100" /></td>
@@ -953,6 +957,11 @@ watch(() => props.visitId, load)
 </template>
 
 <style scoped>
+/* Drug names carry a strength and form, and must stay readable in full once chosen. */
+.rx-drug {
+  min-width: 280px;
+}
+
 .chart-placeholder {
   display: grid;
   gap: 14px;

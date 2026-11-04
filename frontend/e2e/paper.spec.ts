@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { call, ensureTariffs, openDesk, paidToken, pick } from './helpers'
+import { call, collectPatientFee, ensureTariffs, openDesk, paidToken, pick } from './helpers'
 
 const adminUser = process.env.ALSHIFA_E2E_USER!
 const adminPassword = process.env.ALSHIFA_E2E_PASSWORD!
@@ -98,9 +98,7 @@ test('the file prints on one double-sided A4 sheet from recorded data, and the o
   await call(doctor, 'PUT', `/consultations/${visit.id}`, { diagnoses: [], version: null })
   const tests = await call<{ id: number; kind: string }[]>(doctor, 'GET', '/diagnostic-tests')
   await call(doctor, 'POST', '/diagnostic-orders', { patientId: patient.id, visitId: visit.id, testId: tests.find((t) => t.kind === 'Refraction')!.id })
-  const fees = await call<{ invoiceId: number; patientFileNumber: string; balance: number; invoiceVersion: number }[]>(reception, 'GET', '/reception-fees')
-  const fee = fees.find((f) => f.patientFileNumber === patient.fileNumber)!
-  await call(reception, 'POST', '/reception-fees/pay', { invoiceId: fee.invoiceId, amount: fee.balance, method: 'Cash', invoiceVersion: fee.invoiceVersion })
+  await collectPatientFee(reception, patient.fileNumber)
 
   await triage.goto(`/refraction/${visit.id}`)
   await triage.getByLabel('دید بدون اصلاح OD').fill('6/18')

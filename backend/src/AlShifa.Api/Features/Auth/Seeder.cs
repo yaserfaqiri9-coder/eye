@@ -46,7 +46,10 @@ public static class Seeder
         ("عکس‌برداری", DiagnosticKind.Imaging, ServiceCodes.Imaging),
     ];
 
-    private const string ReceptionRegister = "صندوق پذیرش";
+    private static readonly (string Role, string Permission)[] RetiredPermissions =
+    [
+        (Roles.Receptionist, "cash.create"),
+    ];
 
     /// <summary>Roles, permissions and departments are reference data and are safe to apply in every environment.</summary>
     public static async Task SeedReferenceDataAsync(IServiceProvider services)
@@ -72,6 +75,12 @@ public static class Seeder
             {
                 await roles.AddClaimAsync(role, new Claim(RolePermissions.ClaimType, permission));
             }
+
+            // New permissions are added above, and a database already in use keeps the ones a role has since lost unless they are taken here.
+            foreach (var retired in RetiredPermissions.Where(r => r.Role == name && existing.Contains(r.Permission)))
+            {
+                await roles.RemoveClaimAsync(role, new Claim(RolePermissions.ClaimType, retired.Permission));
+            }
         }
 
         var codes = await db.Departments.Select(d => d.Code).ToListAsync();
@@ -92,12 +101,6 @@ public static class Seeder
         if (!await db.CashRegisters.AnyAsync())
         {
             db.CashRegisters.Add(new CashRegister { Name = "صندوق اصلی" });
-        }
-
-        // A register holds one open session at a time, so the reception desk needs its own.
-        if (!await db.CashRegisters.AnyAsync(r => r.Name == ReceptionRegister))
-        {
-            db.CashRegisters.Add(new CashRegister { Name = ReceptionRegister });
         }
 
         var serviceCodes = await db.Services.Select(s => s.Code).ToListAsync();

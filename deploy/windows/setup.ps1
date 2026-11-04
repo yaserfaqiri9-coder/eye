@@ -112,7 +112,13 @@ function Test-Everything([string]$Url, [string]$HealthUrl) {
         }
     }
 
-    Invoke-Script 'build-voice-pack.ps1' @('-Mode', 'Check', '-VoiceDir', (Join-Path $Root 'storage\voice')) -AllowFailure
+    $voiceDir = Join-Path $Root 'storage\voice'
+    $bundledVoice = Join-Path $package 'voice'
+    if (Test-Path $bundledVoice) {
+        Invoke-Script 'build-voice-pack.ps1' @('-Mode', 'Import', '-SourceDir', $bundledVoice, '-VoiceDir', $voiceDir) -AllowFailure
+    } else {
+        Invoke-Script 'build-voice-pack.ps1' @('-Mode', 'Check', '-VoiceDir', $voiceDir) -AllowFailure
+    }
     if ($script:lastScriptCode) { '##VOICE pending' }
 }
 

@@ -43,11 +43,12 @@ async function login(page: Page, user: string, pass: string) {
   await expect(page).not.toHaveURL(/\/login/)
 }
 
-async function staff(browser: Browser, admin: Page, role: string) {
+async function staff(browser: Browser, admin: Page, role: string, listen = false) {
   const userName = `${role.toLowerCase()}_${Date.now()}`
   await call(admin, 'POST', '/users', { userName, fullName: userName, password, roles: [role] })
   const context = await browser.newContext()
   const page = await context.newPage()
+  if (listen) await spyOnAudio(page)
   await login(page, userName, password)
   return { page, context }
 }
@@ -57,6 +58,32 @@ async function newVisit(reception: Page, departmentId: number) {
   const patient = await call<{ id: number }>(reception, 'POST', '/patients', { firstName: `فراخوان${crypto.randomUUID().slice(0, 8)}`, gender: 'Male', estimatedAge: 30 })
   return call<{ id: number; queueNumber: number }>(reception, 'POST', '/visits', { patientId: patient.id, departmentId, tokenId })
 }
+
+test('with no station online, a call plays on the computer that pressed the button', async ({ page, browser }) => {
+  test.setTimeout(120_000)
+  mkdirSync(voiceDir, { recursive: true })
+  for (const clip of ['to-vision.mp3', 'again-vision.mp3']) writeFileSync(join(voiceDir, clip), silence)
+
+  await login(page, adminUser, adminPassword)
+  await ensureTariffs(page)
+  const reception = await staff(browser, page, 'Receptionist')
+  await openDesk(page, reception.page)
+  const departments = await call<{ id: number; name: string }[]>(reception.page, 'GET', '/lookups/departments')
+  const visit = await newVisit(reception.page, departments.find((d) => d.name === 'معاینه ابتدایی')!.id)
+  writeFileSync(join(voiceDir, `number-${String(visit.queueNumber).padStart(4, '0')}.mp3`), silence)
+
+  const nurse = await staff(browser, page, 'Triage', true)
+  await nurse.page.goto('/triage')
+  await expect(nurse.page.getByRole('status').filter({ hasText: 'فراخوان از بلندگوی همین رایانه پخش می‌شود' })).toBeVisible()
+
+  const number = visit.queueNumber.toLocaleString('fa-AF', { useGrouping: false })
+  await nurse.page.getByRole('button', { name: `فراخوان نوبت ${number}`, exact: true }).click()
+  await expect.poll(async () => (await audio(nurse.page)).ended.length, { timeout: 30_000 }).toBe(2)
+  await expect(nurse.page.getByRole('row').filter({ hasText: number }).getByText('اعلان شد')).toBeVisible({ timeout: 15_000 })
+
+  await reception.context.close()
+  await nurse.context.close()
+})
 
 test('calls play once, one at a time, survive a network outage without repeats, and report a missing file', async ({ page, browser }) => {
   test.setTimeout(180_000)
@@ -85,7 +112,7 @@ test('calls play once, one at a time, survive a network outage without repeats, 
   await expect(page.getByText('غیرفعال')).toBeVisible()
   const faNumber = (visit: { queueNumber: number }) => visit.queueNumber.toLocaleString('fa-AF', { useGrouping: false })
   const callButton = (visit: { queueNumber: number }, label = 'فراخوان') => nurse.page.getByRole('button', { name: `${label} نوبت ${faNumber(visit)}`, exact: true })
-  const nurseRow = (visit: { queueNumber: number }) => nurse.page.getByRole('row').filter({ has: callButton(visit) })
+  const nurseRow = (visit: { queueNumber: number }) => nurse.page.getByRole('row').filter({ has: nurse.page.getByRole('group', { name: `فراخوان نوبت ${faNumber(visit)}`, exact: true }) })
 
   // The dedicated role reaches the station page and nothing about patients.
   const speaker = await staff(browser, page, 'AudioStation')
@@ -124,10 +151,11 @@ test('calls play once, one at a time, survive a network outage without repeats, 
   }
   for (const visit of [first, second]) await expect(nurseRow(visit).getByText('اعلان شد')).toBeVisible({ timeout: 15_000 })
 
-  // A reload is not a reason to repeat anything. Sound needs one more click, then the speaker stays silent.
+  // A reload is not a reason to repeat anything. This computer takes the station back, at the first click where the browser requires one, and the speaker stays silent.
   await page.reload()
-  await page.getByRole('button', { name: 'فعال‌سازی صدا در این رایانه' }).click()
+  await page.getByRole('heading', { name: 'مرکز پخش صوت' }).click()
   await expect(page.getByText('فعال و آماده پخش')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'فعال‌سازی صدا در این رایانه', exact: true })).toHaveCount(0)
   await page.waitForTimeout(6_000)
   expect((await audio(page)).started).toHaveLength(0)
 
@@ -154,7 +182,8 @@ test('calls play once, one at a time, survive a network outage without repeats, 
   expect((await audio(page)).started).toHaveLength(4)
 
   // Attendance is recorded on the row and does not move the patient.
-  await nurse.page.getByRole('button', { name: `نوبت ${faNumber(first)} حاضر شد` }).click()
+  await nurse.page.getByRole('button', { name: `گزینه‌های بیشتر نوبت ${faNumber(first)}`, exact: true }).click()
+  await nurse.page.getByRole('menuitem', { name: `نوبت ${faNumber(first)} حاضر شد` }).click()
   await expect(nurseRow(first).getByText('حاضر شد', { exact: true })).toBeVisible()
   await expect(nurseRow(first).getByText('ثبت‌شده')).toBeVisible()
 

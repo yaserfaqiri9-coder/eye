@@ -53,8 +53,8 @@ public static class RolePermissions
         {
             ["patients"] = "VCEP", ["visits"] = "VCEXP", ["appointments"] = "VCEXP", ["reports"] = "V",
 
-            // Limited finance: visit, refraction and imaging fees and their own cash session, nothing else.
-            ["visitfees"] = "VC", ["cash"] = "VCE",
+            // Invoices the visit fee and takes no money. Cash view and edit only close a session opened before all fees moved to the cashier.
+            ["visitfees"] = "VC", ["cash"] = "VE",
         },
         [Roles.Triage] = new()
         {
