@@ -458,6 +458,18 @@ public class SurgeryCase
     [MaxLength(2000)]
     public string? PostOpStatus { get; set; }
 
+    /// <summary>The kit this operation uses. Its supplies must be recorded before the case can be completed.</summary>
+    public int? PackageId { get; set; }
+
+    public SurgeryPackage? Package { get; set; }
+
+    /// <summary>Set once the supplies used have left stock. Recorded only once; a mistake is reversed from the stock page.</summary>
+    public DateTime? SuppliesRecordedAt { get; set; }
+
+    public long? SuppliesRecordedByUserId { get; set; }
+
+    public int? SuppliesLocationId { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public int Version { get; set; }

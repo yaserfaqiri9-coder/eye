@@ -116,10 +116,26 @@ async function submitRefund() {
   }
 }
 
-const expense = reactive({ open: false, category: '', description: '', amount: 0, date: todayIso() as string | null, saving: false, error: '', key: '' })
+const undoDiscount = reactive({ row: null as InvoiceRow | null, reason: '', saving: false, error: '' })
 
-function openExpense() {
-  Object.assign(expense, { open: true, category: '', description: '', amount: 0, date: todayIso(), saving: false, error: '', key: newIdempotencyKey() })
+async function submitUndoDiscount() {
+  undoDiscount.saving = true
+  undoDiscount.error = ''
+  try {
+    await api(`/invoices/${undoDiscount.row!.id}/discount/cancel`, { method: 'POST', body: { reason: undoDiscount.reason, version: undoDiscount.row!.version } })
+    undoDiscount.row = null
+    await loadAll()
+  } catch (cause) {
+    undoDiscount.error = errorMessage(cause)
+  } finally {
+    undoDiscount.saving = false
+  }
+}
+
+const expense = reactive({ open: false, correcting: null as ExpenseRow | null, reason: '', category: '', description: '', amount: 0, date: todayIso() as string | null, saving: false, error: '', key: '' })
+
+function openExpense(row?: ExpenseRow) {
+  Object.assign(expense, { open: true, correcting: row ?? null, reason: '', category: row?.category ?? '', description: row?.description ?? '', amount: row?.amount ?? 0, date: row?.expenseDate ?? todayIso(), saving: false, error: '', key: newIdempotencyKey() })
 }
 
 async function submitExpense() {
@@ -130,7 +146,9 @@ async function submitExpense() {
   expense.saving = true
   expense.error = ''
   try {
-    await api('/expenses', { method: 'POST', idempotencyKey: expense.key, body: { category: expense.category, description: expense.description, amount: expense.amount, expenseDate: expense.date } })
+    const body = { category: expense.category, description: expense.description, amount: expense.amount, expenseDate: expense.date }
+    if (expense.correcting) await api(`/expenses/${expense.correcting.id}/correct`, { method: 'POST', body: { ...body, reason: expense.reason, version: expense.correcting.version } })
+    else await api('/expenses', { method: 'POST', idempotencyKey: expense.key, body })
     expense.open = false
     await loadAll()
   } catch (cause) {
@@ -208,7 +226,10 @@ onMounted(() => {
                 <td>{{ money(row.refunded) }}</td>
                 <td>{{ money(row.balance) }}</td>
                 <td><span class="xr-badge" :class="`xr-badge--${invoiceStatusTones[row.status]}`">{{ invoiceStatusLabels[row.status] }}</span></td>
-                <td v-if="auth.can('invoices.approve')"><button v-if="row.balance > 0" type="button" class="btn btn-soft btn-sm" @click="openDiscount(row)">تخفیف</button></td>
+                <td v-if="auth.can('invoices.approve')" class="text-nowrap">
+                  <button v-if="row.balance > 0" type="button" class="btn btn-soft btn-sm" @click="openDiscount(row)">تخفیف</button>
+                  <button v-if="row.discount > 0 && row.paid === 0 && row.status !== 'Void'" type="button" class="btn btn-soft-danger btn-sm ms-2" @click="Object.assign(undoDiscount, { row, reason: '', saving: false, error: '' })">برگشت تخفیف</button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -235,7 +256,7 @@ onMounted(() => {
       </template>
 
       <template v-else>
-        <button v-if="auth.can('expenses.create')" type="button" class="btn btn-primary mb-3" @click="openExpense">ثبت مصرف</button>
+        <button v-if="auth.can('expenses.create')" type="button" class="btn btn-primary mb-3" @click="openExpense()">ثبت مصرف</button>
         <p v-if="expenses.length === 0" class="xr-state">مصرفی ثبت نشده است.</p>
         <div v-else class="xr-table-wrap">
           <table class="xr-table">
@@ -248,7 +269,12 @@ onMounted(() => {
                 <td>{{ money(row.amount) }}</td>
                 <td>{{ formatDate(row.expenseDate) }}</td>
                 <td>{{ row.status === 'Recorded' ? 'ثبت‌شده' : 'لغو شده' }}</td>
-                <td v-if="auth.can('expenses.cancel')"><button v-if="row.status === 'Recorded'" type="button" class="btn btn-soft-danger btn-sm" @click="Object.assign(cancelling, { row, reason: '', error: '' })">لغو</button></td>
+                <td v-if="auth.can('expenses.cancel')" class="text-nowrap">
+                  <template v-if="row.status === 'Recorded'">
+                    <button v-if="auth.can('expenses.create')" type="button" class="btn btn-soft btn-sm" @click="openExpense(row)">اصلاح</button>
+                    <button type="button" class="btn btn-soft-danger btn-sm ms-2" @click="Object.assign(cancelling, { row, reason: '', error: '' })">لغو</button>
+                  </template>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -289,8 +315,22 @@ onMounted(() => {
     </form>
   </UiModal>
 
-  <UiModal v-if="expense.open" title="ثبت مصرف" @close="expense.open = false">
+  <UiModal v-if="undoDiscount.row" :title="`برگشت تخفیف ${undoDiscount.row.invoiceNumber}`" @close="undoDiscount.row = null">
+    <form @submit.prevent="submitUndoDiscount">
+      <p>تخفیف {{ money(undoDiscount.row.discount) }} برمی‌گردد و مانده فاکتور بیشتر می‌شود.</p>
+      <label class="form-label" for="ud-reason">دلیل</label>
+      <input id="ud-reason" v-model="undoDiscount.reason" class="form-control mb-3" minlength="3" maxlength="300" required />
+      <div v-if="undoDiscount.error" class="alert alert-danger" role="alert">{{ undoDiscount.error }}</div>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="undoDiscount.saving">برگشت تخفیف</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
+    </form>
+  </UiModal>
+
+  <UiModal v-if="expense.open" :title="expense.correcting ? `اصلاح مصرف ${expense.correcting.expenseNumber}` : 'ثبت مصرف'" @close="expense.open = false">
     <form @submit.prevent="submitExpense">
+      <p v-if="expense.correcting" class="small text-muted">مصرف فعلی لغو و مصرف تازه ثبت می‌شود. سابقه هر دو می‌ماند.</p>
       <div class="mb-3">
         <label class="form-label" for="e-category">دسته</label>
         <input id="e-category" v-model="expense.category" class="form-control" maxlength="100" required />
@@ -304,9 +344,10 @@ onMounted(() => {
         <input id="e-amount" v-model.number="expense.amount" class="form-control" type="number" min="0.01" step="0.01" required />
       </div>
       <div class="mb-3"><ShamsiDateInput v-model="expense.date" label="تاریخ" required /></div>
+      <div v-if="expense.correcting" class="mb-3"><label class="form-label" for="e-reason">دلیل اصلاح</label><input id="e-reason" v-model="expense.reason" class="form-control" minlength="3" maxlength="300" required /></div>
       <div v-if="expense.error" class="alert alert-danger" role="alert">{{ expense.error }}</div>
       <div class="xr-form-actions">
-        <button type="submit" class="btn btn-primary" :disabled="expense.saving">ثبت مصرف</button>
+        <button type="submit" class="btn btn-primary" :disabled="expense.saving">{{ expense.correcting ? 'ثبت اصلاح' : 'ثبت مصرف' }}</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>

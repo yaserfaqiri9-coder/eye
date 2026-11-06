@@ -110,7 +110,7 @@ test('a clicked link does not hold the collapsed menu open', async ({ page }) =>
 const allPermissions = [
   'visits.view', 'patients.view', 'preexam.edit', 'consultation.edit', 'diagnostics.edit', 'surgery.view',
   'pharmacy.create', 'optical.view', 'inventory.view', 'payments.create', 'invoices.view',
-  'reports.view', 'settings.view', 'users.view', 'audit.view',
+  'calls.manage', 'reports.view', 'settings.view', 'users.view', 'audit.view',
 ]
 
 async function openAs(page: Page, path: string, granted: string[], mini = false) {
@@ -129,6 +129,62 @@ async function openAs(page: Page, path: string, granted: string[], mini = false)
 
 const item = (page: Page, label: string) => page.locator('.sidebar__item', { hasText: label })
 const parentButton = (page: Page, label: string) => page.getByRole('button', { name: label, exact: true })
+const parentItem = (page: Page, label: string) => parentButton(page, label).locator('..')
+
+test('management is reduced to three task-oriented top-level entries', async ({ page }) => {
+  await openAs(page, '/staff', allPermissions)
+
+  const managementTitle = page.locator('.sidebar__title', { hasText: 'مدیریت' })
+  const managementItems = managementTitle.locator(':scope ~ .sidebar__item')
+  await expect(managementItems).toHaveCount(3)
+  await expect(managementItems.locator(':scope > .sidebar__link > span')).toHaveText([
+    'گزارش‌ها',
+    'مدیریت سازمان',
+    'مدیریت سیستم',
+  ])
+
+  await expect(page.locator('.sidebar__link[href="/reports"]')).toHaveText('گزارش‌ها')
+  await expect(parentButton(page, 'مدیریت سازمان')).toHaveAttribute('aria-expanded', 'true')
+  await expect(parentItem(page, 'مدیریت سازمان').locator('.sidebar__submenu .sidebar__link')).toHaveText([
+    'فهرست داکتران',
+    'مدیریت بخش‌ها',
+    'تأمین‌کنندگان',
+    'کارمندان',
+  ])
+  const organizationLinks = parentItem(page, 'مدیریت سازمان').locator('.sidebar__submenu .sidebar__link')
+  expect(await organizationLinks.evaluateAll((links) => links.map((link) => link.getAttribute('href')))).toEqual([
+    '/doctors',
+    '/departments',
+    '/suppliers',
+    '/staff',
+  ])
+})
+
+test('system management keeps its four routes and opens for an active user page', async ({ page }) => {
+  await openAs(page, '/users', allPermissions)
+
+  await expect(parentButton(page, 'مدیریت سیستم')).toHaveAttribute('aria-expanded', 'true')
+  const links = parentItem(page, 'مدیریت سیستم').locator('.sidebar__submenu .sidebar__link')
+  await expect(links).toHaveText(['مرکز پخش صوت', 'تنظیمات', 'کاربران', 'ثبت فعالیت‌ها'])
+  expect(await links.evaluateAll((items) => items.map((link) => link.getAttribute('href')))).toEqual([
+    '/audio-station',
+    '/settings',
+    '/users',
+    '/audit',
+  ])
+  await expect(page.getByRole('link', { name: 'کاربران' })).toHaveAttribute('aria-current', 'page')
+})
+
+test('management parents still filter permissions and flatten one authorized child', async ({ page }) => {
+  await openAs(page, '/', ['inventory.view', 'calls.manage'])
+
+  await expect(parentButton(page, 'مدیریت سازمان')).toHaveCount(0)
+  await expect(parentButton(page, 'مدیریت سیستم')).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'تأمین‌کنندگان' })).toHaveAttribute('href', '/suppliers')
+  await expect(page.getByRole('link', { name: 'مرکز پخش صوت' })).toHaveAttribute('href', '/audio-station')
+  await expect(page.locator('.sidebar__link[href="/staff"]')).toHaveCount(0)
+  await expect(page.locator('.sidebar__link[href="/users"]')).toHaveCount(0)
+})
 
 test('section titles are plain labels, and the rows match the template measurements', async ({ page }) => {
   await openAs(page, '/patients', allPermissions)

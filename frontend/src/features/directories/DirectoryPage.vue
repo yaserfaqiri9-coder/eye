@@ -5,6 +5,7 @@ import { clearLookups } from '@/api/lookups'
 import { useAuthStore } from '@/stores/auth'
 import UiCard from '@/components/UiCard.vue'
 import UiModal from '@/components/UiModal.vue'
+import { removeRecord } from '@/utils/removeRecord'
 const props = defineProps<{ kind: 'departments' | 'suppliers' }>()
 interface Row { id: number; name: string; code?: string; phone?: string; address?: string; isActive: boolean; version: number }
 const auth = useAuthStore()
@@ -14,6 +15,7 @@ const canEdit = computed(() => auth.can(department.value ? 'settings.edit' : 'in
 const rows = ref<Row[]>([])
 const loading = ref(false)
 const error = ref('')
+const notice = ref('')
 const form = reactive({ open: false, id: null as number | null, version: null as number | null, name: '', code: '', phone: '', address: '', isActive: true, saving: false, error: '' })
 let loadSequence = 0
 async function load() {
@@ -39,7 +41,14 @@ async function save() {
     clearLookups(); form.open = false; await load()
   } catch (e) { form.error = errorMessage(e) } finally { form.saving = false }
 }
-watch(() => props.kind, () => { form.open = false; void load() })
+async function remove(row: Row) {
+  error.value = ''; notice.value = ''
+  try {
+    notice.value = await removeRecord(`/${props.kind}/${row.id}?version=${row.version}`, row.name)
+    if (notice.value) { clearLookups(); await load() }
+  } catch (e) { error.value = errorMessage(e) }
+}
+watch(() => props.kind, () => { form.open = false; notice.value = ''; void load() })
 onMounted(load)
 </script>
 <template>
@@ -47,11 +56,12 @@ onMounted(load)
     <template #actions><button v-if="canEdit" class="btn btn-primary" @click="open()">{{ department ? 'بخش جدید' : 'تأمین‌کننده جدید' }}</button></template>
     <p v-if="department" class="text-muted">بخش‌های فعال در پذیرش و ثبت نوبت نمایش داده می‌شوند. برای حفظ سوابق، بخش را غیرفعال کنید.</p>
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
+    <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
     <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
     <div v-else-if="!rows.length" class="xr-state">{{ department ? 'بخشی ثبت نشده است. با «بخش جدید» یک بخش فعال بسازید.' : 'تأمین‌کننده‌ای ثبت نشده است. ابتدا تأمین‌کننده جدید بسازید، سپس در خرید انتخاب کنید.' }}</div>
     <div v-else class="xr-table-wrap"><table class="xr-table">
       <thead><tr><th>نام</th><th v-if="department">کد</th><template v-else><th>تماس</th><th>آدرس</th></template><th>وضعیت</th><th v-if="canEdit">عملیات</th></tr></thead>
-      <tbody><tr v-for="row in rows" :key="row.id"><td>{{ row.name }}</td><td v-if="department" dir="ltr">{{ row.code }}</td><template v-else><td dir="ltr">{{ row.phone || '—' }}</td><td>{{ row.address || '—' }}</td></template><td><span class="xr-badge" :class="row.isActive ? 'xr-badge--green' : 'xr-badge--red'">{{ row.isActive ? 'فعال' : 'غیرفعال' }}</span></td><td v-if="canEdit"><button class="btn btn-soft btn-sm" @click="open(row)">ویرایش</button></td></tr></tbody>
+      <tbody><tr v-for="row in rows" :key="row.id"><td>{{ row.name }}</td><td v-if="department" dir="ltr">{{ row.code }}</td><template v-else><td dir="ltr">{{ row.phone || '—' }}</td><td>{{ row.address || '—' }}</td></template><td><span class="xr-badge" :class="row.isActive ? 'xr-badge--green' : 'xr-badge--red'">{{ row.isActive ? 'فعال' : 'غیرفعال' }}</span></td><td v-if="canEdit" class="text-nowrap"><button class="btn btn-soft btn-sm" @click="open(row)">ویرایش</button><button class="btn btn-soft-danger btn-sm ms-2" @click="remove(row)">حذف</button></td></tr></tbody>
     </table></div>
   </UiCard>
   <UiModal v-if="form.open" :title="form.id ? 'ویرایش' : department ? 'بخش جدید' : 'تأمین‌کننده جدید'" @close="form.open = false">

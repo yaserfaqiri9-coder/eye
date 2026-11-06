@@ -9,6 +9,7 @@ import { visitStatusLabels, type VisitRow } from '@/features/visits/types'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime } from '@/utils/date'
 import { money, quantity } from '@/utils/money'
+import { useRouter } from 'vue-router'
 import PatientRecord from './PatientRecord.vue'
 import ProgressRing from './ProgressRing.vue'
 import VisitsChart from './VisitsChart.vue'
@@ -83,6 +84,20 @@ async function load() {
 
 function onVisitSaved() {
   load()
+}
+
+const router = useRouter()
+
+async function removePatient() {
+  const p = patient.value
+  if (!p || !window.confirm(`پرونده «${patientName(p)}» حذف شود؟ این کار برگشت ندارد. پرونده‌ای که مراجعه یا سابقه دارد حذف نمی‌شود.`)) return
+  error.value = ''
+  try {
+    await api(`/patients/${p.id}?version=${p.version}`, { method: 'DELETE' })
+    await router.push('/patients')
+  } catch (cause) {
+    error.value = errorMessage(cause)
+  }
 }
 
 watch(() => props.id, load)
@@ -165,6 +180,7 @@ const followUp = computed(() => chart.value?.followUps[0] ?? null)
             <div class="profile__actions">
               <RouterLink v-if="auth.can('visits.create')" class="btn btn-primary" :to="{ name: 'reception', query: { patient: props.id } }">مراجعه جدید</RouterLink>
               <RouterLink v-if="auth.can('patients.edit')" :to="`/patients/${patient.id}/edit`" class="btn btn-soft">ویرایش</RouterLink>
+              <button v-if="auth.can('patients.edit')" type="button" class="btn btn-soft-danger" @click="removePatient">حذف</button>
               <RouterLink v-if="auth.can('patients.print')" :to="`/print/patient/${patient.id}`" target="_blank" class="btn btn-soft">چاپ کارت</RouterLink>
             </div>
           </div>

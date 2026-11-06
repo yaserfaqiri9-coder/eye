@@ -7,6 +7,7 @@ import ShamsiDateInput from '@/components/ShamsiDateInput.vue'
 import UiFormPage from '@/components/UiFormPage.vue'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime, kabulToUtc } from '@/utils/date'
+import SurgerySupplies from './SurgerySupplies.vue'
 import { eyeLabels, surgeryStatusLabels, type Chart, type SurgeryDetail } from './types'
 import { useUnsavedGuard } from './useUnsavedGuard'
 
@@ -16,11 +17,16 @@ const auth = useAuthStore()
 
 const detail = ref<SurgeryDetail | null>(null)
 const chart = ref<Chart | null>(null)
-const form = reactive({ date: null as string | null, time: '08:00', preOpChecks: '', consentRecorded: false, operationReport: '', postOpStatus: '' })
+const form = reactive({ date: null as string | null, time: '08:00', surgeryType: '', eye: 'OD', preOpChecks: '', consentRecorded: false, operationReport: '', postOpStatus: '', amendReason: '' })
 const { dirty, markSaved, applying } = useUnsavedGuard(form)
 const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
+
+/** Which operation and which eye can change only until the case begins. */
+const canChangeOperation = computed(() => ['Proposed', 'Scheduled'].includes(detail.value?.case.status ?? ''))
+const isClosed = computed(() => detail.value?.case.status === 'Closed')
+const isCancelled = computed(() => detail.value?.case.status === 'Cancelled')
 
 const diagnoses = computed(() => chart.value?.consultation?.diagnoses.map((d) => (d.eye === 'None' ? d.text : `${d.text} — ${eyeLabels[d.eye]}`)).join('؛ ') ?? '')
 
@@ -30,6 +36,8 @@ async function load() {
     detail.value = loaded
     applying(() =>
       Object.assign(form, {
+        surgeryType: loaded.case.surgeryType,
+        eye: loaded.case.eye,
         preOpChecks: loaded.preOpChecks ?? '',
         consentRecorded: loaded.consentRecorded,
         operationReport: loaded.operationReport ?? '',
@@ -59,6 +67,9 @@ async function submit() {
         operationReport: form.operationReport,
         postOpStatus: form.postOpStatus,
         version: row.version,
+        surgeryType: canChangeOperation.value ? form.surgeryType : undefined,
+        eye: canChangeOperation.value ? form.eye : undefined,
+        amendReason: isClosed.value ? form.amendReason : undefined,
       },
     })
     markSaved()
@@ -67,6 +78,16 @@ async function submit() {
     error.value = errorMessage(cause)
   } finally {
     saving.value = false
+  }
+}
+
+/** After supplies are recorded the case has a new version; the form keeps what the user typed. */
+async function reload() {
+  try {
+    const loaded = await api<SurgeryDetail>(`/surgeries/${props.id}`)
+    detail.value = loaded
+  } catch (cause) {
+    error.value = errorMessage(cause)
   }
 }
 
@@ -81,6 +102,7 @@ onMounted(load)
           <div><dt>مریض</dt><dd>{{ detail?.case.patientName ?? '...' }}</dd></div>
           <div><dt>شماره پرونده</dt><dd><span class="ltr-num">{{ detail?.case.patientFileNumber ?? '...' }}</span></dd></div>
           <div><dt>نوع عملیات</dt><dd>{{ detail?.case.surgeryType ?? '...' }}</dd></div>
+          <div v-if="detail?.packageName"><dt>پکیج</dt><dd>{{ detail.packageName }}<span v-if="!detail.suppliesRecordedAt && ['InProgress', 'Completed', 'FollowUp'].includes(detail.case.status)" class="xr-note xr-note--red ms-2">مواد مصرفی ثبت نشده</span></dd></div>
           <div><dt>چشم</dt><dd>{{ detail ? eyeLabels[detail.case.eye] : '...' }}</dd></div>
           <div><dt>وضعیت</dt><dd>{{ detail ? surgeryStatusLabels[detail.case.status] : '...' }}</dd></div>
           <div><dt>تاریخ فعلی</dt><dd>{{ formatDateTime(detail?.case.scheduledAt) }}</dd></div>
@@ -93,7 +115,21 @@ onMounted(load)
       </section>
     </template>
 
-    <fieldset :disabled="loading || !detail">
+    <fieldset :disabled="loading || !detail || isCancelled">
+      <div v-if="isCancelled" class="alert alert-primary" role="status">این پرونده لغو شده است و قابل ویرایش نیست.</div>
+      <div v-if="isClosed" class="alert alert-warning" role="status">این پرونده بسته شده است. مقدار قبلی و دلیل اصلاح در پرونده می‌ماند.</div>
+      <div v-if="canChangeOperation" class="row g-3 mb-3">
+        <div class="col-md-6">
+          <label class="form-label" for="sg-type">نوع عملیات</label>
+          <input id="sg-type" v-model="form.surgeryType" class="form-control" maxlength="200" required />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label" for="sg-eye">چشم</label>
+          <select id="sg-eye" v-model="form.eye" class="form-select">
+            <option v-for="(label, value) in eyeLabels" :key="value" :value="value">{{ label }}</option>
+          </select>
+        </div>
+      </div>
       <div class="row g-3 mb-3">
         <div class="col-md-4 col-sm-8"><ShamsiDateInput v-model="form.date" label="تاریخ عملیات" /></div>
         <div class="col-md-2 col-sm-4">
@@ -116,14 +152,20 @@ onMounted(load)
         <label class="form-label" for="sg-post">وضعیت پس از عملیات</label>
         <textarea id="sg-post" v-model="form.postOpStatus" class="form-control" rows="3" maxlength="2000"></textarea>
       </div>
+      <div v-if="isClosed" class="mt-3">
+        <label class="form-label" for="sg-reason">دلیل اصلاح</label>
+        <input id="sg-reason" v-model="form.amendReason" class="form-control" minlength="3" maxlength="500" required />
+      </div>
     </fieldset>
     <template v-if="detail">
+      <hr />
+      <SurgerySupplies :key="detail.case.version" :detail="detail" @changed="reload" />
       <hr />
       <AttachmentPanel owner-type="SurgeryCase" :owner-id="detail.case.id" :can-upload="auth.can('surgery.edit')" />
     </template>
 
     <template #actions>
-      <button type="submit" class="btn btn-primary" :disabled="saving || loading || !detail">ذخیره</button>
+      <button type="submit" class="btn btn-primary" :disabled="saving || loading || !detail || isCancelled">ذخیره</button>
       <RouterLink :to="{ name: 'surgery' }" class="btn btn-soft-danger">انصراف</RouterLink>
     </template>
   </UiFormPage>

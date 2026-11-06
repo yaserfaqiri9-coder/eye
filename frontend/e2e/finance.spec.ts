@@ -65,6 +65,7 @@ test('stock is bought, sold at the pharmacy, paid at the cashier and reconciled 
   await inventory.getByLabel('قیمت خرید واحد ردیف 1').fill('100')
   await inventory.getByRole('button', { name: 'ثبت خرید' }).click()
   await expect(inventory).toHaveURL(/\/inventory$/)
+  await inventory.getByRole('tab', { name: 'اجناس' }).click()
   await expect(inventory.getByRole('row', { name: new RegExp(drug) })).toContainText('۵')
 
   const pharmacy = await staffPage(browser, `pha_${stamp}`, errors)

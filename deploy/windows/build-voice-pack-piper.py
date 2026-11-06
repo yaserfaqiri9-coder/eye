@@ -2,11 +2,12 @@
 
     pip install piper-tts imageio-ffmpeg
     build-voice-pack.ps1 -Mode Export -ExportFile clips.csv
-    python build-voice-pack-piper.py fa_IR-amir-medium.onnx clips.csv E:\\voice
+    python build-voice-pack-piper.py fa_IR-ganji-medium.onnx clips.csv E:\\voice
     build-voice-pack.ps1 -Mode Check -VoiceDir E:\\voice
 
-Licence: check the voice before use. Piper's amir voice was fine-tuned from a voice trained on Lessac data, whose
-licence is for research only. See DEPLOYMENT-WINDOWS.md.
+ganji reads the numbers most clearly of the Persian Piper voices (amir drops the final k of yek). Licence: check the
+voice before use. ganji was fine-tuned from amir, and amir from a voice trained on Lessac data, whose licence is for
+research only. See DEPLOYMENT-WINDOWS.md.
 """
 import csv
 import re
@@ -16,7 +17,12 @@ import unicodedata
 from pathlib import Path
 
 import imageio_ffmpeg
-from piper import PiperVoice
+from piper import PiperVoice, SynthesisConfig
+
+# Above 1 speaks slower. The voice's own pace is too quick for a crowded waiting hall.
+LENGTH_SCALE = 1.3
+# Silence after each clip, so the last syllable (a short number such as یک) is never cut off.
+TAIL_SECONDS = 0.3
 
 # eSpeak phonemes for words it reads wrongly, found on the amir voice.
 FIXES = {
@@ -42,11 +48,12 @@ def main(model: Path, clips_csv: Path, out_dir: Path) -> None:
         clips = list(csv.DictReader(handle))
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    config = SynthesisConfig(length_scale=LENGTH_SCALE)
     for clip in clips:
-        audio = b"".join(chunk.audio_int16_bytes for chunk in voice.synthesize(clip["Text"]))
+        audio = b"".join(chunk.audio_int16_bytes for chunk in voice.synthesize(clip["Text"], syn_config=config))
         subprocess.run(
             [ffmpeg, "-y", "-loglevel", "error", "-f", "s16le", "-ar", str(voice.config.sample_rate), "-ac", "1", "-i", "pipe:0",
-             "-codec:a", "libmp3lame", "-b:a", "96k", str(out_dir / clip["File"])],
+             "-af", f"apad=pad_dur={TAIL_SECONDS}", "-codec:a", "libmp3lame", "-b:a", "96k", str(out_dir / clip["File"])],
             input=audio,
             check=True,
         )

@@ -82,6 +82,7 @@ public enum MovementKind
     Consumption,
     TransferOut,
     TransferIn,
+    PurchaseCancel,
 }
 
 /// <summary>Append-only stock history. Every row names the document that caused it.</summary>
@@ -142,6 +143,14 @@ public class Purchase
     public long CreatedByUserId { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>A cancelled purchase stays on record; its stock and ledger effect has been reversed.</summary>
+    public bool IsCancelled { get; set; }
+
+    [MaxLength(300)]
+    public string? CancelReason { get; set; }
+
+    public int Version { get; set; }
 
     public List<PurchaseItem> Items { get; set; } = [];
 }

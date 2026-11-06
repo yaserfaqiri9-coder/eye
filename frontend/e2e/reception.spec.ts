@@ -89,7 +89,8 @@ test('receptionist registers a patient, duplicate is caught, visit reaches the q
   await reception.getByRole('button', { name: 'ثبت مراجعه' }).click()
 
   // Registered but unpaid: no number anywhere yet, and the visit waits in the desk's open payments.
-  const owing = reception.getByRole('row', { name: new RegExp(`فیس معاینه.*${firstName}`) })
+  await expect(reception.getByRole('tab', { name: /منتظر صندوق/ })).toHaveAttribute('aria-selected', 'true')
+  const owing = reception.getByRole('row', { name: new RegExp(`${firstName}.*در صندوق بپردازد`) })
   await expect(owing).toBeVisible()
   await collectFee(reception)
   await expect(owing).toHaveCount(0)
@@ -110,13 +111,17 @@ test('receptionist registers a patient, duplicate is caught, visit reaches the q
 
   // Visit appears in the queue with its number and payment, and status moves directly to completed without any lab step.
   await reception.goto('/reception')
-  await expect(reception.getByRole('heading', { name: 'مراجعات امروز' })).toBeVisible()
-  await expect(reception.getByRole('heading', { name: 'وقت‌های ملاقات امروز' })).toBeVisible()
+  await expect(reception.getByRole('heading', { name: 'صف امروز' })).toBeVisible()
+  await reception.getByRole('tab', { name: /در جریان/ }).click()
+  await expect(reception.getByRole('tab', { name: /وقت ملاقات/ })).toBeVisible()
   const row = reception.getByRole('row', { name: new RegExp(firstName) })
   await expect(row).toContainText(number)
   await expect(row).toContainText('پرداخت‌شده')
   await expect(row).toContainText('در انتظار')
-  await row.getByRole('combobox').selectOption({ label: 'تکمیل' })
+  await row.getByRole('button', { name: /گزینه‌های/ }).click()
+  await reception.getByRole('menuitem', { name: 'انتقال به: تکمیل' }).click()
+  await expect(row).toHaveCount(0)
+  await reception.getByRole('tab', { name: /تمام‌شده/ }).click()
   await expect(row).toContainText('تکمیل')
 
   await context.close()

@@ -149,6 +149,13 @@ const appChildren: RouteRecordRaw[] = [
     meta: { permission: 'inventory.view', title: 'گدام' },
   },
   {
+    path: 'inventory/locations/:code',
+    name: 'inventory-location',
+    component: pages.inventoryLocation,
+    props: true,
+    meta: { permission: 'inventory.view', title: 'جزئیات گدام' },
+  },
+  {
     path: 'inventory/purchase',
     name: 'inventory-purchase',
     component: pages.purchase,

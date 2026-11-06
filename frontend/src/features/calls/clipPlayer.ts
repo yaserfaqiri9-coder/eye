@@ -1,6 +1,8 @@
 const CACHE_LIMIT = 120
 const END_GRACE_MS = 3_000
 const RESUME_WAIT_MS = 300
+/** Silence between the number and the place, so a listener hears them as two parts and catches the number. */
+const GAP_MS = 450
 
 export class MissingClipError extends Error {
   constructor(public readonly clip: string) {
@@ -86,7 +88,10 @@ export function createClipPlayer() {
   function play(clips: string[]) {
     const run = chain.then(async () => {
       const buffers = await Promise.all(clips.map(load))
-      for (const buffer of buffers) await playBuffer(buffer)
+      for (const [index, buffer] of buffers.entries()) {
+        if (index > 0) await new Promise((done) => setTimeout(done, GAP_MS))
+        await playBuffer(buffer)
+      }
     })
     chain = run.catch(() => undefined)
     return run

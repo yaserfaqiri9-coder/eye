@@ -79,6 +79,13 @@ public static class StaffEndpoints
             await db.SaveChangesAsync(ct);
             return Results.NoContent();
         }).RequirePermission("users.manage");
+
+        group.MapDelete("/{id:long}", async (long id, int version, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        {
+            var staff = await db.Staff.SingleOrDefaultAsync(s => s.Id == id, ct) ?? throw AppException.NotFound();
+            db.Entry(staff).Property(s => s.Version).OriginalValue = version;
+            return await SafeDelete.RemoveOrDeactivateAsync(db, audit, staff, "Staff", id.ToString(), staff.FullName, () => staff.IsActive = false, ct);
+        }).RequirePermission("users.manage");
     }
 
     /// <summary>The link decides whose queue a doctor's patients appear in, so a wrong one must fail clearly.</summary>

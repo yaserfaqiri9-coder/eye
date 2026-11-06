@@ -785,6 +785,9 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .HasMaxLength(4000)
                         .HasColumnType("varchar(4000)");
 
+                    b.Property<int?>("PackageId")
+                        .HasColumnType("int");
+
                     b.Property<long>("PatientId")
                         .HasColumnType("bigint");
 
@@ -807,6 +810,15 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("varchar(30)");
 
+                    b.Property<int?>("SuppliesLocationId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("SuppliesRecordedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<long?>("SuppliesRecordedByUserId")
+                        .HasColumnType("bigint");
+
                     b.Property<string>("SurgeryType")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -824,13 +836,81 @@ namespace AlShifa.Api.Infrastructure.Migrations
                     b.HasIndex("CaseNumber")
                         .IsUnique();
 
+                    b.HasIndex("PackageId");
+
                     b.HasIndex("PatientId");
+
+                    b.HasIndex("SuppliesLocationId");
 
                     b.HasIndex("VisitId");
 
                     b.HasIndex("Status", "Id");
 
                     b.ToTable("SurgeryCases");
+                });
+
+            modelBuilder.Entity("AlShifa.Api.Features.Clinical.SurgeryPackage", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("LocationId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<int>("ServiceId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LocationId");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.HasIndex("ServiceId");
+
+                    b.ToTable("SurgeryPackages");
+                });
+
+            modelBuilder.Entity("AlShifa.Api.Features.Clinical.SurgeryPackageItem", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("PackageId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ProductId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(18, 3)
+                        .HasColumnType("decimal(18,3)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PackageId");
+
+                    b.HasIndex("ProductId");
+
+                    b.ToTable("SurgeryPackageItems", t =>
+                        {
+                            t.HasCheckConstraint("CK_SurgeryPackageItem_Quantity", "`Quantity` > 0");
+                        });
                 });
 
             modelBuilder.Entity("AlShifa.Api.Features.Finance.CashRegister", b =>
@@ -1452,11 +1532,18 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("bigint");
 
+                    b.Property<string>("CancelReason")
+                        .HasMaxLength(300)
+                        .HasColumnType("varchar(300)");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)");
 
                     b.Property<long>("CreatedByUserId")
                         .HasColumnType("bigint");
+
+                    b.Property<bool>("IsCancelled")
+                        .HasColumnType("tinyint(1)");
 
                     b.Property<int>("LocationId")
                         .HasColumnType("int");
@@ -1476,6 +1563,10 @@ namespace AlShifa.Api.Infrastructure.Migrations
                     b.Property<decimal>("Total")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
 
                     b.HasKey("Id");
 
@@ -2763,11 +2854,21 @@ namespace AlShifa.Api.Infrastructure.Migrations
 
             modelBuilder.Entity("AlShifa.Api.Features.Clinical.SurgeryCase", b =>
                 {
+                    b.HasOne("AlShifa.Api.Features.Clinical.SurgeryPackage", "Package")
+                        .WithMany()
+                        .HasForeignKey("PackageId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("AlShifa.Api.Features.Patients.Patient", "Patient")
                         .WithMany()
                         .HasForeignKey("PatientId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("AlShifa.Api.Features.Inventory.StockLocation", null)
+                        .WithMany()
+                        .HasForeignKey("SuppliesLocationId")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("AlShifa.Api.Features.Visits.Visit", "Visit")
                         .WithMany()
@@ -2775,9 +2876,47 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.Navigation("Package");
+
                     b.Navigation("Patient");
 
                     b.Navigation("Visit");
+                });
+
+            modelBuilder.Entity("AlShifa.Api.Features.Clinical.SurgeryPackage", b =>
+                {
+                    b.HasOne("AlShifa.Api.Features.Inventory.StockLocation", "Location")
+                        .WithMany()
+                        .HasForeignKey("LocationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("AlShifa.Api.Features.Finance.Service", "Service")
+                        .WithMany()
+                        .HasForeignKey("ServiceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Location");
+
+                    b.Navigation("Service");
+                });
+
+            modelBuilder.Entity("AlShifa.Api.Features.Clinical.SurgeryPackageItem", b =>
+                {
+                    b.HasOne("AlShifa.Api.Features.Clinical.SurgeryPackage", null)
+                        .WithMany("Items")
+                        .HasForeignKey("PackageId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("AlShifa.Api.Features.Inventory.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Product");
                 });
 
             modelBuilder.Entity("AlShifa.Api.Features.Finance.CashSession", b =>
@@ -3207,6 +3346,11 @@ namespace AlShifa.Api.Infrastructure.Migrations
             modelBuilder.Entity("AlShifa.Api.Features.Clinical.Refraction", b =>
                 {
                     b.Navigation("Lines");
+                });
+
+            modelBuilder.Entity("AlShifa.Api.Features.Clinical.SurgeryPackage", b =>
+                {
+                    b.Navigation("Items");
                 });
 
             modelBuilder.Entity("AlShifa.Api.Features.Finance.Invoice", b =>

@@ -15,6 +15,64 @@ public static class Text
     public static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
+public static class Permission
+{
+    /// <summary>For an action that needs a second permission beyond the one on its endpoint, such as cancelling and then re-issuing.</summary>
+    public static void Require(HttpContext http, string permission)
+    {
+        if (!http.User.HasClaim(Features.Auth.RolePermissions.ClaimType, permission))
+        {
+            throw new AppException(StatusCodes.Status403Forbidden, "forbidden", "شما اجازه این عملیات را ندارید.");
+        }
+    }
+}
+
+/// <param name="Deleted">False when the record is used by history, so it was deactivated instead.</param>
+public sealed record DeleteOutcome(bool Deleted);
+
+public static class SafeDelete
+{
+    private const int MySqlRowIsReferenced = 1451;
+
+    /// <summary>
+    /// Foreign keys are all Restrict, so the database itself decides whether anything still uses the row.
+    /// Dependents are rows that belong to the record alone and go with it. A refusal leaves everything as it was.
+    /// </summary>
+    public static async Task<bool> TryRemoveAsync(AppDbContext db, object row, CancellationToken ct, params IEnumerable<object> dependents)
+    {
+        var rows = dependents.Append(row).ToList();
+        db.RemoveRange(rows);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return true;
+        }
+        catch (DbUpdateException e) when (e.InnerException is MySqlException { Number: MySqlRowIsReferenced })
+        {
+            foreach (var entry in rows)
+            {
+                db.Entry(entry).State = EntityState.Unchanged;
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>The delete action of a directory list: removes an unused record, and deactivates one that history still needs.</summary>
+    public static async Task<IResult> RemoveOrDeactivateAsync(AppDbContext db, AuditService audit, object row, string entity, string id, string label, Action deactivate, CancellationToken ct, params IEnumerable<object> dependents)
+    {
+        var deleted = await TryRemoveAsync(db, row, ct, dependents);
+        if (!deleted)
+        {
+            deactivate();
+        }
+
+        audit.Add(deleted ? $"{entity}Deleted" : $"{entity}Deactivated", entity, id, label);
+        await db.SaveChangesAsync(ct);
+        return Results.Ok(new DeleteOutcome(deleted));
+    }
+}
+
 public sealed class AppException(int status, string code, string message) : Exception(message)
 {
     public int Status { get; } = status;

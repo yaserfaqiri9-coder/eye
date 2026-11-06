@@ -251,6 +251,7 @@ app.MapRefractions();
 app.MapPrescriptions();
 app.MapDiagnostics();
 app.MapSurgeries();
+app.MapSurgeryPackages();
 app.MapFinance();
 app.MapInventory();
 app.MapSettings();

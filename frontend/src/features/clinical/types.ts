@@ -195,6 +195,51 @@ export interface SurgeryDetail {
   consentRecorded: boolean
   operationReport: string | null
   postOpStatus: string | null
+  packageId: number | null
+  packageName: string | null
+  suppliesRecordedAt: string | null
+}
+
+export interface PackageItem {
+  productId: number
+  productName: string
+  unit: string
+  quantity: number
+}
+
+/** A kind of operation with its fee and the supplies it uses; the supplies are inside the fee. */
+export interface SurgeryPackage {
+  id: number
+  name: string
+  serviceId: number
+  serviceName: string
+  price: number | null
+  locationCode: string
+  locationName: string
+  isActive: boolean
+  version: number
+  items: PackageItem[]
+}
+
+export interface SupplyStock {
+  productId: number
+  code: string
+  name: string
+  unit: string
+  onHand: number
+}
+
+export interface SupplyLocation {
+  code: string
+  name: string
+}
+
+export interface SuppliesRecord {
+  recorded: boolean
+  recordedAt: string | null
+  locationName: string | null
+  packageId: number | null
+  items: { productId: number; productName: string; unit: string; quantity: number; cost: number }[]
 }
 
 export const eyeLabels: Record<string, string> = { None: '—', OD: 'راست (OD)', OS: 'چپ (OS)', Both: 'هر دو' }

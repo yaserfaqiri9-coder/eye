@@ -135,6 +135,26 @@ public static class PatientEndpoints
             await tx.CommitAsync(ct);
             return Results.Ok(ToDto(patient));
         }).RequirePermission("patients.edit");
+
+        // For a file opened by mistake. A patient has no inactive state, and a file with any history must stay.
+        group.MapDelete("/{id:long}", async (long id, int version, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var patient = await db.Patients.FromSqlInterpolated($"SELECT * FROM Patients WHERE Id = {id} FOR UPDATE").SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
+            db.Entry(patient).Property(p => p.Version).OriginalValue = version;
+            var changes = await db.PatientChangeLogs.Where(c => c.PatientId == id).ToListAsync(ct);
+
+            // An emergency access grant holds this id without a foreign key, so the database would not refuse.
+            if (await db.ClinicalAccessGrants.AnyAsync(g => g.PatientId == id, ct) || !await SafeDelete.TryRemoveAsync(db, patient, ct, changes))
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "patient_in_use", "این مریض مراجعه یا سوابق ثبت‌شده دارد و پرونده‌اش حذف نمی‌شود.");
+            }
+
+            audit.Add("PatientDeleted", "Patient", id.ToString(), patient.FileNumber);
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return Results.Ok(new DeleteOutcome(true));
+        }).RequirePermission("patients.edit");
     }
 
     private static async Task<List<PatientListItem>> FindPossibleDuplicatesAsync(AppDbContext db, SavePatientRequest r, CancellationToken ct)

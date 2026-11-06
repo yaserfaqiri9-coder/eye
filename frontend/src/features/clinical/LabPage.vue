@@ -121,6 +121,7 @@ watch(status, load)
                 <RouterLink v-if="['Requested', 'InProgress'].includes(row.status) && auth.can('diagnostics.approve')" :to="`/lab/${row.id}/result`" class="btn btn-soft btn-sm ms-2">ثبت نتیجه</RouterLink>
               </template>
               <RouterLink v-if="row.status === 'ResultReady' && auth.can('diagnostics.print')" :to="`/print/lab/${row.id}`" target="_blank" class="btn btn-soft btn-sm">چاپ جواب</RouterLink>
+              <RouterLink v-if="row.status === 'ResultReady' && row.kind !== 'Refraction' && auth.can('diagnostics.approve')" :to="`/lab/${row.id}/result`" class="btn btn-soft btn-sm ms-2">اصلاح نتیجه</RouterLink>
             </td>
           </tr>
         </tbody>

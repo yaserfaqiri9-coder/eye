@@ -127,6 +127,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
               <td>{{ formatDateTime(row.createdAt) }}</td>
               <td v-if="auth.can('pharmacy.cancel')" class="text-nowrap">
                 <button v-if="!row.isReturned" type="button" class="btn btn-soft-danger btn-sm" @click="Object.assign(returning, { row, reason: '', error: '' })">برگشت</button>
+                <RouterLink v-if="!row.isReturned && auth.can('pharmacy.create')" :to="{ name: 'pharmacy-sale', query: { correct: row.id } }" class="btn btn-soft btn-sm ms-2">اصلاح</RouterLink>
                 <RouterLink v-if="auth.can('pharmacy.print')" :to="`/print/sale/${row.id}`" target="_blank" class="btn btn-soft btn-sm ms-2">رسید</RouterLink>
               </td>
             </tr>

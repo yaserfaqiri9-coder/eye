@@ -67,6 +67,7 @@ test('admin configures the hospital, a charged visit prints a slip and an A4 inv
 
   // Admission slip carries hospital details and the queue, in Dari, with no controls in print mode.
   await reception.goto('/reception')
+  await reception.getByRole('tab', { name: /در جریان/ }).click()
   const row = reception.getByRole('row', { name: new RegExp(firstName) })
   const [slip] = await Promise.all([reception.context().waitForEvent('page'), row.getByRole('link', { name: 'رسید' }).click()])
   await expect(slip.getByRole('heading', { name: 'رسید پذیرش' })).toBeVisible()

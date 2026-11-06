@@ -20,6 +20,9 @@ const visit = ref<VisitRow | null>(null)
 const previous = ref<Refraction | null>(null)
 const version = ref<number | null>(null)
 const completed = ref(false)
+/** A completed refraction opens again only to record a correction with its reason. */
+const amending = ref(false)
+const amendReason = ref('')
 const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
@@ -55,7 +58,7 @@ const form = reactive({
 
 const { dirty, markSaved, applying } = useUnsavedGuard(form)
 
-const canEdit = computed(() => auth.can('preexam.edit') && !completed.value)
+const canEdit = computed(() => auth.can('preexam.edit') && (!completed.value || amending.value))
 
 const acuity = [
   { code: 'OD', title: 'چشم راست', tone: 'xr-eye--od', unaided: 'unaidedVaOd', pinhole: 'pinholeVaOd', near: 'nearVaOd' },
@@ -158,10 +161,19 @@ async function save(complete: boolean) {
           { stage, eye: 'OS', ...lines[stage].os },
         ]),
         version: version.value,
+        amendReason: amending.value ? amendReason.value : undefined,
       },
     })
     // Kept straight away: if completing fails, the next attempt must not be refused for the version just saved.
     version.value = saved.version
+    if (amending.value) {
+      amending.value = false
+      amendReason.value = ''
+      notice.value = 'اصلاحیه ثبت شد.'
+      fill(saved)
+      markSaved()
+      return
+    }
     if (complete) {
       await api(`/refractions/${props.visitId}/complete`, { method: 'POST' })
       completed.value = true
@@ -202,7 +214,8 @@ onMounted(load)
       </div>
 
       <fieldset :disabled="!canEdit || loading" class="xr-card__body">
-        <div v-if="completed" class="alert alert-primary" role="status">این بینایی‌سنجی تکمیل شده است و قابل ویرایش نیست.</div>
+        <div v-if="completed && !amending" class="alert alert-primary" role="status">این بینایی‌سنجی تکمیل شده است. برای تغییر، اصلاحیه با دلیل ثبت کنید.</div>
+        <div v-if="amending" class="alert alert-warning" role="status">مقدار قبلی و دلیل اصلاح در پرونده می‌ماند و داکتر آن را می‌بیند. نسخه عینکی که قبلاً صادر شده خودکار تغییر نمی‌کند.</div>
         <div v-if="previousFinal" class="alert alert-primary" role="note">
           نسخه نهایی مراجعه قبلی ({{ formatDate(previous!.visitDate) }}):
           <span v-for="line in previousFinal" :key="line.eye" class="previous">
@@ -316,7 +329,12 @@ onMounted(load)
         <div v-if="error" class="alert alert-danger mt-3 mb-0" role="alert">{{ error }}</div>
       </fieldset>
 
-      <div v-if="canEdit" class="xr-action-bar">
+      <div v-if="amending" class="xr-action-bar">
+        <input v-model="amendReason" class="form-control" minlength="3" maxlength="500" required placeholder="دلیل اصلاح" aria-label="دلیل اصلاح" />
+        <button type="submit" class="btn btn-primary text-nowrap" :disabled="saving || loading">ذخیره اصلاحیه</button>
+        <button type="button" class="btn btn-soft-danger text-nowrap" :disabled="saving" @click="amending = false; load()">انصراف</button>
+      </div>
+      <div v-else-if="canEdit" class="xr-action-bar">
         <button type="button" class="btn btn-primary" :disabled="saving || loading" @click="save(true)">ذخیره و تکمیل</button>
         <button type="submit" class="btn btn-soft" :disabled="saving || loading">ذخیره</button>
         <span class="xr-action-bar__status" role="status">
@@ -324,7 +342,10 @@ onMounted(load)
           <template v-else-if="notice">{{ notice }}</template>
         </span>
       </div>
-      <div v-else-if="notice" class="alert alert-success m-3" role="status">{{ notice }}</div>
+      <div v-else class="m-3">
+        <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
+        <button v-if="completed && auth.can('preexam.edit')" type="button" class="btn btn-soft" :disabled="loading" @click="amending = true">ثبت اصلاحیه</button>
+      </div>
     </form>
   </div>
 </template>

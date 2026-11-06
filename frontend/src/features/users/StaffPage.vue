@@ -6,6 +6,7 @@ import UiCard from '@/components/UiCard.vue'
 import UiModal from '@/components/UiModal.vue'
 import type { LookupItem } from '@/features/visits/types'
 import { useAuthStore } from '@/stores/auth'
+import { removeRecord } from '@/utils/removeRecord'
 
 interface StaffRow {
   id: number
@@ -25,6 +26,7 @@ const departments = ref<LookupItem[]>([])
 const users = ref<{ id: number; userName: string; fullName: string }[]>([])
 const loading = ref(true)
 const error = ref('')
+const notice = ref('')
 
 const form = reactive({
   open: false,
@@ -94,6 +96,20 @@ async function save() {
   }
 }
 
+async function remove(row: StaffRow) {
+  error.value = ''
+  notice.value = ''
+  try {
+    notice.value = await removeRecord(`/staff/${row.id}?version=${row.version}`, row.fullName)
+    if (notice.value) {
+      clearLookups()
+      await load()
+    }
+  } catch (cause) {
+    error.value = errorMessage(cause)
+  }
+}
+
 onMounted(async () => {
   try {
     ;[departments.value, users.value] = await Promise.all([
@@ -113,6 +129,7 @@ onMounted(async () => {
       <button v-if="auth.can('users.create')" type="button" class="btn btn-primary" @click="open()">کارمند جدید</button>
     </template>
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
+    <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
     <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
     <div v-else-if="rows.length === 0" class="xr-state">کارمندی ثبت نشده است. داکتران از صفحه «فهرست داکتران» ثبت می‌شوند.</div>
     <div v-else class="xr-table-wrap">
@@ -127,7 +144,10 @@ onMounted(async () => {
             <td><span class="ltr-num">{{ row.phone ?? '—' }}</span></td>
             <td><span class="ltr-num">{{ row.userName ?? '—' }}</span></td>
             <td><span class="xr-badge" :class="row.isActive ? 'xr-badge--green' : 'xr-badge--red'">{{ row.isActive ? 'فعال' : 'غیرفعال' }}</span></td>
-            <td v-if="auth.can('users.manage')"><button type="button" class="btn btn-soft btn-sm" @click="open(row)">ویرایش</button></td>
+            <td v-if="auth.can('users.manage')" class="text-nowrap">
+              <button type="button" class="btn btn-soft btn-sm" @click="open(row)">ویرایش</button>
+              <button type="button" class="btn btn-soft-danger btn-sm ms-2" @click="remove(row)">حذف</button>
+            </td>
           </tr>
         </tbody>
       </table>

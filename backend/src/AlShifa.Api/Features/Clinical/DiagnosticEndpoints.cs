@@ -13,6 +13,10 @@ public sealed record ChangeOrderStatusRequest(int Version);
 
 public sealed record SaveResultRequest([Required, MaxLength(4000)] string ResultText, int Version);
 
+public sealed record AmendResultRequest([Required, MaxLength(4000)] string ResultText, [Required, MinLength(3), MaxLength(500)] string Reason, int Version);
+
+public sealed record EditOrderNoteRequest([MaxLength(500)] string? Note, int Version);
+
 public sealed record SaveTestRequest([Required, MaxLength(150)] string Name, bool IsActive, int? ServiceId = null, DiagnosticKind Kind = DiagnosticKind.Lab);
 
 public sealed record DiagnosticProjection(
@@ -130,6 +134,12 @@ public static class DiagnosticEndpoints
             Results.Ok(await db.DiagnosticTests.AsNoTracking().OrderBy(t => t.Name).Select(t => new { t.Id, t.Name, t.IsActive, Kind = t.Kind.ToString() }).ToListAsync(ct)))
             .RequirePermission("diagnostics.view");
 
+        // Settings managers see every test, without the clinical permission the list above asks for.
+        tests.MapGet("/manage", async (AppDbContext db, CancellationToken ct) =>
+            Results.Ok((await db.DiagnosticTests.AsNoTracking().OrderBy(t => t.Name).Select(t => new { t.Id, t.Name, t.IsActive, Kind = t.Kind.ToString(), t.ServiceId }).ToListAsync(ct))
+                .Select(t => new { t.Id, t.Name, t.IsActive, t.Kind, t.ServiceId, IsSystem = Auth.Seeder.IsSystemTest(t.Name) })))
+            .RequirePermission("settings.view");
+
         tests.MapPost("/", async (SaveTestRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
         {
             if (request.Kind != DiagnosticKind.Lab && request.ServiceId is null)
@@ -147,6 +157,49 @@ public static class DiagnosticEndpoints
             audit.Add("DiagnosticTestCreated", "DiagnosticTest", null, test.Name);
             await db.SaveChangesAsync(ct);
             return Results.Created($"/api/diagnostic-tests/{test.Id}", new { test.Id });
+        }).RequirePermission("settings.edit");
+
+        tests.MapPut("/{id:int}", async (int id, SaveTestRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        {
+            var test = await db.DiagnosticTests.SingleOrDefaultAsync(t => t.Id == id, ct) ?? throw AppException.NotFound();
+            if (Auth.Seeder.IsSystemTest(test.Name))
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "system_test", "این مورد سیستمی است و قابل تغییر نیست.");
+            }
+
+            // Open requests were charged and routed by this kind.
+            if (request.Kind != test.Kind)
+            {
+                throw new AppException(StatusCodes.Status400BadRequest, "immutable_kind", "نوع آزمایش پس از ساخت قابل تغییر نیست.");
+            }
+
+            if (test.Kind != DiagnosticKind.Lab && request.ServiceId is null)
+            {
+                throw new AppException(StatusCodes.Status400BadRequest, "service_required", "رفرکشن و عکس‌برداری باید تعرفه داشته باشند.");
+            }
+
+            if (request.ServiceId is { } linkedService && linkedService != test.ServiceId && !await db.Services.AnyAsync(s => s.Id == linkedService && s.IsActive, ct))
+            {
+                throw new AppException(StatusCodes.Status400BadRequest, "unknown_service", "خدمت انتخاب‌شده معتبر نیست.");
+            }
+
+            test.Name = request.Name.Trim();
+            test.IsActive = request.IsActive;
+            test.ServiceId = request.ServiceId;
+            audit.Add("DiagnosticTestEdited", "DiagnosticTest", id.ToString());
+            await db.SaveChangesAsync(ct);
+            return Results.NoContent();
+        }).RequirePermission("settings.edit");
+
+        tests.MapDelete("/{id:int}", async (int id, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        {
+            var test = await db.DiagnosticTests.SingleOrDefaultAsync(t => t.Id == id, ct) ?? throw AppException.NotFound();
+            if (Auth.Seeder.IsSystemTest(test.Name))
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "system_test", "این مورد سیستمی است و حذف نمی‌شود.");
+            }
+
+            return await SafeDelete.RemoveOrDeactivateAsync(db, audit, test, "DiagnosticTest", id.ToString(), test.Name, () => test.IsActive = false, ct);
         }).RequirePermission("settings.edit");
 
         var orders = app.MapGroup("/api/diagnostic-orders").WithTags("Diagnostics");
@@ -288,6 +341,63 @@ public static class DiagnosticEndpoints
                 var row = await QueryOrders(db.DiagnosticOrders.Where(o => o.Id == order.Id)).SingleAsync(ct);
                 return (StatusCodes.Status201Created, ToDto(row));
             }, ct)).RequirePermission("diagnostics.create");
+
+        orders.MapGet("/{id:long}", async (long id, AppDbContext db, CancellationToken ct) =>
+        {
+            var row = await QueryOrders(db.DiagnosticOrders.AsNoTracking().Where(o => o.Id == id)).SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
+            return Results.Ok(ToDto(row));
+        }).RequirePermission("diagnostics.view");
+
+        // The test itself stays: it was charged and routed as that test. A wrong one is cancelled and requested again.
+        orders.MapPut("/{id:long}/note", async (long id, EditOrderNoteRequest request, AppDbContext db, ClinicalAccess access, AuditService audit, CancellationToken ct) =>
+        {
+            var order = await db.DiagnosticOrders.SingleOrDefaultAsync(o => o.Id == id, ct) ?? throw AppException.NotFound();
+            db.Entry(order).Property(o => o.Version).OriginalValue = request.Version;
+            if (order.VisitId is { } visitId)
+            {
+                await access.EnsureResponsibleAsync(visitId, ct);
+            }
+
+            if (order.Status is DiagnosticStatus.ResultReady or DiagnosticStatus.Cancelled)
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "invalid_transition", "برای این درخواست نتیجه ثبت شده یا لغو شده است.");
+            }
+
+            audit.Add("DiagnosticOrderEdited", "DiagnosticOrder", id.ToString(), order.Note);
+            order.Note = Text.Clean(request.Note);
+            await db.SaveChangesAsync(ct);
+            return Results.NoContent();
+        }).RequirePermission("diagnostics.create");
+
+        // A result the doctor may already have read, so the old text and the reason stay on the record, and the doctor is told.
+        orders.MapPut("/{id:long}/result", async (long id, AmendResultRequest request, AppDbContext db, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var order = await db.DiagnosticOrders.SingleOrDefaultAsync(o => o.Id == id, ct) ?? throw AppException.NotFound();
+            db.Entry(order).Property(o => o.Version).OriginalValue = request.Version;
+            if (await KindOfAsync(db, order, ct) == DiagnosticKind.Refraction)
+            {
+                throw UseRefractionForm();
+            }
+
+            var result = await db.DiagnosticResults.SingleOrDefaultAsync(r => r.OrderId == id, ct);
+            if (order.Status != DiagnosticStatus.ResultReady || result is null)
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "invalid_transition", "برای این درخواست هنوز نتیجه‌ای ثبت نشده است.");
+            }
+
+            var reason = request.Reason.Trim();
+            Amendments.Add(db, nameof(DiagnosticOrder), id, nameof(result.ResultText), result.ResultText, request.ResultText.Trim(), reason, user.Id);
+            result.ResultText = request.ResultText.Trim();
+
+            // The text lives in its own table: the version must still move on for the next editor's check.
+            db.Entry(order).State = EntityState.Modified;
+            audit.Add("DiagnosticResultAmended", "DiagnosticOrder", id.ToString(), reason);
+            outbox.Add("DiagnosticResultReady", new { orderId = id, visitId = order.VisitId }, Groups.Doctor, Groups.Lab);
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return Results.NoContent();
+        }).RequirePermission("diagnostics.approve");
 
         orders.MapPost("/{id:long}/start", async (long id, ChangeOrderStatusRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
         {

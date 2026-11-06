@@ -16,6 +16,9 @@ const router = useRouter()
 const visit = ref<VisitRow | null>(null)
 const version = ref<number | null>(null)
 const completed = ref(false)
+/** A completed exam opens again only to record a correction with its reason. */
+const amending = ref(false)
+const amendReason = ref('')
 const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
@@ -150,10 +153,17 @@ async function save(complete: boolean) {
         measurements: measurementsText.value,
         notes: form.notes,
         version: version.value,
+        amendReason: amending.value ? amendReason.value : undefined,
       },
     })
     version.value = saved.version
     markSaved()
+    if (amending.value) {
+      amending.value = false
+      amendReason.value = ''
+      notice.value = 'اصلاحیه ثبت شد.'
+      return
+    }
     if (complete) {
       await api(`/pre-examinations/${props.visitId}/complete`, { method: 'POST' })
       await router.push({ name: 'triage' })
@@ -187,8 +197,10 @@ onMounted(load)
         <RouterLink :to="{ name: 'triage' }" class="btn btn-soft">بازگشت به صف</RouterLink>
       </div>
 
-      <fieldset :disabled="completed || loading" class="xr-card__body">
-        <div v-if="completed" class="alert alert-primary" role="status">این معاینه تکمیل و برای داکتر ارسال شده است و قابل ویرایش نیست.</div>
+      <fieldset :disabled="(completed && !amending) || loading" class="xr-card__body">
+        <div v-if="completed && !amending" class="alert alert-primary" role="status">این معاینه تکمیل و برای داکتر ارسال شده است. برای تغییر، اصلاحیه با دلیل ثبت کنید.</div>
+        <div v-if="amending" class="alert alert-warning" role="status">مقدار قبلی و دلیل اصلاح در پرونده می‌ماند و داکتر آن را می‌بیند.</div>
+        <div v-if="notice && completed && !amending" class="alert alert-success" role="status">{{ notice }}</div>
 
         <div class="xr-group">
           <h3 class="xr-group__title">شکایت</h3>
@@ -293,6 +305,14 @@ onMounted(load)
         <div v-if="error" class="alert alert-danger mt-3 mb-0" role="alert">{{ error }}</div>
       </fieldset>
 
+      <div v-if="completed && !amending" class="xr-action-bar">
+        <button type="button" class="btn btn-soft" :disabled="loading" @click="amending = true">ثبت اصلاحیه</button>
+      </div>
+      <div v-if="amending" class="xr-action-bar">
+        <input v-model="amendReason" class="form-control" minlength="3" maxlength="500" required placeholder="دلیل اصلاح" aria-label="دلیل اصلاح" />
+        <button type="submit" class="btn btn-primary text-nowrap" :disabled="saving || loading">ذخیره اصلاحیه</button>
+        <button type="button" class="btn btn-soft-danger text-nowrap" :disabled="saving" @click="amending = false; load()">انصراف</button>
+      </div>
       <div v-if="!completed" class="xr-action-bar">
         <button type="button" class="btn btn-primary" :disabled="saving || loading" @click="save(true)">ذخیره و ارسال به داکتر</button>
         <button type="submit" class="btn btn-soft" :disabled="saving || loading">ذخیره</button>

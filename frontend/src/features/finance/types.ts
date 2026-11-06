@@ -26,6 +26,7 @@ export interface InvoiceItemRow {
   unitPrice: number
   lineTotal: number
   isVoid: boolean
+  serviceId: number | null
 }
 
 /** What an invoice charges for, in the cashier's words: its first line and how many others follow. */
@@ -53,6 +54,7 @@ export interface InvoiceDetail {
   items: InvoiceItemRow[]
   payments: PaymentRow[]
   discounts: { details: string | null; byUser: string | null; createdAt: string }[]
+  correctable: boolean
 }
 
 export interface SessionRow {

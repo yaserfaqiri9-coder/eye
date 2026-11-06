@@ -9,6 +9,7 @@ export interface ProductOption {
   salePrice: number
   onHand: number
   unit: string
+  isActive: boolean
 }
 
 /** Stock and price change all day, so they are read from the server each time and never cached. */
@@ -18,7 +19,7 @@ export function productSearch(kinds: string[], remember: (rows: ProductOption[])
     if (query) params.set('q', query)
     if (kinds.length === 1) params.set('kind', kinds[0])
     const page = await api<{ items: ProductOption[] }>(`/inventory/products?${params}`, { signal })
-    const rows = kinds.length ? page.items.filter((p) => kinds.includes(p.kind)) : page.items
+    const rows = page.items.filter((p) => p.isActive && (!kinds.length || kinds.includes(p.kind)))
     remember(rows)
     return rows.map((p) => ({
       value: p.id,

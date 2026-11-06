@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, ApiError, errorMessage } from '@/api/http'
 import AttachmentPanel from '@/components/AttachmentPanel.vue'
@@ -14,19 +14,21 @@ const router = useRouter()
 const auth = useAuthStore()
 
 const order = ref<DiagnosticOrder | null>(null)
-const form = reactive({ text: '' })
-const { dirty, markSaved } = useUnsavedGuard(form)
+const form = reactive({ text: '', reason: '' })
+const { dirty, markSaved, applying } = useUnsavedGuard(form)
 const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
 
+/** A released result is corrected, not re-entered: the old text and the reason stay on the record. */
+const amending = computed(() => order.value?.status === 'ResultReady')
+
 async function load() {
   try {
-    // Orders waiting for a result are recent, and the list is the only read this API offers for them.
-    const statuses = ['Requested', 'InProgress']
-    const pages = await Promise.all(statuses.map((status) => api<{ items: DiagnosticOrder[] }>(`/diagnostic-orders?status=${status}&pageSize=100`)))
-    order.value = pages.flatMap((p) => p.items).find((row) => row.id === Number(props.id)) ?? null
-    if (!order.value) throw new ApiError(404, 'not_found', 'این درخواست پیدا نشد یا نتیجه آن قبلاً ثبت شده است.')
+    const loaded = await api<DiagnosticOrder>(`/diagnostic-orders/${props.id}`)
+    if (loaded.status === 'Cancelled') throw new ApiError(409, 'invalid_transition', 'این درخواست لغو شده است.')
+    order.value = loaded
+    if (loaded.status === 'ResultReady') applying(() => (form.text = loaded.resultText ?? ''))
   } catch (cause) {
     error.value = errorMessage(cause)
   } finally {
@@ -37,8 +39,13 @@ async function load() {
 async function submit() {
   saving.value = true
   error.value = ''
+  const row = order.value!
   try {
-    await api(`/diagnostic-orders/${order.value!.id}/result`, { method: 'POST', body: { resultText: form.text, version: order.value!.version } })
+    if (amending.value) {
+      await api(`/diagnostic-orders/${row.id}/result`, { method: 'PUT', body: { resultText: form.text, reason: form.reason, version: row.version } })
+    } else {
+      await api(`/diagnostic-orders/${row.id}/result`, { method: 'POST', body: { resultText: form.text, version: row.version } })
+    }
     markSaved()
     await router.push({ name: 'lab' })
   } catch (cause) {
@@ -52,7 +59,7 @@ onMounted(load)
 </script>
 
 <template>
-  <UiFormPage :title="order ? `ثبت نتیجه: ${order.testName}` : 'ثبت نتیجه آزمایش'" :back-to="{ name: 'lab' }" back-label="بازگشت به آزمایشگاه" :dirty="dirty" :saving="saving" :error="error" @submit="submit">
+  <UiFormPage :title="order ? `${amending ? 'اصلاح نتیجه' : 'ثبت نتیجه'}: ${order.testName}` : 'ثبت نتیجه آزمایش'" :back-to="{ name: 'lab' }" back-label="بازگشت به آزمایشگاه" :dirty="dirty" :saving="saving" :error="error" @submit="submit">
     <template #summary>
       <section class="xr-card xr-card__body">
         <dl class="xr-facts">
@@ -67,8 +74,13 @@ onMounted(load)
     </template>
 
     <fieldset :disabled="loading || !order">
+      <div v-if="amending" class="alert alert-warning" role="status">این نتیجه قبلاً ثبت شده است. متن قبلی و دلیل اصلاح در پرونده می‌ماند و به داکتر اطلاع داده می‌شود.</div>
       <label class="form-label" for="r-text">نتیجه</label>
       <textarea id="r-text" v-model="form.text" class="form-control" rows="10" maxlength="4000" required></textarea>
+      <div v-if="amending" class="mt-3">
+        <label class="form-label" for="r-reason">دلیل اصلاح</label>
+        <input id="r-reason" v-model="form.reason" class="form-control" minlength="3" maxlength="500" required />
+      </div>
     </fieldset>
     <template v-if="order">
       <hr />
@@ -76,7 +88,7 @@ onMounted(load)
     </template>
 
     <template #actions>
-      <button type="submit" class="btn btn-primary" :disabled="saving || loading || !order">ثبت نتیجه</button>
+      <button type="submit" class="btn btn-primary" :disabled="saving || loading || !order">{{ amending ? 'ثبت اصلاحیه' : 'ثبت نتیجه' }}</button>
       <RouterLink :to="{ name: 'lab' }" class="btn btn-soft-danger">انصراف</RouterLink>
     </template>
   </UiFormPage>

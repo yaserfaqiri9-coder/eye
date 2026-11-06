@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api, ApiError, errorMessage, newIdempotencyKey } from '@/api/http'
 import UiComboBox, { type ComboOption } from '@/components/UiComboBox.vue'
 import UiFormPage from '@/components/UiFormPage.vue'
@@ -8,14 +8,19 @@ import { useUnsavedGuard } from '@/features/clinical/useUnsavedGuard'
 import PatientPicker from '@/features/patients/PatientPicker.vue'
 import { useAuthStore } from '@/stores/auth'
 import { money } from '@/utils/money'
-import type { ServiceRow } from './types'
+import type { InvoiceDetail, ServiceRow } from './types'
 
+const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
 const blankLine = () => ({ serviceId: null as number | null, quantity: 1 })
-const form = reactive({ patientId: null as number | null, lines: [blankLine()] })
-const { dirty, markSaved } = useUnsavedGuard(form)
+const form = reactive({ patientId: null as number | null, lines: [blankLine()], reason: '' })
+const { dirty, markSaved, applying } = useUnsavedGuard(form)
+
+/** Set when this form replaces a mistaken invoice instead of issuing a new one. */
+const correcting = ref<InvoiceDetail | null>(null)
+const correctId = computed(() => Number(route.query.correct) || null)
 
 const services = ref<ServiceRow[]>([])
 const loading = ref(true)
@@ -30,12 +35,13 @@ const total = computed(() => form.lines.reduce((sum, line) => sum + priceOf(line
 async function submit() {
   saving.value = true
   error.value = ''
+  const items = form.lines.map((l) => ({ serviceId: l.serviceId, quantity: l.quantity }))
   try {
-    await api('/invoices', {
-      method: 'POST',
-      idempotencyKey: key,
-      body: { patientId: form.patientId, items: form.lines.map((l) => ({ serviceId: l.serviceId, quantity: l.quantity })) },
-    })
+    if (correcting.value) {
+      await api(`/invoices/${correcting.value.invoice.id}/correct`, { method: 'POST', body: { patientId: form.patientId, items, reason: form.reason, version: correcting.value.invoice.version } })
+    } else {
+      await api('/invoices', { method: 'POST', idempotencyKey: key, body: { patientId: form.patientId, items } })
+    }
     markSaved()
     await router.push({ name: 'cashier' })
   } catch (cause) {
@@ -50,6 +56,15 @@ onMounted(async () => {
   try {
     // Prices decide the amount charged, so they are read fresh when the form opens.
     services.value = (await api<ServiceRow[]>('/services')).filter((s) => s.isActive && s.currentPrice !== null)
+    if (correctId.value) {
+      const detail = await api<InvoiceDetail>(`/invoices/${correctId.value}`)
+      if (!detail.correctable) throw new ApiError(409, 'invoice_not_standalone', 'این فاکتور از بخش دیگری صادر شده است. آن را از همان بخش اصلاح یا لغو کنید.')
+      correcting.value = detail
+      applying(() => {
+        form.patientId = detail.invoice.patientId
+        form.lines = detail.items.filter((i) => !i.isVoid).map((i) => ({ serviceId: i.serviceId, quantity: i.quantity }))
+      })
+    }
   } catch (cause) {
     error.value = errorMessage(cause)
   } finally {
@@ -59,9 +74,10 @@ onMounted(async () => {
 </script>
 
 <template>
-  <UiFormPage title="فاکتور مستقل" :back-to="{ name: 'cashier' }" back-label="بازگشت به صندوق" :dirty="dirty" :saving="saving" :error="error" @submit="submit">
+  <UiFormPage :title="correctId ? `اصلاح فاکتور ${correcting?.invoice.invoiceNumber ?? ''}` : 'فاکتور مستقل'" :back-to="{ name: 'cashier' }" back-label="بازگشت به صندوق" :dirty="dirty" :saving="saving" :error="error" @submit="submit">
+    <div v-if="correcting" class="alert alert-warning" role="status">فاکتور فعلی با این دلیل باطل می‌شود و فاکتور تازه با قیمت‌های امروز صادر می‌شود. سابقه هر دو می‌ماند.</div>
     <div v-if="auth.can('patients.view')" class="row mb-4">
-      <div class="col-md-6"><PatientPicker v-model="form.patientId" label="مریض (اختیاری)" /></div>
+      <div class="col-md-6"><PatientPicker v-model="form.patientId" label="مریض (اختیاری)" :selected-label="correcting?.invoice.patientName" /></div>
     </div>
 
     <table class="xr-lines">
@@ -78,9 +94,10 @@ onMounted(async () => {
     </table>
     <button type="button" class="btn btn-soft btn-sm mt-2" @click="form.lines.push(blankLine())">افزودن قلم</button>
     <p class="xr-lines__total mb-0">مجموع: <strong>{{ money(total) }}</strong></p>
+    <div v-if="correcting" class="mt-3"><label class="form-label" for="inv-reason">دلیل اصلاح</label><input id="inv-reason" v-model="form.reason" class="form-control" minlength="3" maxlength="300" required /></div>
 
     <template #actions>
-      <button type="submit" class="btn btn-primary" :disabled="saving || loading">صدور فاکتور</button>
+      <button type="submit" class="btn btn-primary" :disabled="saving || loading || (!!correctId && !correcting)">{{ correctId ? 'باطل کردن و صدور فاکتور تازه' : 'صدور فاکتور' }}</button>
       <RouterLink :to="{ name: 'cashier' }" class="btn btn-soft-danger">انصراف</RouterLink>
     </template>
   </UiFormPage>

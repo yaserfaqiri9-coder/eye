@@ -15,6 +15,16 @@ interface SaleLine {
   quantity: number
   prescriptionItemId: number | null
   label: string
+  productName: string | null
+}
+
+interface SaleDetail {
+  id: number
+  saleNumber: string
+  patientName: string | null
+  isReturned: boolean
+  version: number
+  items: { productId: number; productName: string; kind: string; unit: string; salePrice: number; onHand: number; isActive: boolean; quantity: number; prescriptionItemId: number | null }[]
 }
 
 interface SaleDone {
@@ -27,7 +37,10 @@ const route = useRoute()
 const auth = useAuthStore()
 
 const rx = ref<Prescription | null>(null)
-const form = reactive({ lines: [] as SaleLine[] })
+/** Set when this form replaces a mistaken sale instead of recording a new one. */
+const correcting = ref<SaleDetail | null>(null)
+const correctId = Number(route.query.correct) || null
+const form = reactive({ lines: [] as SaleLine[], reason: '' })
 const { dirty, markSaved, applying } = useUnsavedGuard(form)
 const known = reactive(new Map<number, ProductOption>())
 const loading = ref(false)
@@ -38,7 +51,7 @@ let key = newIdempotencyKey()
 
 const search = productSearch(['Drug'], (rows) => rows.forEach((row) => known.set(row.id, row)))
 
-const blankLine = (): SaleLine => ({ productId: null, quantity: 1, prescriptionItemId: null, label: '' })
+const blankLine = (): SaleLine => ({ productId: null, quantity: 1, prescriptionItemId: null, label: '', productName: null })
 
 function reset() {
   applying(() => (form.lines = [blankLine()]))
@@ -63,7 +76,25 @@ async function loadPrescription() {
     applying(() => {
       form.lines = found.items
         .filter((i) => i.dispensedQuantity < i.quantity)
-        .map((i) => ({ productId: null, quantity: i.quantity - i.dispensedQuantity, prescriptionItemId: i.id, label: i.drugName }))
+        .map((i) => ({ productId: null, quantity: i.quantity - i.dispensedQuantity, prescriptionItemId: i.id, label: i.drugName, productName: null }))
+    })
+  } catch (cause) {
+    error.value = errorMessage(cause)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loadCorrection() {
+  if (!correctId) return
+  loading.value = true
+  try {
+    const sale = await api<SaleDetail>(`/pharmacy/sales/${correctId}`)
+    if (sale.isReturned) throw new ApiError(409, 'already_returned', 'این فروش قبلاً برگشت شده است.')
+    correcting.value = sale
+    for (const i of sale.items) known.set(i.productId, { id: i.productId, name: i.productName, kind: i.kind, salePrice: i.salePrice, onHand: i.onHand, unit: i.unit, isActive: i.isActive })
+    applying(() => {
+      form.lines = sale.items.map((i) => ({ productId: i.productId, quantity: i.quantity, prescriptionItemId: i.prescriptionItemId, label: '', productName: i.productName }))
     })
   } catch (cause) {
     error.value = errorMessage(cause)
@@ -75,16 +106,11 @@ async function loadPrescription() {
 async function submit() {
   saving.value = true
   error.value = ''
+  const items = form.lines.map((l) => ({ productId: l.productId, quantity: l.quantity, prescriptionItemId: l.prescriptionItemId }))
   try {
-    done.value = await api<SaleDone>('/pharmacy/sales', {
-      method: 'POST',
-      idempotencyKey: key,
-      body: {
-        patientId: rx.value?.patientId ?? null,
-        prescriptionId: rx.value?.id ?? null,
-        items: form.lines.map((l) => ({ productId: l.productId, quantity: l.quantity, prescriptionItemId: l.prescriptionItemId })),
-      },
-    })
+    done.value = correcting.value
+      ? await api<SaleDone>(`/pharmacy/sales/${correcting.value.id}/correct`, { method: 'POST', body: { items, reason: form.reason, version: correcting.value.version } })
+      : await api<SaleDone>('/pharmacy/sales', { method: 'POST', idempotencyKey: key, body: { patientId: rx.value?.patientId ?? null, prescriptionId: rx.value?.id ?? null, items } })
     markSaved()
   } catch (cause) {
     error.value = errorMessage(cause)
@@ -97,12 +123,13 @@ async function submit() {
 onMounted(() => {
   reset()
   loadPrescription()
+  loadCorrection()
 })
 </script>
 
 <template>
   <UiFormPage
-    :title="route.query.rx ? `تحویل نسخه ${rx?.rxNumber ?? ''}` : 'فروش مستقل دواخانه'"
+    :title="correctId ? `اصلاح فروش ${correcting?.saleNumber ?? ''}` : route.query.rx ? `تحویل نسخه ${rx?.rxNumber ?? ''}` : 'فروش مستقل دواخانه'"
     :back-to="{ name: 'pharmacy' }"
     back-label="بازگشت به دواخانه"
     :dirty="dirty"
@@ -130,6 +157,7 @@ onMounted(() => {
     </div>
 
     <fieldset v-else :disabled="loading">
+      <div v-if="correcting" class="alert alert-warning" role="status">فروش فعلی{{ correcting.patientName ? ` (${correcting.patientName})` : '' }} برگشت می‌شود و فروش تازه با قیمت‌های امروز ثبت می‌شود. فروشی که پرداخت شده باشد از اینجا اصلاح نمی‌شود.</div>
       <div class="xr-table-wrap xr-lines-wrap">
         <table class="xr-lines">
           <thead>
@@ -138,7 +166,7 @@ onMounted(() => {
           <tbody>
             <tr v-for="(line, i) in form.lines" :key="i">
               <td>
-                <UiComboBox v-model="line.productId" :label="line.label ? `جنس برای: ${line.label}` : 'جنس'" :search="search" :hide-label="!line.label" required chip placeholder="نام یا کد جنس را تایپ کنید" />
+                <UiComboBox v-model="line.productId" :label="line.label ? `جنس برای: ${line.label}` : 'جنس'" :search="search" :selected-label="line.productName" :hide-label="!line.label" required chip placeholder="نام یا کد جنس را تایپ کنید" />
               </td>
               <td class="line-qty" :class="{ 'line-qty--with-label': line.label }">
                 <input v-model.number="line.quantity" class="form-control" type="number" min="0.001" step="any" required :aria-label="`مقدار ردیف ${i + 1}`" />
@@ -153,10 +181,11 @@ onMounted(() => {
       </div>
       <button v-if="!rx" type="button" class="btn btn-soft btn-sm mt-2" @click="form.lines.push(blankLine())">افزودن قلم</button>
       <p class="xr-lines__total mb-0">مجموع: <strong>{{ money(total) }}</strong></p>
+      <div v-if="correcting" class="mt-3"><label class="form-label" for="sale-reason">دلیل اصلاح</label><input id="sale-reason" v-model="form.reason" class="form-control" minlength="3" maxlength="300" required /></div>
     </fieldset>
 
     <template #actions>
-      <button type="submit" class="btn btn-primary" :disabled="saving || loading">ثبت فروش</button>
+      <button type="submit" class="btn btn-primary" :disabled="saving || loading || (!!correctId && !correcting)">{{ correctId ? 'برگشت و ثبت فروش تازه' : 'ثبت فروش' }}</button>
       <RouterLink :to="{ name: 'pharmacy' }" class="btn btn-soft-danger">انصراف</RouterLink>
     </template>
   </UiFormPage>

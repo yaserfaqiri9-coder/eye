@@ -213,6 +213,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
                 <button v-if="auth.can('payments.create')" type="button" class="btn btn-soft btn-sm" :disabled="!openSession" @click="openPayment(row)">دریافت</button>
                 <RouterLink v-if="auth.can('invoices.print')" :to="`/print/invoice/${row.id}`" target="_blank" class="btn btn-soft btn-sm ms-2">فاکتور</RouterLink>
                 <button v-if="row.paid === 0 && row.discount === 0 && auth.can('invoices.cancel')" type="button" class="btn btn-soft-danger btn-sm ms-2" @click="Object.assign(voiding, { row, reason: '', error: '' })">باطل</button>
+                <RouterLink v-if="row.paid === 0 && row.discount === 0 && auth.can('invoices.cancel') && auth.can('invoices.create')" :to="{ path: '/cashier/invoice', query: { correct: row.id } }" class="btn btn-soft btn-sm ms-2">اصلاح</RouterLink>
               </td>
             </tr>
           </tbody>

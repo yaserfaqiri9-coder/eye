@@ -17,6 +17,8 @@ public sealed record CreateUserRequest(
 
 public sealed record SetRolesRequest([Required, MinLength(1)] string[] Roles);
 
+public sealed record EditUserRequest([Required, MaxLength(150)] string FullName);
+
 public sealed record ResetPasswordRequest([Required, MinLength(10), MaxLength(200)] string NewPassword);
 
 public static class UserEndpoints
@@ -77,6 +79,22 @@ public static class UserEndpoints
             await db.SaveChangesAsync();
             return Results.Created($"/api/users/{user.Id}", new { user.Id });
         }).RequirePermission("users.create");
+
+        group.MapPut("/{id:long}", async (long id, EditUserRequest request, UserManager<AppUser> users, AuditService audit, AppDbContext db) =>
+        {
+            var user = await users.FindByIdAsync(id.ToString()) ?? throw AppException.NotFound();
+            var previous = user.FullName;
+            user.FullName = request.FullName.Trim();
+            var updated = await users.UpdateAsync(user);
+            if (!updated.Succeeded)
+            {
+                throw ToAppException(updated);
+            }
+
+            audit.Add("UserEdited", "User", id.ToString(), previous);
+            await db.SaveChangesAsync();
+            return Results.NoContent();
+        }).RequirePermission("users.manage");
 
         group.MapPut("/{id:long}/roles", async (long id, SetRolesRequest request, UserManager<AppUser> users, AuditService audit, AppDbContext db, ConnectionTracker connections) =>
         {

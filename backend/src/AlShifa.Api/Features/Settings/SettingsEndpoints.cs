@@ -48,6 +48,8 @@ public sealed record AttachmentRow(long Id, string FileName, string ContentType,
 
 public sealed record SaveRegisterRequest([Required, MaxLength(100)] string Name);
 
+public sealed record EditRegisterRequest([Required, MaxLength(100)] string Name, bool IsActive);
+
 public static class SettingsEndpoints
 {
     private const long MaxFileSize = 10 * 1024 * 1024;
@@ -92,6 +94,27 @@ public static class SettingsEndpoints
             audit.Add("CashRegisterCreated", "CashRegister", null, register.Name);
             await db.SaveChangesAsync(ct);
             return Results.Created($"/api/cash/registers/{register.Id}", new { register.Id });
+        }).RequirePermission("settings.edit").WithTags("Settings");
+
+        // The cashier's own list shows active registers only; managing them needs the inactive ones too.
+        app.MapGet("/api/cash/registers/all", async (AppDbContext db, CancellationToken ct) =>
+            Results.Ok(await db.CashRegisters.AsNoTracking().OrderBy(r => r.Id).Select(r => new { r.Id, r.Name, r.IsActive }).ToListAsync(ct)))
+            .RequirePermission("settings.view").WithTags("Settings");
+
+        app.MapPut("/api/cash/registers/{id:int}", async (int id, EditRegisterRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        {
+            var register = await db.CashRegisters.SingleOrDefaultAsync(r => r.Id == id, ct) ?? throw AppException.NotFound();
+            register.Name = request.Name.Trim();
+            register.IsActive = request.IsActive;
+            audit.Add("CashRegisterEdited", "CashRegister", id.ToString(), register.Name);
+            await db.SaveChangesAsync(ct);
+            return Results.NoContent();
+        }).RequirePermission("settings.edit").WithTags("Settings");
+
+        app.MapDelete("/api/cash/registers/{id:int}", async (int id, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        {
+            var register = await db.CashRegisters.SingleOrDefaultAsync(r => r.Id == id, ct) ?? throw AppException.NotFound();
+            return await SafeDelete.RemoveOrDeactivateAsync(db, audit, register, "CashRegister", id.ToString(), register.Name, () => register.IsActive = false, ct);
         }).RequirePermission("settings.edit").WithTags("Settings");
 
         var attachments = app.MapGroup("/api/attachments").WithTags("Attachments");
@@ -189,6 +212,61 @@ public static class SettingsEndpoints
             await db.SaveChangesAsync(ct);
             return Results.Created($"/api/attachments/{attachment.Id}", new AttachmentRow(attachment.Id, attachment.FileName, attachment.ContentType, attachment.Size, attachment.CreatedAt));
         }).RequireAuthorization().DisableAntiforgery();
+
+        // Only until the record is final. A file behind a released result or a closed case stays; a corrected one is added beside it.
+        attachments.MapDelete("/{id:long}", async (long id, AppDbContext db, ClinicalAccess access, AuditService audit, HttpContext http, IConfiguration config, IHostEnvironment env, CancellationToken ct) =>
+        {
+            var attachment = await db.Attachments.SingleOrDefaultAsync(a => a.Id == id, ct) ?? throw AppException.NotFound();
+            EnsureAllowed(http, attachment.OwnerType, write: true);
+            var locked = new AppException(StatusCodes.Status409Conflict, "attachment_locked", "این پرونده نهایی شده است و فایل آن حذف نمی‌شود. در صورت نیاز فایل درست را در کنارش اضافه کنید.");
+            if (attachment.OwnerType == "DiagnosticOrder")
+            {
+                var status = await db.DiagnosticOrders.Where(o => o.Id == attachment.OwnerId).Select(o => (DiagnosticStatus?)o.Status).SingleOrDefaultAsync(ct);
+                if (status is DiagnosticStatus.ResultReady or DiagnosticStatus.Cancelled)
+                {
+                    throw locked;
+                }
+            }
+            else if (attachment.OwnerType == "SurgeryCase")
+            {
+                var surgery = await db.SurgeryCases.AsNoTracking().Where(c => c.Id == attachment.OwnerId).Select(c => new { c.VisitId, c.ResponsibleUserId, c.Status }).SingleOrDefaultAsync(ct);
+                if (surgery is not null)
+                {
+                    await access.EnsureResponsibleAsync(surgery.VisitId, ct, surgery.ResponsibleUserId);
+                    if (surgery.Status is SurgeryStatus.Closed or SurgeryStatus.Cancelled)
+                    {
+                        throw locked;
+                    }
+                }
+            }
+
+            // Only the newest logo shows, so removing that one alone would bring back the one it replaced.
+            var rows = attachment.OwnerType == "Logo"
+                ? await db.Attachments.Where(a => a.OwnerType == "Logo").ToListAsync(ct)
+                : [attachment];
+            db.Attachments.RemoveRange(rows);
+            foreach (var row in rows)
+            {
+                audit.Add("AttachmentDeleted", row.OwnerType, row.OwnerId.ToString(), $"{row.FileName} {row.Sha256}");
+            }
+
+            await db.SaveChangesAsync(ct);
+
+            // After the commit: a file left behind by a failure here is harmless, a record pointing at a missing file is not.
+            var root = StorageRoot(config, env);
+            foreach (var row in rows)
+            {
+                try
+                {
+                    File.Delete(Path.Combine(root, row.StoredName));
+                }
+                catch (IOException)
+                {
+                }
+            }
+
+            return Results.NoContent();
+        }).RequireAuthorization();
     }
 
     public static async Task<SettingsDto> LoadAsync(AppDbContext db, CancellationToken ct)

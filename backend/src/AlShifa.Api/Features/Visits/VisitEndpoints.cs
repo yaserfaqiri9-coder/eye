@@ -22,6 +22,10 @@ public sealed record TransferDoctorRequest(long DoctorStaffId, [Required, MinLen
 
 public sealed record CreateAppointmentRequest(long PatientId, long DoctorStaffId, DateTime ScheduledAt, [MaxLength(300)] string? Note);
 
+public sealed record EditAppointmentRequest(long PatientId, long DoctorStaffId, DateTime ScheduledAt, [MaxLength(300)] string? Note, int Version);
+
+public sealed record EditVisitReasonRequest([MaxLength(300)] string? Reason, int Version);
+
 public sealed record AppointmentRow(long Id, long PatientId, string PatientFileNumber, string PatientName, long DoctorStaffId, string DoctorName, DateTime ScheduledAt, string Status, string? Note, long? VisitId, int Version);
 
 public sealed record LookupItem(long Id, string Name);
@@ -297,6 +301,28 @@ public static class VisitEndpoints
             return Results.Ok(await service.LoadRowAsync(id, ct));
         }).RequireAuthorization();
 
+        // Patient, department and queue number stay: the fee and the number were issued for them. A wrong one is cancelled and registered again.
+        visits.MapPut("/{id:long}/reason", async (long id, EditVisitReasonRequest request, AppDbContext db, VisitService service, AuditService audit, CancellationToken ct) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var visit = await VisitService.LockAsync(db, id, ct);
+            if (visit.Version != request.Version)
+            {
+                throw new DbUpdateConcurrencyException();
+            }
+
+            if (visit.Status is VisitStatus.Completed or VisitStatus.Cancelled)
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "visit_closed", "این مراجعه بسته شده است.");
+            }
+
+            audit.Add("VisitReasonEdited", "Visit", id.ToString(), visit.Reason);
+            visit.Reason = Text.Clean(request.Reason);
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return Results.Ok(await service.LoadRowAsync(id, ct));
+        }).RequirePermission("visits.edit");
+
         // The responsible doctor hands over their own patient; visits.manage covers a doctor who cannot. The record stays where it is and the reason stays in the audit.
         visits.MapPost("/{id:long}/transfer-doctor", async (long id, TransferDoctorRequest request, AppDbContext db, ClinicalAccess access, VisitService service, CurrentUser user, AuditService audit, Outbox outbox, HttpContext http, CancellationToken ct) =>
         {
@@ -392,6 +418,47 @@ public static class VisitEndpoints
                 await db.SaveChangesAsync(ct);
                 return (StatusCodes.Status201Created, new { appointment.Id });
             }, ct)).RequirePermission("appointments.create");
+
+        appointments.MapPut("/{id:long}", async (long id, EditAppointmentRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        {
+            var appointment = await db.Appointments.SingleOrDefaultAsync(a => a.Id == id, ct) ?? throw AppException.NotFound();
+            db.Entry(appointment).Property(a => a.Version).OriginalValue = request.Version;
+            if (appointment.Status != AppointmentStatus.Scheduled)
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "invalid_transition", "فقط وقت ملاقاتی که هنوز پذیرش یا لغو نشده قابل ویرایش است.");
+            }
+
+            var at = request.ScheduledAt.Kind == DateTimeKind.Utc ? request.ScheduledAt : request.ScheduledAt.ToUniversalTime();
+
+            // A note may be corrected on a time already past, but no appointment may be moved into the past.
+            if (at != appointment.ScheduledAt && at < DateTime.UtcNow)
+            {
+                throw new AppException(StatusCodes.Status400BadRequest, "appointment_in_past", "زمان وقت ملاقات نمی‌تواند در گذشته باشد.");
+            }
+
+            if (request.PatientId != appointment.PatientId && !await db.Patients.AnyAsync(p => p.Id == request.PatientId, ct))
+            {
+                throw new AppException(StatusCodes.Status400BadRequest, "unknown_patient", "مریض پیدا نشد.");
+            }
+
+            if (request.DoctorStaffId != appointment.DoctorStaffId && !await db.Staff.AnyAsync(s => s.Id == request.DoctorStaffId && s.IsDoctor && s.IsActive, ct))
+            {
+                throw new AppException(StatusCodes.Status400BadRequest, "unknown_doctor", "داکتر انتخاب‌شده معتبر نیست.");
+            }
+
+            if (await db.Appointments.AnyAsync(a => a.Id != id && a.DoctorStaffId == request.DoctorStaffId && a.ScheduledAt == at && a.Status == AppointmentStatus.Scheduled, ct))
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "appointment_taken", "این زمان برای این داکتر قبلاً وقت ملاقات دارد.");
+            }
+
+            appointment.PatientId = request.PatientId;
+            appointment.DoctorStaffId = request.DoctorStaffId;
+            appointment.ScheduledAt = at;
+            appointment.Note = Text.Clean(request.Note);
+            audit.Add("AppointmentEdited", "Appointment", id.ToString());
+            await db.SaveChangesAsync(ct);
+            return Results.NoContent();
+        }).RequirePermission("appointments.edit");
 
         appointments.MapPost("/{id:long}/cancel", async (long id, int version, AppDbContext db, AuditService audit, CancellationToken ct) =>
         {

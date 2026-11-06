@@ -80,15 +80,27 @@ export const menu: MenuSection[] = [
   {
     title: 'مدیریت',
     items: [
-      { label: 'مرکز پخش صوت', icon: 'ri-volume-up-fill', to: '/audio-station', permission: 'calls.manage' },
       { label: 'گزارش‌ها', icon: 'ri-file-chart-fill', to: '/reports', permission: 'reports.view' },
-      { label: 'تنظیمات', icon: 'ri-settings-3-fill', to: '/settings', permission: 'settings.view' },
-      { label: 'فهرست داکتران', icon: 'ri-stethoscope-fill', to: '/doctors', permission: 'users.view' },
-      { label: 'مدیریت بخش‌ها', icon: 'ri-hospital-fill', to: '/departments', permission: 'settings.view' },
-      { label: 'تأمین‌کنندگان', icon: 'ri-truck-fill', to: '/suppliers', permission: 'inventory.view' },
-      { label: 'کارمندان', icon: 'ri-nurse-fill', to: '/staff', permission: 'users.view' },
-      { label: 'کاربران', icon: 'ri-group-fill', to: '/users', permission: 'users.view' },
-      { label: 'ثبت فعالیت‌ها', icon: 'ri-shield-keyhole-fill', to: '/audit', permission: 'audit.view' },
+      {
+        label: 'مدیریت سازمان',
+        icon: 'ri-building-2-fill',
+        children: [
+          { label: 'فهرست داکتران', icon: 'ri-stethoscope-fill', to: '/doctors', permission: 'users.view' },
+          { label: 'مدیریت بخش‌ها', icon: 'ri-hospital-fill', to: '/departments', permission: 'settings.view' },
+          { label: 'تأمین‌کنندگان', icon: 'ri-truck-fill', to: '/suppliers', permission: 'inventory.view' },
+          { label: 'کارمندان', icon: 'ri-nurse-fill', to: '/staff', permission: 'users.view' },
+        ],
+      },
+      {
+        label: 'مدیریت سیستم',
+        icon: 'ri-settings-4-fill',
+        children: [
+          { label: 'مرکز پخش صوت', icon: 'ri-volume-up-fill', to: '/audio-station', permission: 'calls.manage' },
+          { label: 'تنظیمات', icon: 'ri-settings-3-fill', to: '/settings', permission: 'settings.view' },
+          { label: 'کاربران', icon: 'ri-group-fill', to: '/users', permission: 'users.view' },
+          { label: 'ثبت فعالیت‌ها', icon: 'ri-shield-keyhole-fill', to: '/audit', permission: 'audit.view' },
+        ],
+      },
     ],
   },
 ]

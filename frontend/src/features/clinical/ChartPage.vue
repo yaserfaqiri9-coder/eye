@@ -7,23 +7,27 @@ import ShamsiDateInput from '@/components/ShamsiDateInput.vue'
 import UiCard from '@/components/UiCard.vue'
 import UiAutocomplete from '@/components/UiAutocomplete.vue'
 import UiComboBox, { type ComboOption } from '@/components/UiComboBox.vue'
+import UiModal from '@/components/UiModal.vue'
 import TransferDoctorModal from '@/features/visits/TransferDoctorModal.vue'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime } from '@/utils/date'
 import { money } from '@/utils/money'
 import LensPicker from './LensPicker.vue'
 import PatientBanner from './PatientBanner.vue'
+import PreExamDocument from './PreExamDocument.vue'
 import RxGrid, { type RxRow } from './RxGrid.vue'
 import {
   anteriorRows,
   parseFindings,
   parseMeasurements,
+  parseOpticalNotes,
   parsePlan,
   parseRefractionExtras,
   posteriorRows,
   serializeFindings,
   serializeOpticalNotes,
   serializePlan,
+  systemicConditions,
   type EyeFindings,
   type ExamRow,
 } from './examRecord'
@@ -40,6 +44,7 @@ import {
   type OpticalRx,
   type Prescription,
   type Refraction,
+  type SurgeryPackage,
   type SurgeryRow,
 } from './types'
 import { useUnsavedGuard } from './useUnsavedGuard'
@@ -112,14 +117,12 @@ function fillExam(c: Consultation | null) {
 }
 
 const preExtras = computed(() => parseMeasurements(chart.value?.preExam?.measurements))
-
-const triageEyes = computed(() => {
-  const pre = chart.value?.preExam
-  return [
-    { code: 'OD', tone: 'xr-eye--od', va: pre?.visualAcuityOd, ph: preExtras.value.pinholeOd, iop: pre?.iopOd },
-    { code: 'OS', tone: 'xr-eye--os', va: pre?.visualAcuityOs, ph: preExtras.value.pinholeOs, iop: pre?.iopOs },
-  ]
-})
+const preExamOpen = ref(false)
+const currentChartVisit = computed(() => chart.value?.visit.id === Number(props.visitId))
+const preExamWarnings = computed(() => [
+  ...systemicConditions.filter((condition) => preExtras.value.systemic[condition.code].answer === 'Y').map((condition) => condition.label),
+  ...(preExtras.value.allergy === 'Y' ? [`حساسیت${preExtras.value.allergicTo ? `: ${preExtras.value.allergicTo}` : ''}`] : []),
+])
 
 const finalLines = computed(() => {
   const lines = refraction.value?.lines.filter((l) => l.stage === 'Final') ?? []
@@ -257,6 +260,42 @@ const amendFields: Record<string, string> = {
   ConfidentialNote: 'یادداشت محرمانه',
 }
 
+/** Everything else the history can show: exam, refraction, prescriptions, lab results and surgery. */
+const historyFields: Record<string, string> = {
+  ...amendFields,
+  ChiefComplaint: 'شکایت اصلی',
+  History: 'سوابق',
+  VisualAcuityOd: 'دید چشم راست',
+  VisualAcuityOs: 'دید چشم چپ',
+  IopOd: 'فشار چشم راست',
+  IopOs: 'فشار چشم چپ',
+  Measurements: 'اندازه‌گیری‌ها',
+  Notes: 'یادداشت',
+  UnaidedVaOd: 'دید بدون اصلاح راست',
+  UnaidedVaOs: 'دید بدون اصلاح چپ',
+  PinholeVaOd: 'Pinhole راست',
+  PinholeVaOs: 'Pinhole چپ',
+  NearVaOd: 'دید نزدیک راست',
+  NearVaOs: 'دید نزدیک چپ',
+  Pd: 'PD',
+  Lines: 'ردیف‌های بینایی‌سنجی',
+  Items: 'دواهای نسخه',
+  SphereOd: 'SPH راست',
+  CylinderOd: 'CYL راست',
+  AxisOd: 'AXIS راست',
+  AddOd: 'ADD راست',
+  SphereOs: 'SPH چپ',
+  CylinderOs: 'CYL چپ',
+  AxisOs: 'AXIS چپ',
+  AddOs: 'ADD چپ',
+  ResultText: 'نتیجه آزمایش',
+  SurgeryType: 'نوع عملیات',
+  Eye: 'چشم عملیات',
+  PreOpChecks: 'بررسی‌های پیش از عملیات',
+  OperationReport: 'گزارش عملیات',
+  PostOpStatus: 'وضعیت پس از عملیات',
+}
+
 const amendCurrent = computed(() => {
   const c = chart.value?.consultation
   if (!c) return ''
@@ -284,7 +323,23 @@ async function submitAmend() {
   }
 }
 
-const rx = reactive({ notes: '', items: [{ drugName: '', dose: '', route: '', duration: '', instructions: '', quantity: 1 }], key: newIdempotencyKey(), saving: false })
+const rx = reactive({ editing: null as Prescription | null, reason: '', notes: '', items: [{ drugName: '', dose: '', route: '', duration: '', instructions: '', quantity: 1 }], key: newIdempotencyKey(), saving: false })
+
+function editRx(p: Prescription) {
+  Object.assign(rx, {
+    editing: p,
+    reason: '',
+    notes: p.notes ?? '',
+    items: p.items.map((i) => ({ drugName: i.drugName, dose: i.dose ?? '', route: i.route ?? '', duration: i.duration ?? '', instructions: i.instructions ?? '', quantity: i.quantity })),
+  })
+}
+
+function clearRx() {
+  Object.assign(rx, { editing: null, reason: '', notes: '', items: [{ drugName: '', dose: '', route: '', duration: '', instructions: '', quantity: 1 }], key: newIdempotencyKey() })
+}
+
+/** Once the exam is final or the visit closed, the server asks for a reason on any change. */
+const needsAmendReason = computed(() => finalized.value || chart.value?.visit.status === 'Completed')
 
 const searchDrugs = (query: string, signal: AbortSignal) =>
   api<string[]>(`/prescriptions/drugs?${new URLSearchParams({ q: query })}`, { signal })
@@ -293,13 +348,18 @@ async function submitRx() {
   rx.saving = true
   error.value = ''
   try {
-    await api('/prescriptions', {
-      method: 'POST',
-      idempotencyKey: rx.key,
-      body: { visitId: Number(props.visitId), notes: rx.notes, items: rx.items },
-    })
-    Object.assign(rx, { notes: '', items: [{ drugName: '', dose: '', route: '', duration: '', instructions: '', quantity: 1 }], key: newIdempotencyKey() })
-    notice.value = 'نسخه ثبت و برای دواخانه ارسال شد.'
+    if (rx.editing) {
+      await api(`/prescriptions/${rx.editing.id}`, { method: 'PUT', body: { notes: rx.notes, items: rx.items, version: rx.editing.version, reason: rx.reason || undefined } })
+      notice.value = 'نسخه ویرایش شد.'
+    } else {
+      await api('/prescriptions', {
+        method: 'POST',
+        idempotencyKey: rx.key,
+        body: { visitId: Number(props.visitId), notes: rx.notes, items: rx.items },
+      })
+      notice.value = 'نسخه ثبت و برای دواخانه ارسال شد.'
+    }
+    clearRx()
     await load()
   } catch (cause) {
     explain(cause)
@@ -310,7 +370,26 @@ async function submitRx() {
 }
 
 const blankRow = (): RxRow => ({ sphere: '', cylinder: '', axis: '', add: '', va: '' })
-const optical = reactive({ od: blankRow(), os: blankRow(), pd: '', uvaOd: '', uvaOs: '', lens: [] as string[], notes: '', key: newIdempotencyKey(), saving: false })
+const optical = reactive({ editing: null as OpticalRx | null, reason: '', od: blankRow(), os: blankRow(), pd: '', uvaOd: '', uvaOs: '', lens: [] as string[], notes: '', key: newIdempotencyKey(), saving: false })
+
+function editOptical(o: OpticalRx) {
+  const notes = parseOpticalNotes(o.notes)
+  Object.assign(optical, {
+    editing: o,
+    reason: '',
+    od: { sphere: o.sphereOd ?? '', cylinder: o.cylinderOd ?? '', axis: o.axisOd ?? '', add: o.addOd ?? '', va: notes.vaOd },
+    os: { sphere: o.sphereOs ?? '', cylinder: o.cylinderOs ?? '', axis: o.axisOs ?? '', add: o.addOs ?? '', va: notes.vaOs },
+    pd: o.pd ?? '',
+    uvaOd: notes.uvaOd,
+    uvaOs: notes.uvaOs,
+    lens: notes.lens,
+    notes: notes.notes,
+  })
+}
+
+function clearOptical() {
+  Object.assign(optical, { editing: null, reason: '', od: blankRow(), os: blankRow(), pd: '', uvaOd: '', uvaOs: '', lens: [], notes: '', key: newIdempotencyKey() })
+}
 
 /** Copies the optometrist's final values into the form for the doctor to review. Nothing is issued until they submit. */
 function copyFinalToOptical() {
@@ -328,25 +407,26 @@ async function submitOptical() {
   optical.saving = true
   error.value = ''
   try {
-    await api('/optical-prescriptions', {
-      method: 'POST',
-      idempotencyKey: optical.key,
-      body: {
-        visitId: Number(props.visitId),
-        sphereOd: optical.od.sphere,
-        cylinderOd: optical.od.cylinder,
-        axisOd: optical.od.axis,
-        addOd: optical.od.add,
-        sphereOs: optical.os.sphere,
-        cylinderOs: optical.os.cylinder,
-        axisOs: optical.os.axis,
-        addOs: optical.os.add,
-        pd: optical.pd,
-        notes: serializeOpticalNotes({ lens: optical.lens, vaOd: optical.od.va, vaOs: optical.os.va, uvaOd: optical.uvaOd, uvaOs: optical.uvaOs, notes: optical.notes }),
-      },
-    })
-    Object.assign(optical, { od: blankRow(), os: blankRow(), pd: '', uvaOd: '', uvaOs: '', lens: [], notes: '', key: newIdempotencyKey() })
-    notice.value = 'نسخه عینک ثبت و برای بخش عینک ارسال شد.'
+    const body = {
+      sphereOd: optical.od.sphere,
+      cylinderOd: optical.od.cylinder,
+      axisOd: optical.od.axis,
+      addOd: optical.od.add,
+      sphereOs: optical.os.sphere,
+      cylinderOs: optical.os.cylinder,
+      axisOs: optical.os.axis,
+      addOs: optical.os.add,
+      pd: optical.pd,
+      notes: serializeOpticalNotes({ lens: optical.lens, vaOd: optical.od.va, vaOs: optical.os.va, uvaOd: optical.uvaOd, uvaOs: optical.uvaOs, notes: optical.notes }),
+    }
+    if (optical.editing) {
+      await api(`/optical-prescriptions/${optical.editing.id}`, { method: 'PUT', body: { ...body, version: optical.editing.version, reason: optical.reason || undefined } })
+      notice.value = 'نسخه عینک ویرایش شد.'
+    } else {
+      await api('/optical-prescriptions', { method: 'POST', idempotencyKey: optical.key, body: { ...body, visitId: Number(props.visitId) } })
+      notice.value = 'نسخه عینک ثبت و برای بخش عینک ارسال شد.'
+    }
+    clearOptical()
     await load()
   } catch (cause) {
     explain(cause)
@@ -386,6 +466,23 @@ async function submitOrder() {
 
 const attachmentsFor = ref<number | null>(null)
 
+const noteEdit = reactive({ order: null as DiagnosticOrder | null, note: '', saving: false, error: '' })
+
+async function saveOrderNote() {
+  noteEdit.saving = true
+  noteEdit.error = ''
+  try {
+    await api(`/diagnostic-orders/${noteEdit.order!.id}/note`, { method: 'PUT', body: { note: noteEdit.note, version: noteEdit.order!.version } })
+    noteEdit.order = null
+    notice.value = 'توضیح درخواست ویرایش شد.'
+    await load()
+  } catch (cause) {
+    noteEdit.error = errorMessage(cause)
+  } finally {
+    noteEdit.saving = false
+  }
+}
+
 async function cancelItem(path: string, body?: unknown) {
   error.value = ''
   try {
@@ -403,7 +500,18 @@ const cancelOrder = (o: DiagnosticOrder) => cancelItem(`/diagnostic-orders/${o.i
 
 const surgeries = ref<SurgeryRow[]>([])
 const services = ref<ComboOption[]>([])
-const surgery = reactive({ surgeryType: '', eye: 'OD', serviceId: null as number | null, key: newIdempotencyKey(), saving: false })
+const surgery = reactive({ surgeryType: '', eye: 'OD', serviceId: null as number | null, packageId: null as number | null, key: newIdempotencyKey(), saving: false })
+const packages = ref<SurgeryPackage[]>([])
+const packageOptions = computed<ComboOption[]>(() => packages.value.map((p) => ({ value: p.id, label: p.name, hint: p.price === null ? 'بدون قیمت' : money(p.price) })))
+
+/** A package brings its name and its fee, so the doctor picks one thing. */
+watch(
+  () => surgery.packageId,
+  (id) => {
+    const chosen = packages.value.find((p) => p.id === id)
+    if (chosen) Object.assign(surgery, { surgeryType: chosen.name, serviceId: chosen.serviceId })
+  },
+)
 
 async function loadSurgeries() {
   if (!auth.can('surgery.view')) return
@@ -418,9 +526,9 @@ async function submitSurgery() {
     await api('/surgeries', {
       method: 'POST',
       idempotencyKey: surgery.key,
-      body: { visitId: Number(props.visitId), surgeryType: surgery.surgeryType, eye: surgery.eye, serviceId: surgery.serviceId },
+      body: { visitId: Number(props.visitId), surgeryType: surgery.surgeryType, eye: surgery.eye, serviceId: surgery.packageId ? null : surgery.serviceId, packageId: surgery.packageId },
     })
-    Object.assign(surgery, { surgeryType: '', serviceId: null, key: newIdempotencyKey() })
+    Object.assign(surgery, { surgeryType: '', serviceId: null, packageId: null, key: newIdempotencyKey() })
     notice.value = 'پرونده عملیات ایجاد شد.'
     await loadSurgeries()
   } catch (cause) {
@@ -431,7 +539,28 @@ async function submitSurgery() {
   }
 }
 
-const followUp = reactive({ dueDate: null as string | null, note: '', saving: false })
+const followUp = reactive({ editing: null as number | null, dueDate: null as string | null, note: '', saving: false })
+
+function editFollowUp(f: { id: number; dueDate: string; note: string | null }) {
+  Object.assign(followUp, { editing: f.id, dueDate: f.dueDate, note: f.note ?? '' })
+}
+
+function clearFollowUp() {
+  Object.assign(followUp, { editing: null, dueDate: null, note: '' })
+}
+
+async function removeFollowUp(f: { id: number; dueDate: string }) {
+  if (!window.confirm(`پیگیری ${formatDate(f.dueDate)} حذف شود؟`)) return
+  error.value = ''
+  try {
+    await api(`/follow-ups/${f.id}`, { method: 'DELETE' })
+    notice.value = 'پیگیری حذف شد.'
+    if (followUp.editing === f.id) clearFollowUp()
+    await load()
+  } catch (cause) {
+    explain(cause)
+  }
+}
 
 async function submitFollowUp() {
   if (!followUp.dueDate) {
@@ -441,9 +570,15 @@ async function submitFollowUp() {
   followUp.saving = true
   error.value = ''
   try {
-    await api('/follow-ups', { method: 'POST', body: { visitId: Number(props.visitId), dueDate: followUp.dueDate, note: followUp.note } })
-    followUp.note = ''
-    notice.value = 'مراجعه بعدی ثبت شد.'
+    if (followUp.editing) {
+      await api(`/follow-ups/${followUp.editing}`, { method: 'PUT', body: { dueDate: followUp.dueDate, note: followUp.note } })
+      notice.value = 'پیگیری ویرایش شد.'
+      clearFollowUp()
+    } else {
+      await api('/follow-ups', { method: 'POST', body: { visitId: Number(props.visitId), dueDate: followUp.dueDate, note: followUp.note } })
+      followUp.note = ''
+      notice.value = 'مراجعه بعدی ثبت شد.'
+    }
     await load()
   } catch (cause) {
     explain(cause)
@@ -472,6 +607,9 @@ watch(tab, (value) => {
       api<{ id: number; name: string; isActive: boolean; currentPrice: number | null }[]>('/services')
         .then((rows) => (services.value = rows.filter((s) => s.isActive && s.currentPrice !== null).map((s) => ({ value: s.id, label: s.name, hint: money(s.currentPrice) }))))
         .catch(explain)
+      api<SurgeryPackage[]>('/surgery-packages')
+        .then((rows) => (packages.value = rows))
+        .catch(explain)
     }
   }
   if (value === 'lab' && auth.can('diagnostics.create')) {
@@ -484,7 +622,10 @@ watch(tab, (value) => {
 })
 
 onMounted(load)
-watch(() => props.visitId, load)
+watch(() => props.visitId, () => {
+  preExamOpen.value = false
+  load()
+})
 </script>
 
 <template>
@@ -527,18 +668,13 @@ watch(() => props.visitId, load)
     <section class="xr-card summary" aria-label="خلاصه پیش از معاینه">
       <div class="summary__block">
         <h3 class="summary__title">معاینه ابتدایی</h3>
-        <p v-if="!chart.preExam" class="summary__empty">ثبت نشده است.</p>
-        <table v-else class="xr-clinical-table summary__table">
-          <thead><tr><th scope="col">چشم</th><th scope="col">VA</th><th scope="col">PH</th><th scope="col">IOP</th></tr></thead>
-          <tbody>
-            <tr v-for="eye in triageEyes" :key="eye.code">
-              <th scope="row"><span class="xr-eye" :class="eye.tone">{{ eye.code }}</span></th>
-              <td class="ltr-num">{{ eye.va ?? '—' }}</td>
-              <td class="ltr-num">{{ eye.ph || '—' }}</td>
-              <td class="ltr-num">{{ eye.iop ?? '—' }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <p class="summary__document-hint">دید، فشار چشم، سوابق و یادداشت‌ها در یک سند منظم</p>
+        <button type="button" class="btn btn-soft summary__document-button" :disabled="!chart.preExam || !currentChartVisit" aria-haspopup="dialog" @click="preExamOpen = true">
+          <i class="ri-file-list-3-line" aria-hidden="true"></i>
+          مشاهده معاینه ابتدایی
+          <i class="ri-arrow-left-line" aria-hidden="true"></i>
+        </button>
+        <p class="summary__document-status">{{ !chart.preExam ? 'معاینه ابتدایی هنوز ثبت نشده است.' : chart.preExam.completedAt ? 'معاینه ابتدایی تکمیل شده است.' : 'ثبت شده؛ هنوز تکمیل نشده است.' }}</p>
       </div>
 
       <div v-if="auth.can('preexam.view')" class="summary__block">
@@ -572,13 +708,9 @@ watch(() => props.visitId, load)
           </dd>
           <dt>سوابق و هشدارها</dt>
           <dd :class="{ summary__alert: chart.preExam?.history }">{{ chart.preExam?.history ?? '—' }}</dd>
-          <template v-if="preExtras.measurements">
-            <dt>اندازه‌گیری‌ها</dt>
-            <dd>{{ preExtras.measurements }}</dd>
-          </template>
-          <template v-if="chart.preExam?.notes">
-            <dt>یادداشت</dt>
-            <dd>{{ chart.preExam.notes }}</dd>
+          <template v-if="preExamWarnings.length">
+            <dt>هشدارهای ثبت‌شده</dt>
+            <dd class="summary__alert">{{ preExamWarnings.join(' · ') }}</dd>
           </template>
         </dl>
       </div>
@@ -721,7 +853,7 @@ watch(() => props.visitId, load)
               <thead><tr><th>فیلد</th><th>قبلی</th><th>جدید</th><th>دلیل</th><th>کاربر</th><th>زمان</th></tr></thead>
               <tbody>
                 <tr v-for="(a, i) in chart.amendments" :key="i">
-                  <td>{{ a.field === 'FinalizedAt' ? 'ادامه معاینه' : amendFields[a.field] ?? a.field }}</td>
+                  <td>{{ a.field === 'FinalizedAt' ? 'ادامه معاینه' : historyFields[a.field] ?? a.field }}</td>
                   <td class="pre-line">{{ a.oldValue ?? '—' }}</td>
                   <td class="pre-line">{{ a.newValue ?? '—' }}</td>
                   <td>{{ a.reason }}</td>
@@ -740,6 +872,7 @@ watch(() => props.visitId, load)
             <strong class="ltr-num">{{ p.rxNumber }}</strong>
             <span class="xr-badge xr-badge--primary">{{ rxStatusLabels[p.status] }}</span>
             <RouterLink v-if="auth.can('prescriptions.print')" :to="`/print/rx/${p.id}`" target="_blank" class="btn btn-soft btn-sm">چاپ</RouterLink>
+            <button v-if="p.status === 'Issued' && auth.can('prescriptions.edit')" type="button" class="btn btn-soft btn-sm" @click="editRx(p)">ویرایش</button>
             <button v-if="p.status === 'Issued' && auth.can('prescriptions.cancel')" type="button" class="btn btn-soft-danger btn-sm" @click="cancelRx(p)">لغو نسخه</button>
           </div>
           <ul class="mb-0">
@@ -747,9 +880,9 @@ watch(() => props.visitId, load)
           </ul>
         </div>
         <p v-if="chart.prescriptions.length === 0" class="xr-state">نسخه‌ای ثبت نشده است.</p>
-        <template v-if="auth.can('prescriptions.create')">
+        <template v-if="auth.can('prescriptions.create') || rx.editing">
           <hr />
-          <h3 class="h6 mb-3">نسخه جدید</h3>
+          <h3 class="h6 mb-3">{{ rx.editing ? `ویرایش نسخه ${rx.editing.rxNumber}` : 'نسخه جدید' }}</h3>
           <form @submit.prevent="submitRx">
             <div class="xr-table-wrap mb-2">
               <table class="xr-clinical-table">
@@ -770,7 +903,12 @@ watch(() => props.visitId, load)
             <button type="button" class="btn btn-soft btn-sm mb-3" @click="rx.items.push({ drugName: '', dose: '', route: '', duration: '', instructions: '', quantity: 1 })">افزودن دوا</button>
             <label class="form-label d-block" for="rx-notes">توضیحات نسخه</label>
             <input id="rx-notes" v-model="rx.notes" class="form-control mb-3" maxlength="1000" />
-            <button type="submit" class="btn btn-primary" :disabled="rx.saving">ثبت نسخه</button>
+            <template v-if="rx.editing && needsAmendReason">
+              <label class="form-label d-block" for="rx-reason">دلیل اصلاح</label>
+              <input id="rx-reason" v-model="rx.reason" class="form-control mb-3" minlength="3" maxlength="500" required />
+            </template>
+            <button type="submit" class="btn btn-primary" :disabled="rx.saving">{{ rx.editing ? 'ذخیره ویرایش' : 'ثبت نسخه' }}</button>
+            <button v-if="rx.editing" type="button" class="btn btn-soft-danger ms-2" @click="clearRx">انصراف</button>
           </form>
         </template>
       </div>
@@ -791,6 +929,7 @@ watch(() => props.visitId, load)
                   <td><span class="ltr-num">{{ o.pd ?? '—' }}</span></td>
                   <td class="text-nowrap">
                     <RouterLink v-if="auth.can('opticalrx.print')" :to="`/print/optical/${o.id}`" target="_blank" class="btn btn-soft btn-sm">چاپ</RouterLink>
+                    <button v-if="!o.isCancelled && auth.can('opticalrx.edit')" type="button" class="btn btn-soft btn-sm ms-2" @click="editOptical(o)">ویرایش</button>
                     <button v-if="!o.isCancelled && auth.can('opticalrx.cancel')" type="button" class="btn btn-soft-danger btn-sm ms-2" @click="cancelOptical(o)">لغو</button>
                   </td>
                 </tr>
@@ -809,9 +948,9 @@ watch(() => props.visitId, load)
           </table>
         </div>
         <p v-else class="xr-state">نسخه عینک ثبت نشده است.</p>
-        <form v-if="auth.can('opticalrx.create')" @submit.prevent="submitOptical">
+        <form v-if="auth.can('opticalrx.create') || optical.editing" @submit.prevent="submitOptical">
           <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
-            <h3 class="h6 mb-0">نسخه عینک جدید</h3>
+            <h3 class="h6 mb-0">{{ optical.editing ? `ویرایش نسخه ${optical.editing.rxNumber}` : 'نسخه عینک جدید' }}</h3>
             <button v-if="finalLines" type="button" class="btn btn-soft btn-sm" @click="copyFinalToOptical">انتقال از نسخه نهایی بینایی‌سنجی</button>
           </div>
           <RxGrid :od="optical.od" :os="optical.os" label="نسخه عینک" show-add show-va />
@@ -833,8 +972,13 @@ watch(() => props.visitId, load)
               <input id="op-notes" v-model="optical.notes" class="form-control" maxlength="700" />
             </div>
             <div class="col-12"><LensPicker v-model="optical.lens" /></div>
+            <div v-if="optical.editing && needsAmendReason" class="col-12">
+              <label class="form-label" for="op-reason">دلیل اصلاح</label>
+              <input id="op-reason" v-model="optical.reason" class="form-control" minlength="3" maxlength="500" required />
+            </div>
           </div>
-          <button type="submit" class="btn btn-primary" :disabled="optical.saving">ثبت نسخه عینک</button>
+          <button type="submit" class="btn btn-primary" :disabled="optical.saving">{{ optical.editing ? 'ذخیره ویرایش' : 'ثبت نسخه عینک' }}</button>
+          <button v-if="optical.editing" type="button" class="btn btn-soft-danger ms-2" @click="clearOptical">انصراف</button>
         </form>
       </div>
 
@@ -852,6 +996,7 @@ watch(() => props.visitId, load)
                 <td>{{ formatDateTime(o.performedAt) }}</td>
                 <td class="text-nowrap">
                   <button type="button" class="btn btn-soft btn-sm" @click="attachmentsFor = attachmentsFor === o.id ? null : o.id">فایل‌ها</button>
+                  <button v-if="['Requested', 'InProgress'].includes(o.status) && auth.can('diagnostics.create')" type="button" class="btn btn-soft btn-sm ms-2" @click="Object.assign(noteEdit, { order: o, note: o.note ?? '', saving: false, error: '' })">ویرایش توضیح</button>
                   <button v-if="['Requested', 'InProgress'].includes(o.status) && auth.can('diagnostics.cancel')" type="button" class="btn btn-soft-danger btn-sm ms-2" @click="cancelOrder(o)">لغو</button>
                 </td>
               </tr>
@@ -897,12 +1042,16 @@ watch(() => props.visitId, load)
         </div>
         <p v-else class="xr-state">پرونده عملیاتی ثبت نشده است.</p>
         <form v-if="auth.can('surgery.create')" class="row g-3 align-items-end" @submit.prevent="submitSurgery">
+          <div v-if="packages.length" class="col-12">
+            <UiComboBox v-model="surgery.packageId" label="پکیج عملیات" :options="packageOptions" chip placeholder="بدون پکیج — نوع و خدمت را خودتان وارد کنید" />
+            <p class="form-hint mb-0">با انتخاب پکیج، نوع عملیات و فیس آن خودکار پر می‌شود و مواد مصرفی آن پس از عملیات از گدام کسر می‌شود.</p>
+          </div>
           <div class="col-md-4">
             <label class="form-label" for="s-type">نوع عملیات</label>
             <input id="s-type" v-model="surgery.surgeryType" class="form-control" maxlength="200" required />
           </div>
           <div class="col-md-3">
-            <UiComboBox v-model="surgery.serviceId" label="خدمت قابل پرداخت" :options="services" required />
+            <UiComboBox v-model="surgery.serviceId" label="خدمت قابل پرداخت" :options="services" required :disabled="surgery.packageId !== null" />
           </div>
           <div class="col-md-2">
             <label class="form-label" for="s-eye">چشم</label>
@@ -917,9 +1066,16 @@ watch(() => props.visitId, load)
       <div v-if="tab === 'followup'" class="xr-card__body">
         <div v-if="chart.followUps.length" class="xr-table-wrap mb-3">
           <table class="xr-table">
-            <thead><tr><th>تاریخ پیگیری</th><th>یادداشت</th></tr></thead>
+            <thead><tr><th>تاریخ پیگیری</th><th>یادداشت</th><th v-if="canEdit">عملیات</th></tr></thead>
             <tbody>
-              <tr v-for="f in chart.followUps" :key="f.id"><td>{{ formatDate(f.dueDate) }}</td><td>{{ f.note ?? '—' }}</td></tr>
+              <tr v-for="f in chart.followUps" :key="f.id">
+                <td>{{ formatDate(f.dueDate) }}</td>
+                <td>{{ f.note ?? '—' }}</td>
+                <td v-if="canEdit" class="text-nowrap">
+                  <button type="button" class="btn btn-soft btn-sm" @click="editFollowUp(f)">ویرایش</button>
+                  <button type="button" class="btn btn-soft-danger btn-sm ms-2" @click="removeFollowUp(f)">حذف</button>
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -930,7 +1086,8 @@ watch(() => props.visitId, load)
             <label class="form-label" for="f-note">یادداشت</label>
             <input id="f-note" v-model="followUp.note" class="form-control" maxlength="300" />
           </div>
-          <div class="col-md-2"><button type="submit" class="btn btn-primary w-100 xr-control-button" :disabled="followUp.saving">ثبت پیگیری</button></div>
+          <div class="col-md-2"><button type="submit" class="btn btn-primary w-100 xr-control-button" :disabled="followUp.saving">{{ followUp.editing ? 'ذخیره ویرایش' : 'ثبت پیگیری' }}</button></div>
+          <div v-if="followUp.editing" class="col-12"><button type="button" class="btn btn-soft-danger btn-sm" @click="clearFollowUp">انصراف از ویرایش</button></div>
         </form>
       </div>
 
@@ -954,6 +1111,24 @@ watch(() => props.visitId, load)
       </div>
     </section>
   </div>
+
+  <UiModal v-if="preExamOpen && currentChartVisit && chart?.preExam" title="معاینه ابتدایی مریض" size="lg" @close="preExamOpen = false">
+    <div class="summary__document-close"><button type="button" class="btn btn-soft btn-sm" data-modal-cancel>بستن سند</button></div>
+    <PreExamDocument :pre-exam="chart.preExam" :visit="chart.visit" />
+  </UiModal>
+
+  <UiModal v-if="noteEdit.order" :title="`توضیح ${noteEdit.order.testName}`" @close="noteEdit.order = null">
+    <form @submit.prevent="saveOrderNote">
+      <p class="form-hint">خود آزمایش تغییر نمی‌کند، چون به همان نام هزینه و ارجاع شده است. اگر اشتباه است، درخواست را لغو و دوباره ثبت کنید.</p>
+      <label class="form-label" for="note-edit">توضیح</label>
+      <input id="note-edit" v-model="noteEdit.note" class="form-control mb-3" maxlength="500" />
+      <div v-if="noteEdit.error" class="alert alert-danger" role="alert">{{ noteEdit.error }}</div>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="noteEdit.saving">ذخیره</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
+    </form>
+  </UiModal>
 </template>
 
 <style scoped>
@@ -998,6 +1173,13 @@ watch(() => props.visitId, load)
   margin: 0;
   color: var(--xr-text-muted);
 }
+
+.summary__document-hint,
+.summary__document-status { color: #59666c; font-size: 12px; line-height: 1.8; }
+.summary__document-hint { margin: 0 0 12px; }
+.summary__document-status { margin: 8px 0 0; }
+.summary__document-button { display: inline-flex; align-items: center; gap: 9px; max-width: 100%; white-space: normal; text-align: start; }
+.summary__document-close { display: flex; justify-content: flex-end; margin-bottom: 12px; }
 
 .summary__table th,
 .summary__table td {

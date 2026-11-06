@@ -68,7 +68,10 @@ export async function admitFromRecord(page: Page, department?: string, service?:
   await page.getByRole('link', { name: 'مراجعه جدید' }).click()
   await expect(page.getByRole('button', { name: 'ثبت مراجعه' })).toBeVisible()
   if (department) await pick(page, page, 'بخش', department)
-  if (service) await pick(page, page, 'خدمت اضافی قابل پرداخت (اختیاری)', service)
+  if (service) {
+    await page.getByRole('button', { name: 'افزودن خدمت اضافی' }).click()
+    await pick(page, page, 'خدمت اضافی قابل پرداخت (اختیاری)', service)
+  }
   await page.getByRole('button', { name: 'ثبت مراجعه' }).click()
   await collectFee(page)
 }

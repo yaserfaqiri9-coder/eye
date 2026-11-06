@@ -20,6 +20,7 @@ export const pages = {
   optical: () => import('@/features/inventory/OpticalPage.vue'),
   opticalOrder: () => import('@/features/inventory/OpticalOrderPage.vue'),
   inventory: () => import('@/features/inventory/InventoryPage.vue'),
+  inventoryLocation: () => import('@/features/inventory/InventoryLocationPage.vue'),
   purchase: () => import('@/features/inventory/PurchasePage.vue'),
   cashier: () => import('@/features/finance/CashierPage.vue'),
   invoiceForm: () => import('@/features/finance/InvoiceFormPage.vue'),
@@ -45,7 +46,7 @@ const rolePages: Record<string, (keyof typeof pages)[]> = {
   Optical: ['optical', 'opticalOrder'],
   Cashier: ['cashier', 'invoiceForm'],
   Accountant: ['accounting'],
-  Inventory: ['inventory', 'purchase'],
+  Inventory: ['inventory', 'inventoryLocation', 'purchase'],
   Manager: ['reports', 'patients', 'patient'],
 }
 

@@ -43,9 +43,12 @@ test('the responsible doctor and the manager hand a patient over through the scr
 
   // The desk's status list no longer offers a way to the doctor before Vision.
   await reception.goto('/reception')
+  await reception.getByRole('tab', { name: /در جریان/ }).click()
   const receptionRow = reception.getByRole('row', { name: new RegExp(`حمید${stamp}`) })
-  const options = await receptionRow.getByRole('combobox').locator('option').allTextContents()
-  expect(options).not.toContain('آماده برای داکتر')
+  await receptionRow.getByRole('button', { name: /گزینه‌های/ }).click()
+  const options = await reception.getByRole('menuitem').allTextContents()
+  expect(options.join('|')).not.toContain('آماده برای داکتر')
+  await reception.keyboard.press('Escape')
 
   const triage = await staff(browser, `ho_t${stamp}`)
   await call(triage, 'PUT', `/pre-examinations/${visit.id}`, { visualAcuityOd: '6/9', version: null })
@@ -65,7 +68,9 @@ test('the responsible doctor and the manager hand a patient over through the scr
   // The manager covers a doctor who cannot, from the reception list.
   const manager = await staff(browser, `ho_m${stamp}`)
   await manager.goto('/reception')
-  await manager.getByRole('row', { name: new RegExp(`حمید${stamp}`) }).getByRole('button', { name: 'انتقال داکتر' }).click()
+  await manager.getByRole('tab', { name: /در جریان/ }).click()
+  await manager.getByRole('row', { name: new RegExp(`حمید${stamp}`) }).getByRole('button', { name: /گزینه‌های/ }).click()
+  await manager.getByRole('menuitem', { name: 'انتقال داکتر' }).click()
   const fromDesk = manager.getByRole('dialog')
   await pick(manager, fromDesk, 'داکتر جدید', doctorA)
   await fromDesk.getByLabel('دلیل انتقال').fill('غیبت داکتر')

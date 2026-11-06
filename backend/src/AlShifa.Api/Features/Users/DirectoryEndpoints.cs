@@ -38,6 +38,13 @@ public static class DirectoryEndpoints
             await db.SaveChangesAsync(ct);
             return Results.NoContent();
         }).RequirePermission("settings.edit");
+        departments.MapDelete("/{id:int}", async (int id, int version, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        {
+            var row = await db.Departments.SingleOrDefaultAsync(d => d.Id == id, ct) ?? throw AppException.NotFound();
+            db.Entry(row).Property(d => d.Version).OriginalValue = version;
+            if (Seeder.IsSystemDepartment(row.Code)) throw new AppException(409, "system_department", "این بخش سیستمی است و حذف نمی‌شود. در صورت نیاز آن را از ویرایش غیرفعال کنید.");
+            return await SafeDelete.RemoveOrDeactivateAsync(db, audit, row, "Department", id.ToString(), row.Name, () => row.IsActive = false, ct);
+        }).RequirePermission("settings.edit");
 
         var suppliers = app.MapGroup("/api/suppliers").WithTags("Suppliers");
         suppliers.MapGet("/", async (AppDbContext db, bool activeOnly = false, CancellationToken ct = default) =>
@@ -61,6 +68,12 @@ public static class DirectoryEndpoints
             audit.Add("SupplierEdited", "Supplier", id.ToString());
             await db.SaveChangesAsync(ct);
             return Results.NoContent();
+        }).RequirePermission("inventory.create");
+        suppliers.MapDelete("/{id:int}", async (int id, int version, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        {
+            var row = await db.Suppliers.SingleOrDefaultAsync(s => s.Id == id, ct) ?? throw AppException.NotFound();
+            db.Entry(row).Property(s => s.Version).OriginalValue = version;
+            return await SafeDelete.RemoveOrDeactivateAsync(db, audit, row, "Supplier", id.ToString(), row.Name, () => row.IsActive = false, ct);
         }).RequirePermission("inventory.create");
     }
 

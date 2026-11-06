@@ -138,3 +138,9 @@ export function parseShamsi(text: string) {
 export function kabulToUtc(isoDate: string, time: string) {
   return new Date(`${isoDate}T${time}:00+04:30`).toISOString()
 }
+
+/** The reverse of kabulToUtc, to fill a date and time field from a stored moment. Kabul has no daylight saving, so the offset is fixed. */
+export function utcToKabulParts(value: string) {
+  const [date, rest] = new Date(new Date(value).getTime() + 4.5 * 60 * 60 * 1000).toISOString().split('T')
+  return { date, time: rest.slice(0, 5) }
+}

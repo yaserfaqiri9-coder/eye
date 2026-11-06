@@ -107,6 +107,22 @@ async function saveRoles() {
   }
 }
 
+const editName = reactive({ user: null as UserRow | null, fullName: '', saving: false, error: '' })
+
+async function saveName() {
+  editName.saving = true
+  editName.error = ''
+  try {
+    await api(`/users/${editName.user!.id}`, { method: 'PUT', body: { fullName: editName.fullName } })
+    editName.user = null
+    await load()
+  } catch (cause) {
+    editName.error = messageOf(cause)
+  } finally {
+    editName.saving = false
+  }
+}
+
 const reset = reactive({ user: null as UserRow | null, password: '', saving: false, error: '' })
 
 async function saveReset() {
@@ -177,7 +193,8 @@ onMounted(load)
               </span>
             </td>
             <td v-if="auth.can('users.manage')" class="text-nowrap">
-              <button type="button" class="btn btn-soft btn-sm" @click="openRoles(user)">نقش‌ها</button>
+              <button type="button" class="btn btn-soft btn-sm" @click="Object.assign(editName, { user, fullName: user.fullName, saving: false, error: '' })">ویرایش</button>
+              <button type="button" class="btn btn-soft btn-sm ms-2" @click="openRoles(user)">نقش‌ها</button>
               <button type="button" class="btn btn-soft btn-sm ms-2" @click="Object.assign(reset, { user, password: '', error: '' })">بازنشانی رمز</button>
               <button
                 v-if="user.id !== auth.user?.id"
@@ -222,6 +239,18 @@ onMounted(load)
       <div v-if="form.error" class="alert alert-danger" role="alert">{{ form.error }}</div>
       <div class="xr-form-actions">
         <button type="submit" class="btn btn-primary" :disabled="form.saving">ذخیره</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
+    </form>
+  </UiModal>
+
+  <UiModal v-if="editName.user" :title="`ویرایش ${editName.user.userName}`" @close="editName.user = null">
+    <form @submit.prevent="saveName">
+      <label class="form-label" for="edit-fullname">نام کامل</label>
+      <input id="edit-fullname" v-model="editName.fullName" class="form-control mb-3" maxlength="150" required />
+      <div v-if="editName.error" class="alert alert-danger" role="alert">{{ editName.error }}</div>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="editName.saving">ذخیره</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>

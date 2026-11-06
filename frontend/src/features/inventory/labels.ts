@@ -1,0 +1,1 @@
+export const movementLabels: Record<string, string> = { Purchase: 'خرید', Sale: 'فروش', SaleReturn: 'برگشت فروش', Adjustment: 'تعدیل', Consumption: 'مصرف بخش', TransferOut: 'انتقال خروجی', TransferIn: 'انتقال ورودی', PurchaseCancel: 'لغو خرید' }

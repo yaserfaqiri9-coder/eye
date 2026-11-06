@@ -2,12 +2,15 @@
 import { computed, onMounted, ref } from 'vue'
 import { api, errorMessage } from '@/api/http'
 import UiModal from '@/components/UiModal.vue'
+import { clearLookups } from '@/api/lookups'
 import { useAuthStore } from '@/stores/auth'
+import { removeRecord } from '@/utils/removeRecord'
 import DoctorFormModal, { type DoctorRow as Doctor } from './DoctorFormModal.vue'
 const auth = useAuthStore()
 const rows = ref<Doctor[]>([])
 const loading = ref(true)
 const error = ref('')
+const notice = ref('')
 const profile = ref<Doctor | null>(null)
 // null is closed; a new doctor has no row to edit, so "new" is its own value.
 const editing = ref<Doctor | 'new' | null>(null)
@@ -33,6 +36,17 @@ function onSaved() {
   editing.value = null
   load()
 }
+async function remove(row: Doctor) {
+  error.value = ''
+  notice.value = ''
+  try {
+    notice.value = await removeRecord(`/staff/${row.id}?version=${row.version}`, row.fullName)
+    if (notice.value) {
+      clearLookups()
+      await load()
+    }
+  } catch (e) { error.value = errorMessage(e) }
+}
 onMounted(load)
 </script>
 <template>
@@ -40,6 +54,7 @@ onMounted(load)
     <header class="doctor-directory__heading"><h2 id="doctors-title">فهرست داکتران</h2><button v-if="auth.can('users.create')" type="button" class="btn btn-primary" @click="editing = 'new'">ثبت داکتر</button></header>
     <div v-if="auth.can('users.manage') && unlinked.length" class="alert alert-warning" role="alert">این داکتران حساب کاربری وصل‌شده ندارند و مریضان‌شان در صف مشترک داکتران دیده می‌شوند، نه صف خودشان: {{ unlinked.join('، ') }}.</div>
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
+    <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
     <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
     <div v-else-if="!rows.length && !error" class="xr-state">داکتری ثبت نشده است. با دکمهٔ «ثبت داکتر» در بالای همین صفحه، داکتر جدید را ثبت کنید.</div>
     <div v-else class="doctor-directory__grid">
@@ -50,7 +65,7 @@ onMounted(load)
         <ul class="doctor-card__social" aria-label="پیوندهای داکتر">
           <li v-for="social in socials" :key="social.key"><a v-if="safeLink(row[social.key])" :href="safeLink(row[social.key])" :aria-label="`${social.label}: ${row.fullName}`" target="_blank" rel="noopener noreferrer"><i :class="social.icon" aria-hidden="true"></i></a><span v-else :aria-label="`${social.label}: ثبت نشده`"><i :class="social.icon" aria-hidden="true"></i></span></li>
         </ul>
-        <div class="doctor-card__actions"><button class="doctor-card__profile" type="button" @click="profile = row">مشاهده پروفایل</button><button v-if="auth.can('users.manage')" class="btn btn-soft btn-sm" type="button" :aria-label="`ویرایش ${row.fullName}`" @click="editing = row">ویرایش</button></div>
+        <div class="doctor-card__actions"><button class="doctor-card__profile" type="button" @click="profile = row">مشاهده پروفایل</button><button v-if="auth.can('users.manage')" class="btn btn-soft btn-sm" type="button" :aria-label="`ویرایش ${row.fullName}`" @click="editing = row">ویرایش</button><button v-if="auth.can('users.manage')" class="btn btn-soft-danger btn-sm" type="button" :aria-label="`حذف ${row.fullName}`" @click="remove(row)">حذف</button></div>
       </article>
     </div>
   </section>

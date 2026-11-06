@@ -7,6 +7,17 @@ import UiModal from '@/components/UiModal.vue'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime } from '@/utils/date'
 import { money, quantity } from '@/utils/money'
+import { removeRecord } from '@/utils/removeRecord'
+import { movementLabels } from './labels'
+
+interface LocationRow {
+  code: string
+  name: string
+  productCount: number
+  batchCount: number
+  stockValue: number
+  lastMovementAt: string | null
+}
 
 interface ProductRow {
   id: number
@@ -44,25 +55,42 @@ interface MovementRow {
   sourceType: string
   reason: string | null
   createdAt: string
+  reversible: boolean
+}
+
+interface PurchaseRow {
+  id: number
+  purchaseNumber: string
+  supplierName: string | null
+  locationName: string
+  total: number
+  isCancelled: boolean
+  cancelReason: string | null
+  createdAt: string
+  version: number
 }
 
 const kindLabels: Record<string, string> = { Drug: 'دوا', Frame: 'فریم', Lens: 'عدسی', General: 'عمومی' }
 const locationLabels: Record<string, string> = { central: 'گدام مرکزی', pharmacy: 'دواخانه', optical: 'بخش عینک' }
-const movementLabels: Record<string, string> = { Purchase: 'خرید', Sale: 'فروش', SaleReturn: 'برگشت فروش', Adjustment: 'تعدیل', Consumption: 'مصرف بخش', TransferOut: 'انتقال خروجی', TransferIn: 'انتقال ورودی' }
 
 const auth = useAuthStore()
-const tab = ref('products')
+const tab = ref('locations')
 const q = ref('')
+const locations = ref<LocationRow[]>([])
 const products = ref<ProductRow[]>([])
 const batches = ref<BatchRow[]>([])
 const movements = ref<MovementRow[]>([])
+const purchases = ref<PurchaseRow[]>([])
 const alerts = ref<{ lowStock: ProductRow[]; expiring: BatchRow[] }>({ lowStock: [], expiring: [] })
 const loading = ref(true)
 const error = ref('')
+const notice = ref('')
 
 const tabs = computed(() => [
+  { key: 'locations', label: 'گدام‌ها' },
   { key: 'products', label: 'اجناس' },
   { key: 'batches', label: 'موجودی بچ‌ها' },
+  { key: 'purchases', label: 'خریدها' },
   { key: 'alerts', label: `هشدارها (${alerts.value.lowStock.length + alerts.value.expiring.length})` },
   { key: 'movements', label: 'گردش موجودی' },
 ])
@@ -73,10 +101,12 @@ async function load() {
     const params = new URLSearchParams({ pageSize: '100' })
     if (q.value.trim()) params.set('q', q.value.trim())
     products.value = (await api<{ items: ProductRow[] }>(`/inventory/products?${params}`)).items
-    ;[batches.value, alerts.value, movements.value] = await Promise.all([
+    ;[locations.value, batches.value, alerts.value, movements.value, purchases.value] = await Promise.all([
+      api<LocationRow[]>('/inventory/locations'),
       api<BatchRow[]>('/inventory/batches'),
       api<typeof alerts.value>('/inventory/alerts'),
       api<{ items: MovementRow[] }>('/inventory/movements?pageSize=100').then((r) => r.items),
+      api<{ items: PurchaseRow[] }>('/inventory/purchases?pageSize=100').then((r) => r.items),
     ])
   } catch (cause) {
     error.value = errorMessage(cause)
@@ -107,6 +137,53 @@ async function saveProduct() {
     product.error = errorMessage(cause)
   } finally {
     product.saving = false
+  }
+}
+
+async function removeProduct(row: ProductRow) {
+  error.value = ''
+  notice.value = ''
+  try {
+    notice.value = await removeRecord(`/inventory/products/${row.id}?version=${row.version}`, row.name)
+    if (notice.value) await load()
+  } catch (cause) {
+    error.value = errorMessage(cause)
+  }
+}
+
+const cancelPurchase = reactive({ row: null as PurchaseRow | null, reason: '', saving: false, error: '' })
+
+async function submitCancelPurchase() {
+  cancelPurchase.saving = true
+  cancelPurchase.error = ''
+  try {
+    await api(`/inventory/purchases/${cancelPurchase.row!.id}/cancel`, { method: 'POST', body: { reason: cancelPurchase.reason, version: cancelPurchase.row!.version } })
+    cancelPurchase.row = null
+    await load()
+  } catch (cause) {
+    cancelPurchase.error = errorMessage(cause)
+  } finally {
+    cancelPurchase.saving = false
+  }
+}
+
+const reverse = reactive({ row: null as MovementRow | null, reason: '', saving: false, error: '' })
+
+function canReverse(row: MovementRow) {
+  return row.reversible && auth.can(row.kind === 'TransferOut' ? 'inventory.edit' : 'inventory.approve')
+}
+
+async function submitReverse() {
+  reverse.saving = true
+  reverse.error = ''
+  try {
+    await api(`/inventory/movements/${reverse.row!.id}/reverse`, { method: 'POST', body: { reason: reverse.reason } })
+    reverse.row = null
+    await load()
+  } catch (cause) {
+    reverse.error = errorMessage(cause)
+  } finally {
+    reverse.saving = false
   }
 }
 
@@ -164,6 +241,7 @@ onMounted(load)
 
 <template>
   <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
+  <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
   <section class="xr-card">
     <div class="xr-card__header flex-wrap">
       <nav class="xr-tabs" role="tablist" aria-label="بخش‌های گدام">
@@ -176,12 +254,24 @@ onMounted(load)
     </div>
     <div class="xr-card__body">
       <p v-if="loading" class="xr-state" role="status">در حال بارگذاری...</p>
+      <template v-else-if="tab === 'locations'">
+        <p v-if="locations.length === 0" class="xr-state">گدامی ثبت نشده است.</p>
+        <div v-else class="xr-location-grid">
+          <RouterLink v-for="row in locations" :key="row.code" :to="{ name: 'inventory-location', params: { code: row.code } }" class="xr-card xr-location-card">
+            <strong class="xr-location-card__name">{{ row.name }}</strong>
+            <span>{{ quantity(row.productCount) }} جنس موجود</span>
+            <span>ارزش موجودی: {{ money(row.stockValue) }}</span>
+            <span class="small xr-location-card__meta">آخرین گردش: {{ row.lastMovementAt ? formatDateTime(row.lastMovementAt) : '—' }}</span>
+          </RouterLink>
+        </div>
+      </template>
+
       <template v-else-if="tab === 'products'">
         <div class="row mb-3"><div class="col-md-6"><input v-model="q" type="search" class="form-control" placeholder="جستجوی نام یا کد جنس" aria-label="جستجوی جنس" /></div></div>
         <p v-if="products.length === 0" class="xr-state">جنسی ثبت نشده است.</p>
         <div v-else class="xr-table-wrap">
           <table class="xr-table">
-            <thead><tr><th>کد</th><th>نام</th><th>نوع</th><th>موجودی</th><th>حد کمبود</th><th>قیمت فروش</th><th v-if="auth.can('inventory.edit')">عملیات</th></tr></thead>
+            <thead><tr><th>کد</th><th>نام</th><th>نوع</th><th>موجودی</th><th>حد کمبود</th><th>قیمت فروش</th><th>وضعیت</th><th v-if="auth.can('inventory.edit')">عملیات</th></tr></thead>
             <tbody>
               <tr v-for="row in products" :key="row.id">
                 <td><span class="ltr-num">{{ row.code }}</span></td>
@@ -190,7 +280,11 @@ onMounted(load)
                 <td>{{ quantity(row.onHand) }} {{ row.unit }}</td>
                 <td>{{ quantity(row.reorderLevel) }}</td>
                 <td>{{ money(row.salePrice) }}</td>
-                <td v-if="auth.can('inventory.edit')"><button type="button" class="btn btn-soft btn-sm" @click="openProduct(row)">ویرایش</button></td>
+                <td><span class="xr-badge" :class="row.isActive ? 'xr-badge--green' : 'xr-badge--red'">{{ row.isActive ? 'فعال' : 'غیرفعال' }}</span></td>
+                <td v-if="auth.can('inventory.edit')" class="text-nowrap">
+                  <button type="button" class="btn btn-soft btn-sm" @click="openProduct(row)">ویرایش</button>
+                  <button type="button" class="btn btn-soft-danger btn-sm ms-2" @click="removeProduct(row)">حذف</button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -220,6 +314,34 @@ onMounted(load)
         </div>
       </template>
 
+      <template v-else-if="tab === 'purchases'">
+        <p v-if="purchases.length === 0" class="xr-state">خریدی ثبت نشده است.</p>
+        <div v-else class="xr-table-wrap">
+          <table class="xr-table">
+            <thead><tr><th>شماره</th><th>تأمین‌کننده</th><th>محل</th><th>مجموع</th><th>زمان</th><th>وضعیت</th><th v-if="auth.can('inventory.cancel')">عملیات</th></tr></thead>
+            <tbody>
+              <tr v-for="row in purchases" :key="row.id">
+                <td><span class="ltr-num">{{ row.purchaseNumber }}</span></td>
+                <td>{{ row.supplierName ?? '—' }}</td>
+                <td>{{ row.locationName }}</td>
+                <td>{{ money(row.total) }}</td>
+                <td>{{ formatDateTime(row.createdAt) }}</td>
+                <td>
+                  <span class="xr-badge" :class="row.isCancelled ? 'xr-badge--red' : 'xr-badge--green'" :title="row.cancelReason ?? undefined">{{ row.isCancelled ? 'لغو شده' : 'ثبت‌شده' }}</span>
+                  <div v-if="row.cancelReason" class="small text-muted">{{ row.cancelReason }}</div>
+                </td>
+                <td v-if="auth.can('inventory.cancel')" class="text-nowrap">
+                  <template v-if="!row.isCancelled">
+                    <RouterLink v-if="auth.can('inventory.create')" :to="{ name: 'inventory-purchase', query: { correct: row.id } }" class="btn btn-soft btn-sm">اصلاح</RouterLink>
+                    <button type="button" class="btn btn-soft-danger btn-sm ms-2" @click="Object.assign(cancelPurchase, { row, reason: '', saving: false, error: '' })">لغو</button>
+                  </template>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
       <template v-else-if="tab === 'alerts'">
         <h3 class="h6">کمبود موجودی</h3>
         <p v-if="alerts.lowStock.length === 0" class="text-muted">موردی نیست.</p>
@@ -237,7 +359,7 @@ onMounted(load)
         <p v-if="movements.length === 0" class="xr-state">گردشی ثبت نشده است.</p>
         <div v-else class="xr-table-wrap">
           <table class="xr-table">
-            <thead><tr><th>زمان</th><th>جنس</th><th>محل</th><th>نوع</th><th>مقدار</th><th>دلیل</th></tr></thead>
+            <thead><tr><th>زمان</th><th>جنس</th><th>محل</th><th>نوع</th><th>مقدار</th><th>دلیل</th><th>عملیات</th></tr></thead>
             <tbody>
               <tr v-for="row in movements" :key="row.id">
                 <td>{{ formatDateTime(row.createdAt) }}</td>
@@ -246,6 +368,7 @@ onMounted(load)
                 <td>{{ movementLabels[row.kind] }}</td>
                 <td><span class="ltr-num">{{ row.quantity }}</span></td>
                 <td>{{ row.reason ?? '—' }}</td>
+                <td><button v-if="canReverse(row)" type="button" class="btn btn-soft-danger btn-sm" @click="Object.assign(reverse, { row, reason: '', saving: false, error: '' })">برگشت</button></td>
               </tr>
             </tbody>
           </table>
@@ -265,9 +388,36 @@ onMounted(load)
         <div class="col-6"><label class="form-label" for="pr-reorder">حد کمبود</label><input id="pr-reorder" v-model.number="product.reorderLevel" class="form-control" type="number" min="0" step="any" /></div>
         <div class="col-6"><label class="form-label" for="pr-price">قیمت فروش</label><input id="pr-price" v-model.number="product.salePrice" class="form-control" type="number" min="0" step="0.01" /></div>
       </div>
+      <label class="form-check-label mb-3"><input v-model="product.isActive" type="checkbox" class="form-check-input ms-2" />فعال</label>
       <div v-if="product.error" class="alert alert-danger" role="alert">{{ product.error }}</div>
       <div class="xr-form-actions">
         <button type="submit" class="btn btn-primary" :disabled="product.saving">ذخیره</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
+    </form>
+  </UiModal>
+
+  <UiModal v-if="cancelPurchase.row" :title="`لغو خرید ${cancelPurchase.row.purchaseNumber}`" @close="cancelPurchase.row = null">
+    <form @submit.prevent="submitCancelPurchase">
+      <p>اجناس این خرید از موجودی کم می‌شوند و ثبت مالی آن برمی‌گردد. اگر بخشی از آن فروخته یا منتقل شده باشد، لغو انجام نمی‌شود.</p>
+      <label class="form-label" for="cp-reason">دلیل</label>
+      <input id="cp-reason" v-model="cancelPurchase.reason" class="form-control mb-3" minlength="3" maxlength="300" required />
+      <div v-if="cancelPurchase.error" class="alert alert-danger" role="alert">{{ cancelPurchase.error }}</div>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="cancelPurchase.saving">لغو خرید</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
+    </form>
+  </UiModal>
+
+  <UiModal v-if="reverse.row" :title="`برگشت ${movementLabels[reverse.row.kind]}: ${reverse.row.productName}`" @close="reverse.row = null">
+    <form @submit.prevent="submitReverse">
+      <p>گردشی برعکس این مورد ثبت می‌شود و موجودی به حالت قبل برمی‌گردد. سابقه هر دو می‌ماند.</p>
+      <label class="form-label" for="rv-reason">دلیل</label>
+      <input id="rv-reason" v-model="reverse.reason" class="form-control mb-3" minlength="3" maxlength="300" required />
+      <div v-if="reverse.error" class="alert alert-danger" role="alert">{{ reverse.error }}</div>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="reverse.saving">ثبت برگشت</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>
@@ -300,3 +450,34 @@ onMounted(load)
     </form>
   </UiModal>
 </template>
+
+<style scoped>
+.xr-location-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 1rem;
+}
+
+.xr-location-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1rem 1.25rem;
+  color: var(--xr-text);
+  text-decoration: none;
+}
+
+.xr-location-card:hover,
+.xr-location-card:focus-visible {
+  outline: 2px solid var(--xr-tone-primary-text);
+  outline-offset: -2px;
+}
+
+.xr-location-card__name {
+  font-size: 1.05rem;
+}
+
+.xr-location-card__meta {
+  color: var(--xr-text-soft);
+}
+</style>

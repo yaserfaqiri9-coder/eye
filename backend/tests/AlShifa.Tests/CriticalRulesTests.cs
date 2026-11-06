@@ -4,6 +4,7 @@ using System.Text.Json;
 using AlShifa.Api.Features.Auth;
 using AlShifa.Api.Features.Clinical;
 using AlShifa.Api.Features.Finance;
+using AlShifa.Api.Features.Inventory;
 using AlShifa.Api.Features.Patients;
 using AlShifa.Api.Features.Users;
 using AlShifa.Api.Features.Visits;
@@ -180,6 +181,64 @@ public sealed class CriticalRulesTests(ApiFixture api)
         await AssertRefused(await team.PostAsJsonAsync($"/api/surgeries/{surgery.Id}/status", new ChangeSurgeryStatusRequest(SurgeryStatus.InProgress, surgery.Version + 2)), "payment_required");
         await PayAsync(cashier, invoiceId, 1000);
         await AssertStatus(await team.PostAsJsonAsync($"/api/surgeries/{surgery.Id}/status", new ChangeSurgeryStatusRequest(SurgeryStatus.InProgress, surgery.Version + 2)), HttpStatusCode.NoContent);
+        await AssertLedgerReconciles();
+    }
+
+    [Fact]
+    public async Task A_surgery_package_charges_only_its_fee_and_takes_its_supplies_from_the_chosen_store()
+    {
+        var (doctor, _) = await UserAsync(Roles.Doctor);
+        var (team, _) = await UserAsync(Roles.Surgery);
+        var (inventory, _) = await UserAsync(Roles.Inventory);
+        var cashier = await CashierAsync();
+        var (_, visit) = await VisitAsync();
+        var serviceId = await NewServiceAsync(5000);
+
+        async Task<int> SupplyAsync(decimal stock, decimal cost)
+        {
+            var response = await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest(Name("D"), "جنس " + Name("n"), ProductKind.General, null, "عدد", 0, 0));
+            var id = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
+            await AssertStatus(await inventory.SendAsync(ApiFixture.Keyed("/api/inventory/purchases", new CreatePurchaseRequest(null, "surgery",
+                [new PurchaseLineInput(id, Name("L"), DateOnly.FromDateTime(DateTime.UtcNow.AddYears(1)), stock, cost)]))), HttpStatusCode.Created);
+            return id;
+        }
+
+        Task<decimal> OnHandAsync(int productId) => InDbAsync(db => db.StockBatches.Where(b => b.ProductId == productId).SumAsync(b => b.Quantity));
+
+        var lens = await SupplyAsync(5, 800);
+        var drops = await SupplyAsync(1, 50);
+        var package = await Read<PackageRow>(await team.PostAsJsonAsync("/api/surgery-packages",
+            new SavePackageRequest(Name("آب مروارید"), serviceId, "surgery", [new PackageItemInput(lens, 1), new PackageItemInput(drops, 2)])), HttpStatusCode.Created);
+        Assert.Equal(5000m, package.Price);
+        Assert.Equal(2, package.Items.Count);
+
+        var surgery = await Read<SurgeryRow>(await doctor.SendAsync(ApiFixture.Keyed("/api/surgeries", new CreateSurgeryRequest(visit.Id, package.Name, EyeSide.OD, null, package.Id))), HttpStatusCode.Created);
+        var invoiceId = await InvoiceOfAsync(nameof(SurgeryCase), surgery.Id);
+
+        // Only the package fee is invoiced: its supplies are inside it.
+        Assert.Equal(5000m, await InDbAsync(db => db.Invoices.Where(i => i.Id == invoiceId).Select(i => i.Total).SingleAsync()));
+        await AssertRefused(await team.PostAsJsonAsync($"/api/surgeries/{surgery.Id}/supplies", new RecordSuppliesRequest("surgery", [new PackageItemInput(lens, 1)], surgery.Version)), "case_not_started");
+
+        await AssertStatus(await team.PutAsJsonAsync($"/api/surgeries/{surgery.Id}", new SaveSurgeryRequest(DateTime.UtcNow.AddDays(1), null, true, null, null, surgery.Version)), HttpStatusCode.NoContent);
+        await AssertStatus(await team.PostAsJsonAsync($"/api/surgeries/{surgery.Id}/status", new ChangeSurgeryStatusRequest(SurgeryStatus.Scheduled, surgery.Version + 1)), HttpStatusCode.NoContent);
+        await PayAsync(cashier, invoiceId, 5000);
+        await AssertStatus(await team.PostAsJsonAsync($"/api/surgeries/{surgery.Id}/status", new ChangeSurgeryStatusRequest(SurgeryStatus.InProgress, surgery.Version + 2)), HttpStatusCode.NoContent);
+        await AssertRefused(await team.PostAsJsonAsync($"/api/surgeries/{surgery.Id}/status", new ChangeSurgeryStatusRequest(SurgeryStatus.Completed, surgery.Version + 3)), "supplies_required");
+
+        // A short item names itself and nothing at all leaves stock.
+        var shortItem = await team.PostAsJsonAsync($"/api/surgeries/{surgery.Id}/supplies", new RecordSuppliesRequest("surgery", [new PackageItemInput(lens, 1), new PackageItemInput(drops, 2)], surgery.Version + 3));
+        await AssertRefused(shortItem, "insufficient_stock");
+        Assert.Equal(5m, await OnHandAsync(lens));
+
+        var recorded = await Read<SuppliesRow>(await team.PostAsJsonAsync($"/api/surgeries/{surgery.Id}/supplies",
+            new RecordSuppliesRequest("surgery", [new PackageItemInput(lens, 1), new PackageItemInput(drops, 1)], surgery.Version + 3)));
+        Assert.True(recorded.Recorded);
+        Assert.Equal(850m, recorded.Items.Sum(i => i.Cost));
+        Assert.Equal(4m, await OnHandAsync(lens));
+        Assert.Equal(0m, await OnHandAsync(drops));
+
+        await AssertRefused(await team.PostAsJsonAsync($"/api/surgeries/{surgery.Id}/supplies", new RecordSuppliesRequest("surgery", [new PackageItemInput(lens, 1)], surgery.Version + 4)), "supplies_recorded");
+        await AssertStatus(await team.PostAsJsonAsync($"/api/surgeries/{surgery.Id}/status", new ChangeSurgeryStatusRequest(SurgeryStatus.Completed, surgery.Version + 4)), HttpStatusCode.NoContent);
         await AssertLedgerReconciles();
     }
 

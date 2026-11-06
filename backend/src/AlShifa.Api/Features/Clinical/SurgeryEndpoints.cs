@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AlShifa.Api.Features.Clinical;
 
-public sealed record CreateSurgeryRequest(long VisitId, [Required, MaxLength(200)] string SurgeryType, EyeSide Eye, int? ServiceId = null);
+public sealed record CreateSurgeryRequest(long VisitId, [Required, MaxLength(200)] string SurgeryType, EyeSide Eye, int? ServiceId = null, int? PackageId = null);
 
 public sealed record SaveSurgeryRequest(
     DateTime? ScheduledAt,
@@ -15,13 +15,16 @@ public sealed record SaveSurgeryRequest(
     bool ConsentRecorded,
     [MaxLength(4000)] string? OperationReport,
     [MaxLength(2000)] string? PostOpStatus,
-    int Version);
+    int Version,
+    [MaxLength(200)] string? SurgeryType = null,
+    EyeSide? Eye = null,
+    [MaxLength(500)] string? AmendReason = null);
 
 public sealed record ChangeSurgeryStatusRequest(SurgeryStatus Status, int Version);
 
 public sealed record SurgeryRow(long Id, string CaseNumber, long PatientId, string PatientFileNumber, string PatientName, long VisitId, string SurgeryType, string Eye, DateTime? ScheduledAt, string Status, int Version, IReadOnlyList<string> NextStatuses);
 
-public sealed record SurgeryDetail(SurgeryRow Case, string? PreOpChecks, bool ConsentRecorded, string? OperationReport, string? PostOpStatus);
+public sealed record SurgeryDetail(SurgeryRow Case, string? PreOpChecks, bool ConsentRecorded, string? OperationReport, string? PostOpStatus, int? PackageId = null, string? PackageName = null, DateTime? SuppliesRecordedAt = null);
 
 public static class SurgeryEndpoints
 {
@@ -62,7 +65,8 @@ public static class SurgeryEndpoints
         {
             var surgery = await db.SurgeryCases.AsNoTracking().SingleOrDefaultAsync(c => c.Id == id, ct) ?? throw AppException.NotFound();
             var row = await Project(db.SurgeryCases.AsNoTracking().Where(c => c.Id == id)).SingleAsync(ct);
-            return Results.Ok(new SurgeryDetail(ToRow(row), surgery.PreOpChecks, surgery.ConsentRecorded, surgery.OperationReport, surgery.PostOpStatus));
+            var packageName = surgery.PackageId is { } packageId ? await db.SurgeryPackages.Where(p => p.Id == packageId).Select(p => p.Name).SingleAsync(ct) : null;
+            return Results.Ok(new SurgeryDetail(ToRow(row), surgery.PreOpChecks, surgery.ConsentRecorded, surgery.OperationReport, surgery.PostOpStatus, surgery.PackageId, packageName, surgery.SuppliesRecordedAt));
         }).RequirePermission("surgery.edit");
 
         group.MapPost("/", async (CreateSurgeryRequest request, AppDbContext db, ClinicalAccess access, Idempotency idempotency, NumberService numbers, InvoiceService invoices, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
@@ -71,8 +75,16 @@ public static class SurgeryEndpoints
                 var patientId = await ClinicalEndpoints.PatientOfVisitAsync(db, request.VisitId, ct);
                 await access.EnsureResponsibleAsync(request.VisitId, ct);
 
+                // A package brings its own fee: the patient pays the package and nothing more for its supplies.
+                var serviceIdOrPackage = request.ServiceId;
+                if (request.PackageId is { } packageId)
+                {
+                    serviceIdOrPackage = await db.SurgeryPackages.Where(p => p.Id == packageId && p.IsActive).Select(p => (int?)p.ServiceId).SingleOrDefaultAsync(ct)
+                        ?? throw new AppException(StatusCodes.Status400BadRequest, "unknown_package", "پکیج انتخاب‌شده معتبر یا فعال نیست.");
+                }
+
                 // Left without a fee, the case would have nothing to check before it starts. A waiver goes through an approved discount.
-                if (request.ServiceId is not { } serviceId)
+                if (serviceIdOrPackage is not { } serviceId)
                 {
                     throw new AppException(StatusCodes.Status400BadRequest, "service_required", "برای عملیات باید خدمت قابل پرداخت انتخاب شود.");
                 }
@@ -96,6 +108,7 @@ public static class SurgeryEndpoints
                     SurgeryType = request.SurgeryType.Trim(),
                     Eye = request.Eye,
                     ResponsibleUserId = user.Id,
+                    PackageId = request.PackageId,
                 };
                 db.SurgeryCases.Add(surgery);
                 await db.SaveChangesAsync(ct);
@@ -112,14 +125,53 @@ public static class SurgeryEndpoints
                 return (StatusCodes.Status201Created, ToRow(row));
             }, ct)).RequirePermission("surgery.create");
 
-        group.MapPut("/{id:long}", async (long id, SaveSurgeryRequest request, AppDbContext db, ClinicalAccess access, AuditService audit, CancellationToken ct) =>
+        group.MapPut("/{id:long}", async (long id, SaveSurgeryRequest request, AppDbContext db, ClinicalAccess access, CurrentUser user, AuditService audit, CancellationToken ct) =>
         {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
             var surgery = await db.SurgeryCases.SingleOrDefaultAsync(c => c.Id == id, ct) ?? throw AppException.NotFound();
             db.Entry(surgery).Property(c => c.Version).OriginalValue = request.Version;
             await access.EnsureResponsibleAsync(surgery.VisitId, ct, surgery.ResponsibleUserId);
-            if (surgery.Status is SurgeryStatus.Closed or SurgeryStatus.Cancelled)
+            var amendReason = Text.Clean(request.AmendReason);
+            if (surgery.Status == SurgeryStatus.Cancelled || (surgery.Status == SurgeryStatus.Closed && amendReason is null))
             {
-                throw new AppException(StatusCodes.Status409Conflict, "case_closed", "این پرونده بسته شده است.");
+                throw new AppException(StatusCodes.Status409Conflict, "case_closed", "این پرونده بسته شده است. برای تغییر پرونده بسته، دلیل اصلاح را بنویسید.");
+            }
+
+            // Which operation and which eye can change only until the case begins. A wrong eye after that is an incident, not an edit.
+            var type = Text.Clean(request.SurgeryType) ?? surgery.SurgeryType;
+            var eye = request.Eye ?? surgery.Eye;
+            if (type != surgery.SurgeryType || eye != surgery.Eye)
+            {
+                if (surgery.Status is not (SurgeryStatus.Proposed or SurgeryStatus.Scheduled))
+                {
+                    throw new AppException(StatusCodes.Status409Conflict, "case_started", "عملیات آغاز شده است و نوع عملیات یا چشم تغییر نمی‌کند.");
+                }
+
+                Amendments.AddChanges(db, nameof(SurgeryCase), id,
+                [
+                    (nameof(surgery.SurgeryType), surgery.SurgeryType, type),
+                    (nameof(surgery.Eye), surgery.Eye.ToString(), eye.ToString()),
+                ], amendReason ?? Amendments.BeforeFinal, user.Id);
+
+                // The invoice names the operation it charges for. Only the words change; the amount and ledger stay.
+                var charge = await db.InvoiceItems.SingleOrDefaultAsync(i => i.SourceType == nameof(SurgeryCase) && i.SourceId == id && !i.IsVoid, ct);
+                if (charge is not null)
+                {
+                    charge.Description = type;
+                }
+
+                surgery.SurgeryType = type;
+                surgery.Eye = eye;
+            }
+
+            if (amendReason is not null)
+            {
+                Amendments.AddChanges(db, nameof(SurgeryCase), id,
+                [
+                    (nameof(surgery.PreOpChecks), surgery.PreOpChecks, Text.Clean(request.PreOpChecks)),
+                    (nameof(surgery.OperationReport), surgery.OperationReport, Text.Clean(request.OperationReport)),
+                    (nameof(surgery.PostOpStatus), surgery.PostOpStatus, Text.Clean(request.PostOpStatus)),
+                ], amendReason, user.Id);
             }
 
             // Reporting an operation before it started skips the start step, so the same check applies.
@@ -133,8 +185,9 @@ public static class SurgeryEndpoints
             surgery.ConsentRecorded = request.ConsentRecorded;
             surgery.OperationReport = Text.Clean(request.OperationReport);
             surgery.PostOpStatus = Text.Clean(request.PostOpStatus);
-            audit.Add("SurgeryEdited", "SurgeryCase", id.ToString());
+            audit.Add("SurgeryEdited", "SurgeryCase", id.ToString(), amendReason);
             await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
             return Results.NoContent();
         }).RequirePermission("surgery.edit");
 
@@ -168,6 +221,11 @@ public static class SurgeryEndpoints
             {
                 ClinicalEndpoints.EnsureNotCancelled(visit);
                 await DiagnosticGate.EnsureChargePaidAsync(db, nameof(SurgeryCase), id, ct);
+            }
+            else if (request.Status == SurgeryStatus.Completed && surgery.PackageId is not null && surgery.SuppliesRecordedAt is null)
+            {
+                // The package's supplies must leave stock before the case is finished, or the store would never learn of them.
+                throw new AppException(StatusCodes.Status409Conflict, "supplies_required", "ابتدا مواد مصرفی پکیج را در پرونده عملیات ثبت کنید تا از گدام کسر شود.");
             }
             else if (request.Status == SurgeryStatus.Cancelled)
             {

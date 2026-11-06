@@ -15,7 +15,8 @@ public sealed record SavePreExamRequest(
     [MaxLength(30)] string? IopOs,
     [MaxLength(1000)] string? Measurements,
     [MaxLength(2000)] string? Notes,
-    int? Version);
+    int? Version,
+    [MaxLength(500)] string? AmendReason = null);
 
 public sealed record PreExamDto(
     long Id, long VisitId, string? ChiefComplaint, string? History, string? VisualAcuityOd, string? VisualAcuityOs,
@@ -57,6 +58,14 @@ public sealed record RxItemInput(
 
 public sealed record CreatePrescriptionRequest(long VisitId, [MaxLength(1000)] string? Notes, [Required, MinLength(1)] RxItemInput[] Items);
 
+/// <param name="Reason">Required once the exam is final. Before that the change is free, though still kept in the history.</param>
+public sealed record EditPrescriptionRequest([MaxLength(1000)] string? Notes, [Required, MinLength(1)] RxItemInput[] Items, int Version, [MaxLength(500)] string? Reason = null);
+
+public sealed record EditOpticalRxRequest(
+    [MaxLength(10)] string? SphereOd, [MaxLength(10)] string? CylinderOd, [MaxLength(10)] string? AxisOd, [MaxLength(10)] string? AddOd,
+    [MaxLength(10)] string? SphereOs, [MaxLength(10)] string? CylinderOs, [MaxLength(10)] string? AxisOs, [MaxLength(10)] string? AddOs,
+    [MaxLength(10)] string? Pd, [MaxLength(1000)] string? Notes, int Version, [MaxLength(500)] string? Reason = null);
+
 public sealed record RxItemDto(long Id, string DrugName, string? Dose, string? Route, string? Duration, string? Instructions, decimal Quantity, decimal DispensedQuantity);
 
 public sealed record PrescriptionDto(long Id, string RxNumber, long PatientId, string PatientFileNumber, string PatientName, long VisitId, string? Notes, string Status, DateTime CreatedAt, int Version, IReadOnlyList<RxItemDto> Items);
@@ -74,7 +83,47 @@ public sealed record OpticalRxDto(
 
 public sealed record CreateFollowUpRequest(long VisitId, DateOnly DueDate, [MaxLength(300)] string? Note);
 
+public sealed record EditFollowUpRequest(DateOnly DueDate, [MaxLength(300)] string? Note);
+
 public sealed record FollowUpDto(long Id, DateOnly DueDate, string? Note);
+
+/// <summary>What was on the record before a change, and why it changed. Once a record is final this is the only way to change it.</summary>
+public static class Amendments
+{
+    private const int Limit = 4000;
+
+    public const string BeforeFinal = "ویرایش پیش از نهایی شدن";
+
+    public static void Add(AppDbContext db, string entity, long entityId, string field, string? oldValue, string? newValue, string reason, long userId) =>
+        db.ClinicalAmendments.Add(new ClinicalAmendment
+        {
+            Entity = entity,
+            EntityId = entityId,
+            Field = field,
+            OldValue = Fit(oldValue),
+            NewValue = Fit(newValue),
+            Reason = reason,
+            UserId = userId,
+        });
+
+    /// <summary>Records every field that differs. Returns whether anything did.</summary>
+    public static bool AddChanges(AppDbContext db, string entity, long entityId, IEnumerable<(string Field, string? Old, string? New)> fields, string reason, long userId)
+    {
+        var changed = false;
+        foreach (var (field, oldValue, newValue) in fields)
+        {
+            if (oldValue != newValue)
+            {
+                Add(db, entity, entityId, field, oldValue, newValue, reason, userId);
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    private static string? Fit(string? value) => value is { Length: > Limit } ? value[..Limit] : value;
+}
 
 public sealed record ChartDto(
     VisitRow Visit, PreExamDto? PreExam, ConsultationDto? Consultation, IReadOnlyList<AmendmentDto> Amendments,
@@ -114,7 +163,21 @@ public static class ClinicalEndpoints
                 db.Entry(exam).Property(p => p.Version).OriginalValue = request.Version ?? throw StaleScreen();
                 if (exam.CompletedAt is not null)
                 {
-                    throw new AppException(StatusCodes.Status409Conflict, "already_completed", "این معاینه تکمیل شده و قابل ویرایش نیست.");
+                    // The doctor may already have relied on it, so what changed and why stays on the record.
+                    var reason = Text.Clean(request.AmendReason)
+                        ?? throw new AppException(StatusCodes.Status409Conflict, "already_completed", "این معاینه تکمیل شده است. برای تغییر، دلیل اصلاح را بنویسید.");
+                    Amendments.AddChanges(db, nameof(PreExamination), exam.Id,
+                    [
+                        (nameof(exam.ChiefComplaint), exam.ChiefComplaint, Text.Clean(request.ChiefComplaint)),
+                        (nameof(exam.History), exam.History, Text.Clean(request.History)),
+                        (nameof(exam.VisualAcuityOd), exam.VisualAcuityOd, Text.Clean(request.VisualAcuityOd)),
+                        (nameof(exam.VisualAcuityOs), exam.VisualAcuityOs, Text.Clean(request.VisualAcuityOs)),
+                        (nameof(exam.IopOd), exam.IopOd, Text.Clean(request.IopOd)),
+                        (nameof(exam.IopOs), exam.IopOs, Text.Clean(request.IopOs)),
+                        (nameof(exam.Measurements), exam.Measurements, Text.Clean(request.Measurements)),
+                        (nameof(exam.Notes), exam.Notes, Text.Clean(request.Notes)),
+                    ], reason, user.Id);
+                    audit.Add("PreExamAmended", "Visit", visitId.ToString(), reason);
                 }
             }
 
@@ -173,16 +236,26 @@ public static class ClinicalEndpoints
             var exam = await db.PreExaminations.AsNoTracking().SingleOrDefaultAsync(p => p.VisitId == visitId, ct);
             var consult = await db.Consultations.AsNoTracking().SingleOrDefaultAsync(c => c.VisitId == visitId, ct);
 
-            var amendments = new List<AmendmentDto>();
-            if (consult is not null)
-            {
-                amendments = await (
-                    from a in db.ClinicalAmendments.AsNoTracking()
-                    join u in db.Users on a.UserId equals u.Id
-                    where a.Entity == nameof(Consultation) && a.EntityId == consult.Id && (canSeeConfidential || a.Field != nameof(Consultation.ConfidentialNote))
-                    orderby a.Id descending
-                    select new AmendmentDto(a.Field, a.OldValue, a.NewValue, a.Reason, u.FullName, a.CreatedAt)).ToListAsync(ct);
-            }
+            var consultId = consult?.Id;
+            var examId = exam?.Id;
+            var refractionId = await db.Refractions.Where(r => r.VisitId == visitId).Select(r => (long?)r.Id).SingleOrDefaultAsync(ct);
+            var rxIds = await db.MedicalPrescriptions.Where(p => p.VisitId == visitId).Select(p => p.Id).ToListAsync(ct);
+            var opticalIds = await db.OpticalPrescriptions.Where(p => p.VisitId == visitId).Select(p => p.Id).ToListAsync(ct);
+            var orderIds = await db.DiagnosticOrders.Where(o => o.VisitId == visitId).Select(o => o.Id).ToListAsync(ct);
+            var surgeryIds = await db.SurgeryCases.Where(c => c.VisitId == visitId).Select(c => c.Id).ToListAsync(ct);
+            var amendments = await (
+                from a in db.ClinicalAmendments.AsNoTracking()
+                join u in db.Users on a.UserId equals u.Id
+                where ((a.Entity == nameof(Consultation) && a.EntityId == consultId)
+                        || (a.Entity == nameof(PreExamination) && a.EntityId == examId)
+                        || (a.Entity == nameof(Refraction) && a.EntityId == refractionId)
+                        || (a.Entity == nameof(MedicalPrescription) && rxIds.Contains(a.EntityId))
+                        || (a.Entity == nameof(OpticalPrescription) && opticalIds.Contains(a.EntityId))
+                        || (a.Entity == nameof(DiagnosticOrder) && orderIds.Contains(a.EntityId))
+                        || (a.Entity == nameof(SurgeryCase) && surgeryIds.Contains(a.EntityId)))
+                    && (canSeeConfidential || a.Field != nameof(Consultation.ConfidentialNote))
+                orderby a.Id descending
+                select new AmendmentDto(a.Field, a.OldValue, a.NewValue, a.Reason, u.FullName, a.CreatedAt)).ToListAsync(ct);
 
             var orders = await DiagnosticEndpoints.QueryOrders(db.DiagnosticOrders.AsNoTracking().Where(o => o.VisitId == visitId)).ToListAsync(ct);
             var followUps = await db.FollowUps.AsNoTracking().Where(f => f.VisitId == visitId).OrderBy(f => f.DueDate).Select(f => new FollowUpDto(f.Id, f.DueDate, f.Note)).ToListAsync(ct);
@@ -446,6 +519,52 @@ public static class ClinicalEndpoints
             await db.SaveChangesAsync(ct);
             return Results.Created($"/api/follow-ups/{followUp.Id}", new FollowUpDto(followUp.Id, followUp.DueDate, followUp.Note));
         }).RequirePermission("consultation.edit").WithTags("Clinical");
+
+        app.MapPut("/api/follow-ups/{id:long}", async (long id, EditFollowUpRequest request, AppDbContext db, ClinicalAccess access, AuditService audit, CancellationToken ct) =>
+        {
+            var followUp = await db.FollowUps.SingleOrDefaultAsync(f => f.Id == id, ct) ?? throw AppException.NotFound();
+            await access.EnsureResponsibleAsync(followUp.VisitId, ct);
+
+            // A date already past may stay as it is while the note is corrected, but no new date may be set in the past.
+            if (request.DueDate != followUp.DueDate && request.DueDate < KabulClock.Today)
+            {
+                throw new AppException(StatusCodes.Status400BadRequest, "invalid_date", "تاریخ پیگیری نمی‌تواند در گذشته باشد.");
+            }
+
+            audit.Add("FollowUpEdited", "Visit", followUp.VisitId.ToString(), $"{followUp.DueDate:yyyy-MM-dd} {followUp.Note}");
+            followUp.DueDate = request.DueDate;
+            followUp.Note = Text.Clean(request.Note);
+            await db.SaveChangesAsync(ct);
+            return Results.Ok(new FollowUpDto(followUp.Id, followUp.DueDate, followUp.Note));
+        }).RequirePermission("consultation.edit").WithTags("Clinical");
+
+        // A reminder for the future, not a clinical finding, so it can go. The audit log keeps what it said.
+        app.MapDelete("/api/follow-ups/{id:long}", async (long id, AppDbContext db, ClinicalAccess access, AuditService audit, CancellationToken ct) =>
+        {
+            var followUp = await db.FollowUps.SingleOrDefaultAsync(f => f.Id == id, ct) ?? throw AppException.NotFound();
+            await access.EnsureResponsibleAsync(followUp.VisitId, ct);
+            db.FollowUps.Remove(followUp);
+            audit.Add("FollowUpDeleted", "Visit", followUp.VisitId.ToString(), $"{followUp.DueDate:yyyy-MM-dd} {followUp.Note}");
+            await db.SaveChangesAsync(ct);
+            return Results.NoContent();
+        }).RequirePermission("consultation.edit").WithTags("Clinical");
+    }
+
+    /// <summary>A final exam or a closed visit: changes to what hangs off it need a stated reason from here on.</summary>
+    public static async Task<bool> IsFinalAsync(AppDbContext db, long visitId, CancellationToken ct) =>
+        await db.Consultations.AnyAsync(c => c.VisitId == visitId && c.FinalizedAt != null, ct)
+        || await db.Visits.AnyAsync(v => v.Id == visitId && v.Status == VisitStatus.Completed, ct);
+
+    /// <summary>The reason to record for a change, refusing a change to a final record that gives none.</summary>
+    public static async Task<string> AmendReasonAsync(AppDbContext db, long visitId, string? requested, CancellationToken ct)
+    {
+        var reason = Text.Clean(requested);
+        if (reason is null && await IsFinalAsync(db, visitId, ct))
+        {
+            throw new AppException(StatusCodes.Status409Conflict, "amend_reason_required", "این معاینه نهایی شده است. برای تغییر، دلیل اصلاح را بنویسید.");
+        }
+
+        return reason ?? Amendments.BeforeFinal;
     }
 
     /// <summary>Everyone bound for a doctor passes through here, whichever department the desk chose.</summary>

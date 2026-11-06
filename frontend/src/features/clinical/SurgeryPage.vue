@@ -5,6 +5,7 @@ import { useLiveRefresh } from '@/api/realtime'
 import UiCard from '@/components/UiCard.vue'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/date'
+import SurgeryPackagesPanel from './SurgeryPackagesPanel.vue'
 import { eyeLabels, surgeryStatusLabels, type SurgeryRow } from './types'
 
 const auth = useAuthStore()
@@ -12,6 +13,7 @@ const rows = ref<SurgeryRow[]>([])
 const status = ref('')
 const loading = ref(true)
 const error = ref('')
+const tab = ref<'cases' | 'packages'>('cases')
 
 async function load() {
   try {
@@ -48,11 +50,17 @@ watch(status, load)
 <template>
   <UiCard title="عملیات">
     <template #actions>
-      <select v-model="status" class="form-select" aria-label="فیلتر وضعیت">
+      <nav class="xr-tabs" role="tablist" aria-label="بخش‌های عملیات">
+        <button type="button" role="tab" class="xr-tab" :class="{ 'xr-tab--active': tab === 'cases' }" :aria-selected="tab === 'cases'" @click="tab = 'cases'">پرونده‌ها</button>
+        <button type="button" role="tab" class="xr-tab" :class="{ 'xr-tab--active': tab === 'packages' }" :aria-selected="tab === 'packages'" @click="tab = 'packages'">پکیج‌های عملیات</button>
+      </nav>
+      <select v-if="tab === 'cases'" v-model="status" class="form-select w-auto" aria-label="فیلتر وضعیت">
         <option value="">همه وضعیت‌ها</option>
         <option v-for="(label, value) in surgeryStatusLabels" :key="value" :value="value">{{ label }}</option>
       </select>
     </template>
+    <SurgeryPackagesPanel v-if="tab === 'packages'" />
+    <template v-else>
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
     <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
     <div v-else-if="rows.length === 0" class="xr-state">پرونده عملیاتی نیست.</div>
@@ -87,6 +95,7 @@ watch(status, load)
         </tbody>
       </table>
     </div>
+    </template>
   </UiCard>
 
 </template>

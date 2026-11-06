@@ -365,7 +365,9 @@ public static partial class CallEndpoints
                 throw new AppException(StatusCodes.Status404NotFound, "voice_clip_missing", $"فایل صوتی {name} موجود نیست.");
             }
 
-            return Results.File(path, "audio/mpeg");
+            // A rebuilt voice pack keeps the same file names, so the browser must ask again each time and not replay an old copy.
+            http.Response.Headers.CacheControl = "no-cache";
+            return Results.File(path, "audio/mpeg", lastModified: File.GetLastWriteTimeUtc(path));
         }).RequireAuthorization();
 
         calls.MapGet("/settings", async (AppDbContext db, CancellationToken ct) =>

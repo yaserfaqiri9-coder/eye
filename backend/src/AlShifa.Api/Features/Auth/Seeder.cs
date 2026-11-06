@@ -30,6 +30,7 @@ public static class Seeder
         ("central", "گدام مرکزی"),
         ("pharmacy", "دواخانه"),
         ("optical", "بخش عینک"),
+        ("surgery", "گدام عملیات‌خانه"),
     ];
 
     /// <summary>Tariffs are not seeded: until finance sets a price, these services refuse to charge.</summary>
@@ -45,6 +46,12 @@ public static class Seeder
         ("رفرکشن", DiagnosticKind.Refraction, ServiceCodes.Refraction),
         ("عکس‌برداری", DiagnosticKind.Imaging, ServiceCodes.Imaging),
     ];
+
+    /// <summary>Workflows find these by code, and the seeder would bring a deleted one back.</summary>
+    public static bool IsSystemDepartment(string code) => Departments.Any(d => d.Code == code);
+
+    /// <summary>The paid flows rely on these, and the seeder finds them by name.</summary>
+    public static bool IsSystemTest(string name) => PrepaidTests.Any(t => t.Name == name);
 
     private static readonly (string Role, string Permission)[] RetiredPermissions =
     [

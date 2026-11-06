@@ -1,10 +1,10 @@
 {
   "voice": "fa-IR-FaridNeural",
   "language": "fa-IR",
-  "rate": "-8%",
+  "rate": "-20%",
   "maxNumber": 999,
   "maxRoom": 20,
-  "number": "نوبت شماره {0}،",
+  "number": "نوبت شماره، {0}.",
   "call": "لطفاً به {0} مراجعه کنید.",
   "recall": "لطفاً دوباره به {0} مراجعه کنید.",
   "room": "اتاق شماره {0}",

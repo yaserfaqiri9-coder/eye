@@ -42,6 +42,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<DiagnosticOrder> DiagnosticOrders => Set<DiagnosticOrder>();
     public DbSet<DiagnosticResult> DiagnosticResults => Set<DiagnosticResult>();
     public DbSet<SurgeryCase> SurgeryCases => Set<SurgeryCase>();
+    public DbSet<SurgeryPackage> SurgeryPackages => Set<SurgeryPackage>();
+    public DbSet<SurgeryPackageItem> SurgeryPackageItems => Set<SurgeryPackageItem>();
     public DbSet<Service> Services => Set<Service>();
     public DbSet<ServicePrice> ServicePrices => Set<ServicePrice>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
@@ -294,6 +296,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
 
         b.Entity<Purchase>(e =>
         {
+            e.Property(x => x.Version).IsConcurrencyToken();
             e.HasIndex(x => x.PurchaseNumber).IsUnique();
             e.HasMany(x => x.Items).WithOne().HasForeignKey(x => x.PurchaseId);
         });
@@ -387,6 +390,24 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
             e.Property(x => x.Version).IsConcurrencyToken();
             e.HasIndex(x => x.CaseNumber).IsUnique();
             e.HasIndex(x => new { x.Status, x.Id });
+            e.HasOne(x => x.Package).WithMany().HasForeignKey(x => x.PackageId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<StockLocation>().WithMany().HasForeignKey(x => x.SuppliesLocationId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<SurgeryPackage>(e =>
+        {
+            e.Property(x => x.Version).IsConcurrencyToken();
+            e.HasIndex(x => x.Name).IsUnique();
+            e.HasOne(x => x.Service).WithMany().HasForeignKey(x => x.ServiceId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Location).WithMany().HasForeignKey(x => x.LocationId).OnDelete(DeleteBehavior.Restrict);
+            e.HasMany(x => x.Items).WithOne().HasForeignKey(x => x.PackageId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<SurgeryPackageItem>(e =>
+        {
+            e.Property(x => x.Quantity).HasPrecision(18, 3);
+            e.HasOne(x => x.Product).WithMany().HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Restrict);
+            e.ToTable(t => t.HasCheckConstraint("CK_SurgeryPackageItem_Quantity", "`Quantity` > 0"));
         });
     }
 

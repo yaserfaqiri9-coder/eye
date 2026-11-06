@@ -25,7 +25,8 @@ public sealed record SaveRefractionRequest(
     [MaxLength(1000)] string? Measurements,
     [MaxLength(2000)] string? Notes,
     RefractionLineInput[]? Lines,
-    int? Version);
+    int? Version,
+    [MaxLength(500)] string? AmendReason = null);
 
 public sealed record RefractionLineDto(string Stage, string Eye, string? Sphere, string? Cylinder, string? Axis, string? Add, string? Va);
 
@@ -41,6 +42,13 @@ public sealed record RefractionDto(
 /// </summary>
 public static class RefractionEndpoints
 {
+    /// <summary>The filled rows in a fixed order, so the same values always read the same however they arrived.</summary>
+    private static string DescribeLines(IEnumerable<(RefractionStage Stage, EyeSide Eye, string? Sphere, string? Cylinder, string? Axis, string? Add, string? Va)> lines) =>
+        string.Join("\n", lines
+            .Where(l => l.Sphere is not null || l.Cylinder is not null || l.Axis is not null || l.Add is not null || l.Va is not null)
+            .OrderBy(l => l.Stage).ThenBy(l => l.Eye)
+            .Select(l => $"{l.Stage} {l.Eye}: {l.Sphere ?? "-"} / {l.Cylinder ?? "-"} x {l.Axis ?? "-"} ADD {l.Add ?? "-"} VA {l.Va ?? "-"}"));
+
     public static void MapRefractions(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/refractions").WithTags("Refraction");
@@ -81,6 +89,7 @@ public static class RefractionEndpoints
             await using var tx = await db.Database.BeginTransactionAsync(ct);
             ClinicalEndpoints.EnsureNotCancelled(await Visits.VisitService.LockAsync(db, visitId, ct));
             var row = await db.Refractions.SingleOrDefaultAsync(r => r.VisitId == visitId, ct);
+            string? amendReason = null;
             if (row is null)
             {
                 row = new Refraction { VisitId = visitId, RecordedByUserId = user.Id };
@@ -92,19 +101,44 @@ public static class RefractionEndpoints
                 db.Entry(row).Property(r => r.Version).OriginalValue = request.Version ?? throw new DbUpdateConcurrencyException();
                 if (row.CompletedAt is not null)
                 {
-                    throw new AppException(StatusCodes.Status409Conflict, "already_completed", "این بینایی‌سنجی تکمیل شده و قابل ویرایش نیست.");
+                    // The doctor and the optical desk may already have used these numbers, so what changed and why stays on the record.
+                    amendReason = Text.Clean(request.AmendReason)
+                        ?? throw new AppException(StatusCodes.Status409Conflict, "already_completed", "این بینایی‌سنجی تکمیل شده است. برای تغییر، دلیل اصلاح را بنویسید.");
                 }
 
                 // A save that changes only the lines must still pass the version check and move the version on.
                 db.Entry(row).State = EntityState.Modified;
             }
 
-            var order = await OpenOrderAsync(db, visitId, ct);
-            if (order.Status == DiagnosticStatus.Requested)
+            // A completed refraction has finished its request; correcting it does not open anything again.
+            if (amendReason is null)
             {
-                await DiagnosticGate.EnsurePaidAsync(db, order, ct);
-                order.Status = DiagnosticStatus.InProgress;
-                audit.Add("DiagnosticStarted", "DiagnosticOrder", order.Id.ToString());
+                var order = await OpenOrderAsync(db, visitId, ct);
+                if (order.Status == DiagnosticStatus.Requested)
+                {
+                    await DiagnosticGate.EnsurePaidAsync(db, order, ct);
+                    order.Status = DiagnosticStatus.InProgress;
+                    audit.Add("DiagnosticStarted", "DiagnosticOrder", order.Id.ToString());
+                }
+            }
+            else
+            {
+                var oldLines = await db.RefractionLines.AsNoTracking().Where(l => l.RefractionId == row.Id).ToListAsync(ct);
+                Amendments.AddChanges(db, nameof(Refraction), row.Id,
+                [
+                    (nameof(row.UnaidedVaOd), row.UnaidedVaOd, Text.Clean(request.UnaidedVaOd)),
+                    (nameof(row.UnaidedVaOs), row.UnaidedVaOs, Text.Clean(request.UnaidedVaOs)),
+                    (nameof(row.PinholeVaOd), row.PinholeVaOd, Text.Clean(request.PinholeVaOd)),
+                    (nameof(row.PinholeVaOs), row.PinholeVaOs, Text.Clean(request.PinholeVaOs)),
+                    (nameof(row.NearVaOd), row.NearVaOd, Text.Clean(request.NearVaOd)),
+                    (nameof(row.NearVaOs), row.NearVaOs, Text.Clean(request.NearVaOs)),
+                    (nameof(row.Pd), row.Pd, Text.Clean(request.Pd)),
+                    (nameof(row.Measurements), row.Measurements, Text.Clean(request.Measurements)),
+                    (nameof(row.Notes), row.Notes, Text.Clean(request.Notes)),
+                    (nameof(row.Lines), DescribeLines(oldLines.Select(l => (l.Stage, l.Eye, l.Sphere, l.Cylinder, l.Axis, l.Add, l.Va))),
+                        DescribeLines((request.Lines ?? []).Select(l => (l.Stage, l.Eye, Text.Clean(l.Sphere), Text.Clean(l.Cylinder), Text.Clean(l.Axis), Text.Clean(l.Add), Text.Clean(l.Va))))),
+                ], amendReason, user.Id);
+                audit.Add("RefractionAmended", "Visit", visitId.ToString(), amendReason);
             }
 
             row.UnaidedVaOd = Text.Clean(request.UnaidedVaOd);

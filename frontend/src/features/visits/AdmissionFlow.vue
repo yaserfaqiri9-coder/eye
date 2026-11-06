@@ -17,10 +17,10 @@ const emit = defineEmits<{ changed: [] }>()
 type Step = 'patient' | 'visit' | 'pay' | 'done'
 
 const steps: { key: Step; label: string }[] = [
-  { key: 'patient', label: 'انتخاب مریض' },
-  { key: 'visit', label: 'ثبت مراجعه' },
+  { key: 'patient', label: 'پیدا کردن مریض' },
+  { key: 'visit', label: 'بخش و داکتر' },
   { key: 'pay', label: 'پرداخت در صندوق' },
-  { key: 'done', label: 'صدور نوبت' },
+  { key: 'done', label: 'شماره نوبت' },
 ]
 
 const auth = useAuthStore()
@@ -38,6 +38,8 @@ const openVisit = ref<VisitRow | null>(null)
 const form = reactive({ departmentId: null as number | null, doctorStaffId: null as number | null, serviceId: null as number | null, reason: '' })
 const admission = ref<Admission | null>(null)
 const discount = reactive({ open: false, amount: null as number | null, reason: '' })
+/** The extra paid service is rare, so it stays folded until asked for. */
+const showService = ref(false)
 const saving = ref(false)
 const checking = ref(false)
 const error = ref('')
@@ -138,6 +140,7 @@ async function applyDiscount() {
 function reset() {
   Object.assign(patient, { id: null, label: null })
   Object.assign(form, { departmentId: null, doctorStaffId: null, serviceId: null, reason: '' })
+  showService.value = false
   Object.assign(discount, { open: false, amount: null, reason: '' })
   admission.value = null
   openVisit.value = null
@@ -212,10 +215,13 @@ onMounted(async () => {
   <div v-if="notice" class="alert alert-info" role="status">{{ notice }}</div>
 
   <div v-if="step === 'patient'" class="admission-pane">
-    <PatientPicker v-model="patient.id" :selected-label="patient.label" required @select="onPatient" />
-    <div class="xr-form-actions mt-3">
-      <RouterLink v-if="auth.can('patients.create')" :to="{ name: 'patient-new', query: { admit: '1' } }" class="btn btn-soft">مریض جدید</RouterLink>
+    <div class="admission-find">
+      <div class="admission-find__field"><PatientPicker v-model="patient.id" :selected-label="patient.label" required @select="onPatient" /></div>
+      <RouterLink v-if="auth.can('patients.create')" :to="{ name: 'patient-new', query: { admit: '1' } }" class="btn btn-primary text-nowrap">
+        <i class="ri-user-add-line" aria-hidden="true"></i> مریض جدید
+      </RouterLink>
     </div>
+    <p class="form-hint mt-2 mb-0">مریض قبلاً آمده؟ نامش را جستجو کنید. بار اول است؟ «مریض جدید» را بزنید.</p>
     <p v-if="checking" class="form-hint mt-3 mb-0" role="status">در حال بررسی مراجعه‌های امروز…</p>
     <div v-if="openVisit" class="alert alert-warning mt-3 mb-0" role="alert">
       این مریض امروز مراجعه فعال دارد ({{ visitStatusLabels[openVisit.status] }}، نوبت {{ openVisit.queueNumber === null ? '—' : quantity(openVisit.queueNumber) }}). کار در همان مراجعه ادامه می‌یابد و فیس دوباره گرفته نمی‌شود.
@@ -229,27 +235,28 @@ onMounted(async () => {
       <div class="col-md-6"><UiComboBox v-model="form.departmentId" label="بخش" :options="departments" required chip /></div>
       <div class="col-md-6"><UiComboBox v-model="form.doctorStaffId" label="داکتر (اختیاری)" :options="doctors" chip placeholder="بدون انتخاب" /></div>
       <div class="col-md-6">
-        <label class="form-label" for="a-reason">علت مراجعه</label>
-        <input id="a-reason" v-model="form.reason" class="form-control" maxlength="300" />
+        <label class="form-label" for="a-reason">علت مراجعه (اختیاری)</label>
+        <input id="a-reason" v-model="form.reason" class="form-control" maxlength="300" placeholder="مثلاً: تاری دید" />
       </div>
-      <div class="col-md-6"><UiComboBox v-model="form.serviceId" label="خدمت اضافی قابل پرداخت (اختیاری)" :options="services" chip placeholder="بدون خدمت اضافی" /></div>
+      <div v-if="showService || form.serviceId" class="col-md-6"><UiComboBox v-model="form.serviceId" label="خدمت اضافی قابل پرداخت (اختیاری)" :options="services" chip placeholder="بدون خدمت اضافی" /></div>
+      <div v-else-if="services.length" class="col-md-6 d-flex align-items-end">
+        <button type="button" class="btn btn-quiet" @click="showService = true"><i class="ri-add-line" aria-hidden="true"></i> افزودن خدمت اضافی</button>
+      </div>
     </div>
-    <p v-if="fee !== null" class="mb-3">فیس معاینه: <strong>{{ money(fee) }}</strong></p>
-    <div class="xr-form-actions">
-      <button type="submit" class="btn btn-primary" :disabled="saving || !form.departmentId">ثبت مراجعه</button>
+    <div class="xr-form-actions align-items-center">
+      <button type="submit" class="btn btn-primary" :disabled="saving || !form.departmentId">{{ saving ? 'در حال ثبت…' : 'ثبت مراجعه و ارسال به صندوق' }}</button>
       <button type="button" class="btn btn-soft" @click="reset">بازگشت</button>
+      <span v-if="fee !== null" class="ms-auto">فیس معاینه: <strong>{{ money(fee) }}</strong></span>
     </div>
   </form>
 
   <div v-else-if="step === 'pay' && admission" class="admission-pane">
     <p class="admission-who">{{ admission.patientName }} <span class="ltr-num">{{ admission.patientFileNumber }}</span></p>
     <dl class="xr-facts mb-3">
-      <div><dt>مراجعه</dt><dd><span class="ltr-num">{{ admission.visitNumber }}</span></dd></div>
       <div><dt>بخش</dt><dd>{{ admission.departmentName }}</dd></div>
       <div><dt>فاکتور</dt><dd><span class="ltr-num">{{ admission.invoiceNumber }}</span></dd></div>
-      <div><dt>فیس معاینه</dt><dd>{{ money(admission.total) }}</dd></div>
       <div v-if="admission.discount"><dt>تخفیف</dt><dd>{{ money(admission.discount) }}</dd></div>
-      <div><dt>قابل پرداخت</dt><dd><strong>{{ money(admission.balance) }}</strong></dd></div>
+      <div><dt>قابل پرداخت</dt><dd><strong class="admission-amount">{{ money(admission.balance) }}</strong></dd></div>
     </dl>
 
     <template v-if="needsRecovery">
@@ -257,8 +264,11 @@ onMounted(async () => {
       <button type="button" class="btn btn-primary" :disabled="saving" @click="recoverNumber">صدور نوبت</button>
     </template>
     <template v-else>
-      <div v-if="admission.visitDate !== todayIso()" class="alert alert-warning" role="alert">این مراجعه از روز گذشته مانده و پرداخت نمی‌شود. آن را از فهرست پایین لغو کنید و مراجعه امروز را ثبت نمایید.</div>
-      <div v-else class="alert alert-info" role="status">فیس به صندوق فرستاده شد. مریض را برای پرداخت به صندوق بفرستید. پس از پرداخت، نوبت خودکار همین‌جا نشان داده می‌شود.</div>
+      <div v-if="admission.visitDate !== todayIso()" class="alert alert-warning" role="alert">این مراجعه از روز گذشته مانده و پرداخت نمی‌شود. آن را در «صف امروز» لغو کنید و دوباره ثبت نمایید.</div>
+      <div v-else class="alert alert-info admission-next" role="status">
+        <i class="ri-arrow-left-circle-line" aria-hidden="true"></i>
+        <span><strong>مریض را به صندوق بفرستید.</strong> پس از پرداخت، نوبت او خودکار همین‌جا نشان داده می‌شود. می‌توانید تا آن وقت مریض بعدی را پذیرش کنید.</span>
+      </div>
 
       <form v-if="discount.open" class="row g-3 align-items-end mb-3" @submit.prevent="applyDiscount">
         <div class="col-md-3">
@@ -279,7 +289,6 @@ onMounted(async () => {
         <button type="button" class="btn btn-primary" @click="reset">مریض بعدی</button>
         <button v-if="canDiscount && !discount.open" type="button" class="btn btn-soft" @click="discount.open = true">تخفیف</button>
       </div>
-      <p v-if="!canDiscount" class="form-hint mt-3 mb-0">معافیت از فیس معاینه وجود ندارد. تخفیف فقط با حساب دارای مجوز ثبت می‌شود و مبلغ این صفحه خودکار تازه می‌شود.</p>
     </template>
   </div>
 
@@ -291,8 +300,6 @@ onMounted(async () => {
       <div><dt>بخش</dt><dd>{{ admission.departmentName }}</dd></div>
       <div><dt>داکتر</dt><dd>{{ admission.doctorName ?? '—' }}</dd></div>
       <div><dt>پرداخت</dt><dd><span class="xr-badge xr-badge--green">پرداخت‌شده</span></dd></div>
-      <div v-if="admission.receiptNumber"><dt>رسید</dt><dd><span class="ltr-num">{{ admission.receiptNumber }}</span></dd></div>
-      <div><dt>مرحله</dt><dd>{{ visitStatusLabels[admission.status] }}</dd></div>
     </dl>
     <div class="xr-form-actions justify-content-center">
       <RouterLink v-if="auth.can('visits.print')" :to="`/print/visit/${admission.visitId}`" target="_blank" class="btn btn-soft">چاپ رسید نوبت</RouterLink>
@@ -343,6 +350,31 @@ onMounted(async () => {
   font-size: 0.8rem;
 }
 
+.admission-find {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--xr-gap);
+}
+
+.admission-find__field {
+  flex: 1;
+  min-width: 0;
+}
+
+.admission-amount {
+  font-size: 1.25rem;
+}
+
+.admission-next {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.admission-next > i {
+  font-size: 1.6rem;
+}
+
 .admission-who {
   margin-bottom: 1rem;
   font-weight: 700;
@@ -368,6 +400,11 @@ onMounted(async () => {
 @media (max-width: 575.98px) {
   .admission-steps {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admission-find {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 </style>

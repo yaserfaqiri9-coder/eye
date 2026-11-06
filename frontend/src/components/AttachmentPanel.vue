@@ -46,6 +46,17 @@ async function upload(event: Event) {
   }
 }
 
+async function remove(row: AttachmentRow) {
+  if (!window.confirm(`فایل «${row.fileName}» حذف شود؟ این کار برگشت ندارد.`)) return
+  error.value = ''
+  try {
+    await api(`/attachments/${row.id}`, { method: 'DELETE' })
+    await load()
+  } catch (cause) {
+    error.value = errorMessage(cause)
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -53,7 +64,7 @@ onMounted(load)
   <div>
     <div class="form-label">فایل‌های ضمیمه</div>
     <ul v-if="rows.length" class="list-unstyled small mb-2">
-      <li v-for="row in rows" :key="row.id"><a :href="`/api/attachments/${row.id}`" target="_blank" rel="noopener">{{ row.fileName }}</a> — {{ formatDateTime(row.createdAt) }}</li>
+      <li v-for="row in rows" :key="row.id"><a :href="`/api/attachments/${row.id}`" target="_blank" rel="noopener">{{ row.fileName }}</a> — {{ formatDateTime(row.createdAt) }}<button v-if="canUpload" type="button" class="btn btn-soft-danger btn-sm ms-2" :aria-label="`حذف فایل ${row.fileName}`" @click="remove(row)">حذف</button></li>
     </ul>
     <p v-else class="small text-muted mb-2">فایلی ضمیمه نشده است.</p>
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
