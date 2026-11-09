@@ -5,6 +5,7 @@ using AlShifa.Api.Features.Finance;
 using AlShifa.Api.Features.Inventory;
 using AlShifa.Api.Features.Patients;
 using AlShifa.Api.Features.Settings;
+using AlShifa.Api.Features.Visits;
 using AlShifa.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
@@ -123,45 +124,87 @@ public static class PrintEndpoints
         group.MapGet("/invoice/{id:long}", async (long id, AppDbContext db, CancellationToken ct) =>
         {
             var i = await db.Invoices.AsNoTracking().Include(x => x.Patient).SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw AppException.NotFound();
-            var items = await db.InvoiceItems.AsNoTracking().Where(x => x.InvoiceId == id && !x.IsVoid).OrderBy(x => x.Id).ToListAsync(ct);
+            var items = await db.InvoiceItems.AsNoTracking().Where(x => x.InvoiceId == id).OrderBy(x => x.Id).ToListAsync(ct);
+            var activeItems = items.Where(x => !x.IsVoid).ToList();
+            var receiptTitle = await ReceiptTitleAsync(db, id, ct);
+            var invoiceTitle = receiptTitle switch
+            {
+                "رسید خدمات عملیات" => "فاکتور خدمات عملیات",
+                "رسید لابراتوار" => "بیل لابراتوار",
+                _ => "فاکتور خدمات",
+            };
 
-            return Results.Ok(new PrintDocument("فاکتور خدمات", i.InvoiceNumber, i.CreatedAt, A4, await SettingsEndpoints.LoadAsync(db, ct),
+            return Results.Ok(new PrintDocument(invoiceTitle, i.InvoiceNumber, i.CreatedAt, A4, await SettingsEndpoints.LoadAsync(db, ct),
             [
                 new("مریض", i.Patient is null ? null : Name(i.Patient.FirstName, i.Patient.LastName)),
                 new("شماره پرونده", i.Patient?.FileNumber),
+                new("وضعیت", InvoiceStatusLabel(i)),
+                new("آیتم‌های باطل‌شده", items.Any(x => x.IsVoid) ? items.Count(x => x.IsVoid).ToString(CultureInfo.InvariantCulture) : null),
             ],
             ["شرح", "تعداد", "قیمت واحد", "مبلغ"],
-            items.Select(x => (IReadOnlyList<string?>)[x.Description, Number(x.Quantity), Money(x.UnitPrice), Money(x.LineTotal)]).ToList(),
-            [
-                new("مجموع", Money(i.Total)),
-                new("تخفیف", Money(i.Discount)),
-                new("پرداخت‌شده", Money(i.Paid)),
-                new("مانده", Money(i.Total - i.Discount - i.Paid)),
-            ], null));
+            activeItems.Select(x => (IReadOnlyList<string?>)[x.Description, Number(x.Quantity), Money(x.UnitPrice), Money(x.LineTotal)]).ToList(),
+            InvoiceTotals(i), null));
         }).RequirePermission("invoices.print");
 
         group.MapGet("/receipt/{id:long}", async (long id, AppDbContext db, CancellationToken ct) =>
         {
             var p = await db.Payments.AsNoTracking()
                 .Where(x => x.Id == id)
-                .Select(x => new { x.ReceiptNumber, x.Amount, x.Method, x.CreatedAt, x.InvoiceId, x.Invoice!.InvoiceNumber, x.Invoice.Total, x.Invoice.Discount, x.Invoice.Paid, Patient = x.Invoice.Patient, x.ReceivedByUserId })
+                .Select(x => new { x.ReceiptNumber, x.Amount, x.Refunded, x.Method, x.CreatedAt, x.InvoiceId, x.Invoice!.InvoiceNumber, x.Invoice.Status, x.Invoice.Total, x.Invoice.Discount, x.Invoice.Paid, InvoiceRefunded = x.Invoice.Refunded, Patient = x.Invoice.Patient, x.ReceivedByUserId })
                 .SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
             var cashier = await db.Users.AsNoTracking().Where(u => u.Id == p.ReceivedByUserId).Select(u => u.FullName).SingleOrDefaultAsync(ct);
             var queueNumber = await db.VisitTokens.AsNoTracking().Where(t => t.InvoiceId == p.InvoiceId).Select(t => t.QueueNumber).FirstOrDefaultAsync(ct);
+            var title = await ReceiptTitleAsync(db, p.InvoiceId, ct);
+            var balance = Balance(p.Total, p.Discount, p.Paid, p.InvoiceRefunded);
+            var receiptStatus = p.Status == InvoiceStatus.Void ? "باطل"
+                : p.Refunded >= p.Amount ? "برگشت کامل"
+                : p.Refunded > 0 ? "برگشت جزئی"
+                : balance > 0 ? "پرداخت جزئی"
+                : "پرداخت‌شده";
 
-            return Results.Ok(new PrintDocument("رسید پرداخت", p.ReceiptNumber, p.CreatedAt, Receipt, await SettingsEndpoints.LoadAsync(db, ct),
+            return Results.Ok(new PrintDocument(title, p.ReceiptNumber, p.CreatedAt, Receipt, await SettingsEndpoints.LoadAsync(db, ct),
             [
                 new("مریض", p.Patient is null ? null : Name(p.Patient.FirstName, p.Patient.LastName)),
                 new("فاکتور", p.InvoiceNumber),
                 new("شماره نوبت", queueNumber?.ToString(CultureInfo.InvariantCulture)),
                 new("روش", p.Method == PaymentMethod.Cash ? "نقد" : "غیرنقدی"),
                 new("صندوق‌دار", cashier),
+                new("وضعیت", receiptStatus),
             ], null, null,
             [
                 new("مبلغ دریافت", Money(p.Amount)),
-                new("مانده فاکتور", Money(p.Total - p.Discount - p.Paid)),
+                new("برگشت وجه", p.Refunded > 0 ? Money(p.Refunded) : null),
+                new("دریافت خالص", p.Refunded > 0 ? Money(p.Amount - p.Refunded) : null),
+                new("مانده فاکتور", Money(balance)),
             ], null));
         }).RequirePermission("payments.print");
+
+        group.MapGet("/refund/{id:long}", async (long id, AppDbContext db, HttpContext http, CancellationToken ct) =>
+        {
+            if (!http.User.HasClaim(RolePermissions.ClaimType, "payments.print") &&
+                !http.User.HasClaim(RolePermissions.ClaimType, "payments.refund"))
+            {
+                throw new AppException(StatusCodes.Status403Forbidden, "forbidden", "شما اجازه این عملیات را ندارید.");
+            }
+
+            var refund = await db.Refunds.AsNoTracking()
+                .Where(r => r.Id == id)
+                .Select(r => new
+                {
+                    r.RefundNumber, r.Amount, r.CreatedAt, r.Payment!.ReceiptNumber,
+                    r.Payment.Invoice!.InvoiceNumber,
+                    Patient = r.Payment.Invoice.Patient,
+                })
+                .SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
+
+            return Results.Ok(new PrintDocument("رسید برگشت وجه", refund.RefundNumber, refund.CreatedAt, Receipt, await SettingsEndpoints.LoadAsync(db, ct),
+            [
+                new("مریض", refund.Patient is null ? null : Name(refund.Patient.FirstName, refund.Patient.LastName)),
+                new("فاکتور", refund.InvoiceNumber),
+                new("رسید پرداخت", refund.ReceiptNumber),
+            ], null, null,
+            [new("مبلغ برگشت", Money(refund.Amount))], null));
+        }).RequireAuthorization();
 
         group.MapGet("/sale/{id:long}", async (long id, AppDbContext db, HttpContext http, CancellationToken ct) =>
         {
@@ -173,18 +216,19 @@ public static class PrintEndpoints
             }
 
             var items = await db.InvoiceItems.AsNoTracking().Where(x => x.InvoiceId == s.InvoiceId && !x.IsVoid).OrderBy(x => x.Id).ToListAsync(ct);
-            return Results.Ok(new PrintDocument(s.Kind == SaleKind.Pharmacy ? "رسید فروش دوا" : "رسید فروش عینک", s.SaleNumber, s.CreatedAt, Receipt, await SettingsEndpoints.LoadAsync(db, ct),
+            var pharmacy = s.Kind == SaleKind.Pharmacy;
+            var invoice = s.Invoice!;
+            return Results.Ok(new PrintDocument(pharmacy ? "فاکتور دواخانه" : "رسید فروش عینک", pharmacy ? invoice.InvoiceNumber : s.SaleNumber, s.CreatedAt, pharmacy ? A4 : Receipt, await SettingsEndpoints.LoadAsync(db, ct),
             [
                 new("مریض", s.Patient is null ? null : Name(s.Patient.FirstName, s.Patient.LastName)),
-                new("فاکتور", s.Invoice!.InvoiceNumber),
+                new(pharmacy ? "شماره فروش" : "فاکتور", pharmacy ? s.SaleNumber : invoice.InvoiceNumber),
+                new("وضعیت", InvoiceStatusLabel(invoice)),
             ],
-            ["جنس", "تعداد", "مبلغ"],
-            items.Select(x => (IReadOnlyList<string?>)[x.Description, Number(x.Quantity), Money(x.LineTotal)]).ToList(),
-            [
-                new("مجموع", Money(s.Invoice.Total)),
-                new("پرداخت‌شده", Money(s.Invoice.Paid)),
-                new("مانده", Money(s.Invoice.Total - s.Invoice.Discount - s.Invoice.Paid)),
-            ], null));
+            pharmacy ? ["دوا", "تعداد", "قیمت واحد", "مبلغ"] : ["جنس", "تعداد", "مبلغ"],
+            items.Select(x => (IReadOnlyList<string?>)(pharmacy
+                ? [x.Description, Number(x.Quantity), Money(x.UnitPrice), Money(x.LineTotal)]
+                : [x.Description, Number(x.Quantity), Money(x.LineTotal)])).ToList(),
+            InvoiceTotals(invoice), null));
         }).RequireAuthorization();
     }
 
@@ -193,4 +237,82 @@ public static class PrintEndpoints
     private static string Number(decimal value) => value.ToString("0.###", CultureInfo.InvariantCulture);
 
     private static string Money(decimal value) => value.ToString("#,0.##", CultureInfo.InvariantCulture) + " افغانی";
+
+    private static decimal Balance(Invoice invoice) => Balance(invoice.Total, invoice.Discount, invoice.Paid, invoice.Refunded);
+
+    private static decimal Balance(decimal total, decimal discount, decimal paid, decimal refunded) =>
+        Math.Max(0, total - discount - (paid - refunded));
+
+    private static string InvoiceStatusLabel(Invoice invoice)
+    {
+        if (invoice.Status == InvoiceStatus.Void)
+        {
+            return "باطل";
+        }
+
+        var netPaid = invoice.Paid - invoice.Refunded;
+        if (invoice.Refunded > 0 && netPaid <= 0)
+        {
+            return "برگشت کامل";
+        }
+
+        if (netPaid <= 0)
+        {
+            return "پرداخت‌نشده";
+        }
+
+        return Balance(invoice) > 0 ? (invoice.Refunded > 0 ? "پرداخت جزئی پس از برگشت" : "پرداخت جزئی") : "پرداخت‌شده";
+    }
+
+    private static IReadOnlyList<PrintField> InvoiceTotals(Invoice invoice) =>
+    [
+        new("مجموع", Money(invoice.Total)),
+        new("تخفیف", invoice.Discount > 0 ? Money(invoice.Discount) : null),
+        new("پرداخت‌شده", Money(invoice.Paid)),
+        new("برگشت وجه", invoice.Refunded > 0 ? Money(invoice.Refunded) : null),
+        new("مانده", Money(Balance(invoice))),
+    ];
+
+    private static async Task<string> ReceiptTitleAsync(AppDbContext db, long invoiceId, CancellationToken ct)
+    {
+        var sources = await db.InvoiceItems.AsNoTracking()
+            .Where(i => i.InvoiceId == invoiceId && !i.IsVoid)
+            .Select(i => new { i.SourceType, i.SourceId })
+            .ToListAsync(ct);
+
+        if (sources.Any(s => s.SourceType is nameof(VisitToken) or nameof(Visit)))
+        {
+            return "رسید فیس معاینه داکتر";
+        }
+
+        if (sources.Any(s => s.SourceType == nameof(SurgeryCase)))
+        {
+            return "رسید خدمات عملیات";
+        }
+
+        var diagnosticIds = sources
+            .Where(s => s.SourceType == nameof(DiagnosticOrder) && s.SourceId.HasValue)
+            .Select(s => s.SourceId!.Value)
+            .ToList();
+        if (diagnosticIds.Count > 0)
+        {
+            var kinds = await db.DiagnosticOrders.AsNoTracking()
+                .Where(o => diagnosticIds.Contains(o.Id))
+                .Select(o => o.Test!.Kind)
+                .Distinct()
+                .ToListAsync(ct);
+            if (kinds.Count == 1)
+            {
+                return kinds[0] switch
+                {
+                    DiagnosticKind.Refraction => "رسید پرداخت رفرکشن",
+                    DiagnosticKind.Imaging => "رسید پرداخت تصویربرداری",
+                    DiagnosticKind.Lab => "رسید لابراتوار",
+                    _ => "رسید پرداخت",
+                };
+            }
+        }
+
+        return "رسید پرداخت";
+    }
 }

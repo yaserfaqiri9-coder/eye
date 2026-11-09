@@ -205,3 +205,106 @@ function Remove-ExpiredBackups([string]$Folder, [int]$KeepAllDays, [int]$KeepDai
         Remove-Item $backup.File.FullName
     }
 }
+
+# Lets Settings > Backup start a backup now without giving the application any right to run programs:
+# the application writes this event (EventLogBackupTrigger in the API) and the task, which runs as SYSTEM, starts on it.
+# The message is matched too, because the application's own log messages use the same event source.
+# The worst anyone able to write the event can do is cause an extra backup; the task ignores it while one is running.
+function Add-BackupRequestTrigger([string]$TaskName = 'AlShifa Backup') {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    $subscription = '<QueryList><Query Id="0" Path="Application"><Select Path="Application">' +
+        "*[System[Provider[@Name='AlShifa.Api'] and EventID=4100]] and *[EventData[Data='AlShifa backup request']]" +
+        '</Select></Query></QueryList>'
+    if ($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskEventTrigger' -and $_.Subscription -eq $subscription }) { return }
+    $trigger = New-CimInstance -CimClass (Get-CimClass -ClassName MSFT_TaskEventTrigger -Namespace Root/Microsoft/Windows/TaskScheduler) -ClientOnly
+    $trigger.Enabled = $true
+    $trigger.Subscription = $subscription
+    Set-ScheduledTask -TaskName $TaskName -Trigger (@($task.Triggers) + $trigger) | Out-Null
+}
+
+# The desktop shortcut of the system. With Edge it opens as its own window with the hospital icon and no address bar,
+# so staff see a program, not a web page. Without Edge it falls back to a link that opens a browser tab.
+# The description marks it as ours, so update and uninstall find it whatever its name.
+$AlShifaShortcutMark = 'AlShifa managed shortcut'
+
+function Find-Edge {
+    $registered = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe' -ErrorAction SilentlyContinue).'(default)'
+    foreach ($path in @($registered, (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'), (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'))) {
+        if ($path -and (Test-Path -LiteralPath $path)) { return $path }
+    }
+}
+
+# WScript.Shell reads and writes shortcut files through the ANSI code page: on an English Windows a Persian name fails to save
+# ("Unable to save shortcut") and reads back empty. So shortcuts are written and read under an ASCII name and renamed.
+function Save-Shortcut([string]$Path, [hashtable]$Properties) {
+    $temp = Join-Path (Split-Path $Path) "alshifa-$([guid]::NewGuid().ToString('N')).lnk"
+    $link = (New-Object -ComObject WScript.Shell).CreateShortcut($temp)
+    foreach ($key in $Properties.Keys) { $link.$key = $Properties[$key] }
+    $link.Save()
+    Move-Item -LiteralPath $temp -Destination $Path -Force
+}
+
+function Read-Shortcut([string]$Path) {
+    $temp = Join-Path $env:TEMP "alshifa-$([guid]::NewGuid().ToString('N')).lnk"
+    Copy-Item -LiteralPath $Path $temp
+    try { return (New-Object -ComObject WScript.Shell).CreateShortcut($temp) } finally { Remove-Item -LiteralPath $temp -ErrorAction SilentlyContinue }
+}
+
+function Set-AlShifaShortcut([string]$Name, [string]$Url, [string]$Icon) {
+    $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
+    $tab = Join-Path $desktop "$Name.url"
+    $hasIcon = $Icon -and (Test-Path -LiteralPath $Icon)
+    $edge = Find-Edge
+    if (-not $edge) {
+        $iconLines = if ($hasIcon) { "IconFile=$Icon`r`nIconIndex=0`r`n" } else { '' }
+        [IO.File]::WriteAllText($tab, "[InternetShortcut]`r`nURL=$Url`r`n$iconLines[AlShifa]`r`nManaged=1`r`n")
+        return
+    }
+    Save-Shortcut (Join-Path $desktop "$Name.lnk") @{
+        TargetPath = $edge
+        Arguments = "--app=$Url --start-maximized"
+        WorkingDirectory = (Split-Path $edge)
+        Description = $AlShifaShortcutMark
+        IconLocation = $(if ($hasIcon) { "$Icon,0" } else { "$edge,0" })
+    }
+    # Older installs made the browser-tab link. One icon on the desktop, not two.
+    Remove-Item -LiteralPath $tab -ErrorAction SilentlyContinue
+}
+
+# The existing shortcut of any kind: its name, and the fixed address it opens (none for the AlShifa.exe icon, which finds the server).
+function Get-AlShifaShortcut {
+    $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
+    foreach ($file in Get-ChildItem -LiteralPath $desktop -Filter '*.lnk') {
+        $link = Read-Shortcut $file.FullName
+        if ($link.Description -ne $AlShifaShortcutMark) { continue }
+        if ($link.Arguments -match '--app=(\S+)') { return @{ Name = $file.BaseName; Url = $Matches[1] } }
+        return @{ Name = $file.BaseName; Url = $null }
+    }
+    foreach ($file in Get-ChildItem -LiteralPath $desktop -Filter '*.url') {
+        $text = Get-Content -LiteralPath $file.FullName -Raw
+        if ($text -match 'Managed=1' -and $text -match '(?m)^URL=(\S+)') { return @{ Name = $file.BaseName; Url = $Matches[1] } }
+    }
+}
+
+# Every computer, the server included, opens the system through AlShifa.exe in this folder. It finds the server on whatever network
+# the computers are on and opens this fixed name, which the server certificate carries. See installer\Launcher.cs.
+$AlShifaProgramFolder = Join-Path $env:ProgramData 'AlShifa'
+$AlShifaServerName = 'alshifa.lan'
+
+function Install-AlShifaLauncher([string]$Name, [string]$Launcher, [string]$Icon, [int]$Port, [string]$CaThumbprint) {
+    New-Item -ItemType Directory -Force $AlShifaProgramFolder | Out-Null
+    $exe = Join-Path $AlShifaProgramFolder 'AlShifa.exe'
+    Copy-Item $Launcher $exe -Force
+    $logo = Join-Path $AlShifaProgramFolder 'alshifa.ico'
+    if ($Icon -and (Test-Path -LiteralPath $Icon)) { Copy-Item $Icon $logo -Force }
+    [IO.File]::WriteAllText((Join-Path $AlShifaProgramFolder 'alshifa.ini'), "name=$AlShifaServerName`r`nport=$Port`r`nthumbprint=$CaThumbprint`r`nserver=$env:COMPUTERNAME`r`naddress=127.0.0.1`r`n")
+
+    $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
+    Save-Shortcut (Join-Path $desktop "$Name.lnk") @{
+        TargetPath = $exe
+        WorkingDirectory = $AlShifaProgramFolder
+        Description = $AlShifaShortcutMark
+        IconLocation = "$(if (Test-Path -LiteralPath $logo) { $logo } else { $exe }),0"
+    }
+    Remove-Item -LiteralPath (Join-Path $desktop "$Name.url") -ErrorAction SilentlyContinue
+}

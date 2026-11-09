@@ -140,7 +140,7 @@ onMounted(async () => {
             <div class="kv"><b>Occupation:</b></div>
           </div>
           <div class="id-block__brand box">
-            <img v-if="hospital?.logoAttachmentId" :src="`/api/attachments/${hospital.logoAttachmentId}`" alt="" class="brand-logo" />
+            <img src="/print/alshefa-official-logo.png" alt="لوگوی شفاخانه تخصصی چشم الشفا" class="brand-logo" />
             <div class="brand-name" dir="auto">{{ hospital?.hospitalName }}</div>
           </div>
         </header>
@@ -343,7 +343,6 @@ onMounted(async () => {
         <footer class="back-foot" dir="auto">
           <span v-if="hospital?.address">{{ hospital.address }}</span>
           <span v-if="hospital?.phone" dir="ltr">{{ hospital.phone }}</span>
-          <span v-if="hospital?.printFooter">{{ hospital.printFooter }}</span>
         </footer>
       </article>
     </template>

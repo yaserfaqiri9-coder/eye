@@ -2,12 +2,12 @@
 
     pip install piper-tts imageio-ffmpeg
     build-voice-pack.ps1 -Mode Export -ExportFile clips.csv
-    python build-voice-pack-piper.py fa_IR-ganji-medium.onnx clips.csv E:\\voice
+    python build-voice-pack-piper.py fa_IR-amir-medium.onnx clips.csv E:\\voice
     build-voice-pack.ps1 -Mode Check -VoiceDir E:\\voice
 
-ganji reads the numbers most clearly of the Persian Piper voices (amir drops the final k of yek). Licence: check the
-voice before use. ganji was fine-tuned from amir, and amir from a voice trained on Lessac data, whose licence is for
-research only. See DEPLOYMENT-WINDOWS.md.
+The hospital chose amir as it is: its own reading is the clearest for Afghan patients. Do not respell words or change
+its voice settings; only the pace is slowed. Licence: check the voice before use. amir was fine-tuned from a voice
+trained on Lessac data, whose licence is for research only. See DEPLOYMENT-WINDOWS.md.
 """
 import csv
 import re
@@ -19,9 +19,9 @@ from pathlib import Path
 import imageio_ffmpeg
 from piper import PiperVoice, SynthesisConfig
 
-# Above 1 speaks slower. The voice's own pace is too quick for a crowded waiting hall.
-LENGTH_SCALE = 1.3
-# Silence after each clip, so the last syllable (a short number such as یک) is never cut off.
+# Above 1 speaks slower. The hospital asked for amir a little slower than its own pace.
+LENGTH_SCALE = 1.2
+# Silence after each clip, so the last syllable is never cut off by the next clip.
 TAIL_SECONDS = 0.3
 
 # eSpeak phonemes for words it reads wrongly, found on the amir voice.

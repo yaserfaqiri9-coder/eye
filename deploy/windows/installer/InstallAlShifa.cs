@@ -380,7 +380,7 @@ namespace AlShifa.Setup
             AddText(page, "این لپ‌تاپ میزبان سیستم می‌شود. برای نصب، اینترنت لازم نیست.");
 
             AddText(page, "نام کاربری مدیر سیستم: admin");
-            AddText(page, "رمز مدیر سیستم (حداقل ۱۰ حرف، با حرف بزرگ، حرف کوچک و عدد):");
+            AddText(page, "رمز مدیر سیستم:");
             passwordBox = new TextBox { Width = FieldWidth, UseSystemPasswordChar = true, Name = "txtPassword", RightToLeft = RightToLeft.No };
             page.Controls.Add(passwordBox);
             AddText(page, "تکرار رمز:");
@@ -392,7 +392,7 @@ namespace AlShifa.Setup
             foreach (var address in Host.DetectAddresses()) addressBox.Items.Add(address);
             if (addressBox.Items.Count > 0) addressBox.SelectedIndex = 0;
             page.Controls.Add(addressBox);
-            AddText(page, "همین آدرس را در روتر برای این لپ‌تاپ رزرو کنید (DHCP Reservation)؛ اگر عوض شود کارمندان وصل نمی‌شوند.", Color.DimGray);
+            AddText(page, "اگر این آدرس بعداً عوض شود یا روتر عوض شود، آیکون «سیستم الشفا» سرور را خودش دوباره پیدا می‌کند.", Color.DimGray);
 
             AddText(page, "محل بکاپ:").Margin = new Padding(0, 8, 0, 4);
             driveBox = new ComboBox { Width = FieldWidth, DropDownStyle = ComboBoxStyle.DropDownList, Name = "cmbDrive" };
@@ -428,8 +428,9 @@ namespace AlShifa.Setup
             var address = addressBox.Text.Trim();
             IPAddress parsed;
             string problem = null;
-            if (password.Length < 10 || !password.Any(char.IsUpper) || !password.Any(char.IsLower) || !password.Any(char.IsDigit))
-                problem = "رمز مدیر باید حداقل ۱۰ حرف و شامل حرف بزرگ، حرف کوچک و عدد باشد.";
+            // Any password the hospital chooses, as in the application itself. Only an empty one is refused.
+            if (password.Length == 0)
+                problem = "رمز مدیر را بنویسید.";
             else if (password != passwordAgainBox.Text)
                 problem = "رمز و تکرار آن یکسان نیستند.";
             else if (!IPAddress.TryParse(address, out parsed) || parsed.AddressFamily != AddressFamily.InterNetwork)

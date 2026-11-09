@@ -13,7 +13,9 @@ param(
 . (Join-Path $PSScriptRoot 'common.ps1')
 
 New-Item -ItemType Directory -Force $OutputDir | Out-Null
-$names = @("DNS=$HostName") + ($IpAddress | ForEach-Object { "IPAddress=$_" })
+# alshifa.lan is the fixed name every computer opens, whatever address the server has on the current network: AlShifa.exe finds
+# the server and tells the browser where that name points. 127.0.0.1 lets the server open itself. The LAN address is for older shortcuts.
+$names = @("DNS=$HostName", 'DNS=alshifa.lan', 'IPAddress=127.0.0.1') + ($IpAddress | ForEach-Object { "IPAddress=$_" })
 $notAfter = (Get-Date).AddYears($Years)
 $store = 'Cert:\CurrentUser\My'
 

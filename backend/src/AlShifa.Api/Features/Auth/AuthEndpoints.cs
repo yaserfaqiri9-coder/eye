@@ -8,7 +8,7 @@ namespace AlShifa.Api.Features.Auth;
 
 public sealed record LoginRequest([Required, MaxLength(100)] string UserName, [Required, MaxLength(200)] string Password);
 
-public sealed record ChangePasswordRequest([Required, MaxLength(200)] string CurrentPassword, [Required, MinLength(10), MaxLength(200)] string NewPassword);
+public sealed record ChangePasswordRequest([Required, MaxLength(200)] string CurrentPassword, [Required, MaxLength(200)] string NewPassword);
 
 public sealed record CurrentUserDto(long Id, string UserName, string FullName, IReadOnlyList<string> Roles, IReadOnlyList<string> Permissions);
 
@@ -43,14 +43,23 @@ public static class AuthEndpoints
             // IsNotAllowed (deactivated) and bad credentials share one message so accounts cannot be probed.
             if (!result.Succeeded)
             {
-                audit.Add("LoginFailed", "User", user?.Id.ToString());
+                audit.Add("LoginFailed", "User", user?.Id.ToString(), RemoteAccess.Email(http) is { } email ? $"Online, Cloudflare Access: {email}" : null);
                 await db.SaveChangesAsync();
                 var message = result.IsLockedOut ? "حساب به‌طور موقت قفل شده است. بعداً تلاش کنید." : "نام کاربری یا رمز درست نیست.";
                 throw new AppException(StatusCodes.Status401Unauthorized, "invalid_login", message);
             }
 
+            // Checked after the password, so a refusal says nothing about accounts the caller cannot sign in to.
+            var remoteEmail = RemoteAccess.Email(http);
+            if (RemoteAccess.IsRemote(http) && !RemoteAccess.MayUse(await signIn.CreateUserPrincipalAsync(user!)))
+            {
+                audit.Add("RemoteLoginDenied", "User", user!.Id.ToString(), $"Cloudflare Access: {remoteEmail}", userId: user.Id);
+                await db.SaveChangesAsync();
+                throw new AppException(StatusCodes.Status403Forbidden, "remote_not_allowed", "این حساب برای دسترسی آنلاین مجاز نیست.");
+            }
+
             await signIn.SignInAsync(user!, isPersistent: false);
-            audit.Add("Login", "User", user!.Id.ToString(), userId: user.Id);
+            audit.Add("Login", "User", user!.Id.ToString(), remoteEmail is null ? null : $"Online, Cloudflare Access: {remoteEmail}", userId: user.Id);
             await db.SaveChangesAsync();
 
             // The antiforgery token is bound to the identity, so it must be reissued after login.

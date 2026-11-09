@@ -6,12 +6,14 @@ using AlShifa.Api.Features.Clinical;
 using AlShifa.Api.Features.Finance;
 using AlShifa.Api.Features.Inventory;
 using AlShifa.Api.Features.Patients;
+using AlShifa.Api.Features.Settings;
 using AlShifa.Api.Features.Users;
 using AlShifa.Api.Features.Visits;
 using AlShifa.Api.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace AlShifa.Tests;
@@ -395,38 +397,43 @@ public sealed class HospitalReadinessTests(ApiFixture api)
     public async Task Backup_status_is_visible_to_management_only()
     {
         var manager = await UserAsync(Roles.Manager);
-        var status = await manager.GetFromJsonAsync<BackupStatusDto>("/api/system/backup-status", JsonOptions);
-        Assert.Equal(BackupStatusReader.NotConfigured, status!.State);
+        var status = await manager.GetFromJsonAsync<BackupStatusDto>("/api/settings/backup-status", JsonOptions);
+        Assert.False(status!.Configured);
 
         var doctor = await UserAsync(Roles.Doctor);
-        Assert.Equal(HttpStatusCode.Forbidden, (await doctor.GetAsync("/api/system/backup-status")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await doctor.GetAsync("/api/settings/backup-status")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await doctor.PostAsync("/api/settings/backup/run", null)).StatusCode);
     }
 
     [Fact]
-    public void Backup_status_warns_about_failures_and_about_silence()
+    public async Task Backup_can_be_started_from_the_application_once_at_a_time()
     {
+        var admin = await UserAsync(Roles.SuperAdmin);
+        var before = api.BackupTrigger.Requests;
+
+        // Development and test machines have no scheduled backup to start.
+        Assert.Equal(HttpStatusCode.Conflict, (await admin.PostAsync("/api/settings/backup/run", null)).StatusCode);
+
+        var config = api.Services.GetRequiredService<IConfiguration>();
         var path = Path.Combine(Path.GetTempPath(), $"alshifa-backup-status-{Guid.NewGuid():N}.json");
-        var now = new DateTime(2026, 11, 2, 12, 0, 0, DateTimeKind.Utc);
-        var maxAge = TimeSpan.FromHours(6);
+        config["Backup:StatusFile"] = path;
         try
         {
-            Assert.Equal(BackupStatusReader.Never, BackupStatusReader.Read(path, maxAge, now).State);
+            File.WriteAllText(path, $$"""{"lastSuccessAt":"{{DateTime.UtcNow.AddHours(-1):o}}","runningSince":"{{DateTime.UtcNow.AddMinutes(-1):o}}"}""");
+            Assert.Equal(HttpStatusCode.Conflict, (await admin.PostAsync("/api/settings/backup/run", null)).StatusCode);
 
-            File.WriteAllText(path, "not json");
-            Assert.Equal(BackupStatusReader.Never, BackupStatusReader.Read(path, maxAge, now).State);
+            File.WriteAllText(path, $$"""{"lastSuccessAt":"{{DateTime.UtcNow.AddHours(-1):o}}","backups":[{"name":"alshifa-20261108T060000Z.zip.gpg","sizeBytes":1024,"createdAt":"2026-11-08T06:00:00Z"}]}""");
+            var status = await admin.GetFromJsonAsync<BackupStatusDto>("/api/settings/backup-status", JsonOptions);
+            Assert.Single(status!.Backups);
 
-            File.WriteAllText(path, """{"lastSuccessUtc":"2026-11-02T10:00:00Z","lastAttemptUtc":"2026-11-02T10:00:00Z","lastError":null}""");
-            Assert.Equal(BackupStatusReader.Ok, BackupStatusReader.Read(path, maxAge, now).State);
-
-            // The task itself stopped running: nothing was reported as failed, only the time gives it away.
-            File.WriteAllText(path, """{"lastSuccessUtc":"2026-11-01T10:00:00Z","lastAttemptUtc":"2026-11-01T10:00:00Z","lastError":null}""");
-            Assert.Equal(BackupStatusReader.Stale, BackupStatusReader.Read(path, maxAge, now).State);
-
-            File.WriteAllText(path, """{"lastSuccessUtc":"2026-11-02T10:00:00Z","lastAttemptUtc":"2026-11-02T11:00:00Z","lastError":"disk full"}""");
-            Assert.Equal(BackupStatusReader.Failed, BackupStatusReader.Read(path, maxAge, now).State);
+            Assert.Equal(HttpStatusCode.Accepted, (await admin.PostAsync("/api/settings/backup/run", null)).StatusCode);
+            // A second click before the first backup could finish does not start another one.
+            Assert.Equal(HttpStatusCode.Conflict, (await admin.PostAsync("/api/settings/backup/run", null)).StatusCode);
+            Assert.Equal(before + 1, api.BackupTrigger.Requests);
         }
         finally
         {
+            config["Backup:StatusFile"] = null;
             File.Delete(path);
         }
     }

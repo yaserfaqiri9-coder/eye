@@ -15,6 +15,9 @@ public static class Roles
     public const string Accountant = "Accountant";
     public const string Inventory = "Inventory";
     public const string AudioStation = "AudioStation";
+
+    /// <summary>Reads work reports online through Cloudflare Access, and nothing else. Online sign-in accepts only accounts with this role alone.</summary>
+    public const string DoctorReportsViewer = "DoctorReportsViewer";
 }
 
 /// <summary>Default role permissions; mirrors the matrix in PERMISSIONS.md.</summary>
@@ -105,6 +108,12 @@ public static class RolePermissions
         [Roles.AudioStation] = new()
         {
             ["calls"] = "M",
+        },
+
+        // Counts only, as PERMISSIONS.md describes reports.view: no patient names, no money, no printing or export.
+        [Roles.DoctorReportsViewer] = new()
+        {
+            ["reports"] = "V",
         },
     };
 

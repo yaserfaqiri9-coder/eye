@@ -225,8 +225,8 @@ onMounted(load)
         <input id="user-fullname" v-model="form.fullName" class="form-control" required />
       </div>
       <div class="mb-3">
-        <label class="form-label" for="user-password">رمز عبور (حداقل ۱۰ حرف)</label>
-        <input id="user-password" v-model="form.password" class="form-control" type="password" dir="ltr" minlength="10" autocomplete="new-password" required />
+        <label class="form-label" for="user-password">رمز عبور</label>
+        <input id="user-password" v-model="form.password" class="form-control" type="password" dir="ltr" autocomplete="new-password" required />
       </div>
       <fieldset class="mb-3">
         <legend class="form-label">نقش‌ها</legend>
@@ -259,8 +259,8 @@ onMounted(load)
   <UiModal v-if="reset.user" :title="`بازنشانی رمز ${reset.user.fullName}`" @close="reset.user = null">
     <form @submit.prevent="saveReset">
       <p class="text-muted small">نشست فعلی این کاربر پایان می‌یابد. رمز جدید را حضوری به او بدهید.</p>
-      <label class="form-label" for="reset-password">رمز جدید (حداقل ۱۰ حرف)</label>
-      <input id="reset-password" v-model="reset.password" class="form-control mb-3" type="password" dir="ltr" minlength="10" autocomplete="new-password" required />
+      <label class="form-label" for="reset-password">رمز جدید</label>
+      <input id="reset-password" v-model="reset.password" class="form-control mb-3" type="password" dir="ltr" autocomplete="new-password" required />
       <div v-if="reset.error" class="alert alert-danger" role="alert">{{ reset.error }}</div>
       <div class="xr-form-actions">
         <button type="submit" class="btn btn-primary" :disabled="reset.saving">بازنشانی رمز</button>

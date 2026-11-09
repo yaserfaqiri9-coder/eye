@@ -1,16 +1,15 @@
-// For staff laptops: trusts the hospital's certificate, checks the connection and adds a desktop shortcut. Installs no server parts.
+// For staff computers: trusts the hospital's certificate, finds the server and installs the desktop icon (AlShifa.exe). Installs no server parts.
 // Runs from the folder the host installer created, next to alshifa-ca.cer and connect.ini. The certificate is never fetched
 // over the network: a USB stick carried by hand is what makes it safe to trust, and connect.ini pins exactly which one.
 using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
-using System.Linq;
-using System.Net;
-using System.Net.Sockets;
+using System.Reflection;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Windows.Forms;
+using AlShifa.Shared;
 
 namespace AlShifa.Connect
 {
@@ -82,31 +81,22 @@ namespace AlShifa.Connect
                 var folder = Path.GetDirectoryName(Application.ExecutablePath);
                 var settingsPath = Path.Combine(folder, "connect.ini");
                 var certificatePath = Path.Combine(folder, "alshifa-ca.cer");
-                if (!File.Exists(settingsPath) || !File.Exists(certificatePath))
+                var launcherPath = Path.Combine(folder, "AlShifa.exe");
+                if (!File.Exists(settingsPath) || !File.Exists(certificatePath) || !File.Exists(launcherPath))
                 {
-                    throw new UserMessage("فایل‌های اتصال کنار این برنامه نیست. پوشه AlShifa-Staff-Connect را از دسکتاپ لپ‌تاپ میزبان با فلش بیاورید و این برنامه را از داخل همان پوشه اجرا کنید.");
+                    throw new UserMessage("فایل‌های اتصال کنار این برنامه نیست. پوشه AlShifa-Staff-Connect را از دسکتاپ کمپیوتر سرور با فلش بیاورید و این برنامه را از داخل همان پوشه اجرا کنید.");
                 }
 
-                var settings = File.ReadAllLines(settingsPath)
-                    .Select(l => l.Split(new[] { '=' }, 2))
-                    .Where(p => p.Length == 2)
-                    .ToDictionary(p => p[0].Trim(), p => p[1].Trim());
-                var address = settings["address"];
-                var port = int.Parse(settings["port"]);
-                var url = settings["url"];
+                var settings = ServerSettings.Load(settingsPath);
+                if (string.IsNullOrEmpty(settings.Name)) throw new UserMessage("این پوشه از نسخه قدیمی است. پوشه AlShifa-Staff-Connect را دوباره از دسکتاپ کمپیوتر سرور بیاورید.");
 
-                Say("بررسی شبکه...", Color.Black);
-                if (!CanReach(address, port))
-                {
-                    throw new UserMessage("لپ‌تاپ میزبان (" + address + ") پیدا نشد. به همان روتر شفاخانه وصل شوید، Wi-Fi مهمان و VPN را خاموش کنید و روشن‌بودن لپ‌تاپ میزبان را بررسی کنید.");
-                }
-
+                // Before looking for the server: the certificate is what tells the real server apart from any other device.
                 Say("نصب گواهی امن...", Color.Black);
                 using (var certificate = new X509Certificate2(certificatePath))
                 {
-                    if (!string.Equals(certificate.Thumbprint, settings["thumbprint"], StringComparison.OrdinalIgnoreCase))
+                    if (!string.Equals(certificate.Thumbprint, settings.CaThumbprint, StringComparison.OrdinalIgnoreCase))
                     {
-                        throw new UserMessage("گواهی این پوشه با آدرس ثبت‌شده یکی نیست و نصب نشد. پوشه را دوباره از لپ‌تاپ میزبان بیاورید.");
+                        throw new UserMessage("گواهی این پوشه با تنظیمات آن یکی نیست و نصب نشد. پوشه را دوباره از کمپیوتر سرور بیاورید.");
                     }
 
                     using (var store = new X509Store(StoreName.Root, StoreLocation.LocalMachine))
@@ -116,30 +106,22 @@ namespace AlShifa.Connect
                     }
                 }
 
-                Say("آزمایش اتصال امن...", Color.Black);
-                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-                var request = (HttpWebRequest)WebRequest.Create(url.TrimEnd('/') + "/health");
-                request.Timeout = 15000;
-                request.Proxy = null;
-                using (var response = (HttpWebResponse)request.GetResponse())
+                Say("پیدا کردن سرور در شبکه...", Color.Black);
+                var found = Discovery.Find(settings, null);
+                if (found == null)
                 {
-                    if (response.StatusCode != HttpStatusCode.OK) throw new UserMessage("سیستم پاسخ درست نداد.");
+                    throw new UserMessage("سرور پیدا نشد. این کمپیوتر را به همان روتر سرور وصل کنید (نه Wi-Fi مهمان)، VPN را خاموش کنید و روشن‌بودن کمپیوتر سرور را بررسی کنید.");
                 }
 
-                var desktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
-                File.WriteAllText(Path.Combine(desktop, "سیستم الشفا.url"), "[InternetShortcut]\r\nURL=" + url + "\r\n[AlShifa]\r\nManaged=1\r\n");
+                var shortcut = Install(settings, found, folder);
 
-                Say("اتصال کامل شد. میان‌بر «سیستم الشفا» روی دسکتاپ است و صفحه ورود باز می‌شود.", Color.DarkGreen);
-                // This process is elevated. Through Explorer, the browser starts as the ordinary signed-in user.
-                Process.Start(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"), "\"" + url + "\"");
+                Say("اتصال کامل شد. آیکون «سیستم الشفا» روی دسکتاپ است و صفحه ورود باز می‌شود.", Color.DarkGreen);
+                // This process is elevated. Through Explorer, the program starts as the ordinary signed-in user.
+                Process.Start(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"), "\"" + shortcut + "\"");
             }
             catch (UserMessage message)
             {
                 Fail(message.Message);
-            }
-            catch (WebException ex)
-            {
-                Fail("لپ‌تاپ میزبان پیدا شد، ولی اتصال امن برقرار نشد. آدرس لپ‌تاپ میزبان عوض نشده باشد و ساعت هر دو لپ‌تاپ درست باشد. (" + ex.Status + ")");
             }
             catch (Exception ex)
             {
@@ -153,22 +135,39 @@ namespace AlShifa.Connect
             BeginInvoke((Action)(() => connect.Enabled = true));
         }
 
-        private static bool CanReach(string address, int port)
+        // The USB stick goes away, so the program, its settings and the logo are kept on this computer. Same layout as the server.
+        private static string Install(ServerSettings settings, string address, string folder)
         {
-            using (var client = new TcpClient())
-            {
-                try
-                {
-                    var attempt = client.BeginConnect(address, port, null, null);
-                    if (!attempt.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(6))) return false;
-                    client.EndConnect(attempt);
-                    return true;
-                }
-                catch (SocketException)
-                {
-                    return false;
-                }
-            }
+            var keep = Discovery.ProgramFolder;
+            Directory.CreateDirectory(keep);
+            var launcher = Path.Combine(keep, "AlShifa.exe");
+            File.Copy(Path.Combine(folder, "AlShifa.exe"), launcher, true);
+            var icon = Path.Combine(keep, "alshifa.ico");
+            var iconSource = Path.Combine(folder, "alshifa.ico");
+            if (File.Exists(iconSource)) File.Copy(iconSource, icon, true);
+            settings.Address = address;
+            settings.Save(Path.Combine(keep, "alshifa.ini"));
+
+            var desktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
+            var path = Path.Combine(desktop, "سیستم الشفا.lnk");
+            // WScript.Shell saves through the ANSI code page, so a Persian name fails on an English Windows. Saved under an ASCII name, then renamed.
+            var temp = Path.Combine(desktop, "alshifa-" + Guid.NewGuid().ToString("N") + ".lnk");
+            var shellType = Type.GetTypeFromProgID("WScript.Shell");
+            var shell = Activator.CreateInstance(shellType);
+            var link = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { temp });
+            var linkType = link.GetType();
+            Action<string, string> set = (name, value) => linkType.InvokeMember(name, BindingFlags.SetProperty, null, link, new object[] { value });
+            set("TargetPath", launcher);
+            set("WorkingDirectory", keep);
+            set("Description", "AlShifa managed shortcut");
+            set("IconLocation", (File.Exists(icon) ? icon : launcher) + ",0");
+            linkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, link, null);
+            if (File.Exists(path)) File.Delete(path);
+            File.Move(temp, path);
+            // Older versions made a browser-tab link. One icon on the desktop, not two.
+            var tab = Path.Combine(desktop, "سیستم الشفا.url");
+            if (File.Exists(tab)) File.Delete(tab);
+            return path;
         }
 
         private sealed class UserMessage : Exception

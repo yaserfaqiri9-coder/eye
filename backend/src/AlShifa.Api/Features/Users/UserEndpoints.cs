@@ -12,14 +12,14 @@ public sealed record UserListItem(long Id, string UserName, string FullName, boo
 public sealed record CreateUserRequest(
     [Required, MaxLength(100)] string UserName,
     [Required, MaxLength(150)] string FullName,
-    [Required, MinLength(10), MaxLength(200)] string Password,
+    [Required, MaxLength(200)] string Password,
     [Required, MinLength(1)] string[] Roles);
 
 public sealed record SetRolesRequest([Required, MinLength(1)] string[] Roles);
 
 public sealed record EditUserRequest([Required, MaxLength(150)] string FullName);
 
-public sealed record ResetPasswordRequest([Required, MinLength(10), MaxLength(200)] string NewPassword);
+public sealed record ResetPasswordRequest([Required, MaxLength(200)] string NewPassword);
 
 public static class UserEndpoints
 {

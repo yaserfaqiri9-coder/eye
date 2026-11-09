@@ -87,6 +87,40 @@ public static class SettingsEndpoints
         settings.MapGet("/backup-status", (IConfiguration config) => Results.Ok(BackupStatus.Read(config["Backup:StatusFile"], DateTime.UtcNow)))
             .RequirePermission("settings.view");
 
+        settings.MapPost("/backup/run", async (IConfiguration config, IBackupTrigger trigger, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        {
+            var status = BackupStatus.Read(config["Backup:StatusFile"], DateTime.UtcNow);
+            if (!status.Configured)
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "backup_not_installed", "پشتیبان‌گیری خودکار روی این کامپیوتر نصب نشده است.");
+            }
+
+            if (status.RunningSince is not null)
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "backup_running", "پشتیبان‌گیری هم‌اکنون در حال اجراست.");
+            }
+
+            // A backup takes a few minutes; repeated clicks would only queue nothing and fill the audit log.
+            var recent = DateTime.UtcNow.AddMinutes(-5);
+            if (await db.AuditLogs.AnyAsync(a => a.Action == "BackupRequested" && a.CreatedAt > recent, ct))
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "backup_requested", "پشتیبان‌گیری چند دقیقه پیش درخواست شده است. نتیجه آن را منتظر بمانید.");
+            }
+
+            try
+            {
+                trigger.Request();
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                throw new AppException(StatusCodes.Status503ServiceUnavailable, "backup_trigger_failed", "درخواست پشتیبان‌گیری به ویندوز نرسید. به مسئول سیستم اطلاع دهید.");
+            }
+
+            audit.Add("BackupRequested", "Backup", null);
+            await db.SaveChangesAsync(ct);
+            return Results.Accepted();
+        }).RequirePermission("settings.edit");
+
         app.MapPost("/api/cash/registers", async (SaveRegisterRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
         {
             var register = new Finance.CashRegister { Name = request.Name.Trim() };

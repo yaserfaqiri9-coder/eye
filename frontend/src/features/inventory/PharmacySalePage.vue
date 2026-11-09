@@ -151,7 +151,7 @@ onMounted(() => {
     <div v-if="done" class="alert alert-success mb-0" role="status">
       فروش <span class="ltr-num">{{ done.saleNumber }}</span> ثبت شد. فاکتور <span class="ltr-num">{{ done.invoiceNumber }}</span> در صندوق قابل پرداخت است.
       <div class="xr-form-actions mt-2">
-        <RouterLink v-if="auth.can('pharmacy.print')" :to="`/print/sale/${done.id}`" target="_blank" class="btn btn-soft btn-sm">چاپ رسید</RouterLink>
+        <RouterLink v-if="auth.can('pharmacy.print')" :to="`/print/sale/${done.id}`" target="_blank" class="btn btn-soft btn-sm">چاپ فاکتور</RouterLink>
         <button v-if="!rx" type="button" class="btn btn-soft btn-sm" @click="reset">فروش جدید</button>
       </div>
     </div>

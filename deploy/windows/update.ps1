@@ -46,6 +46,8 @@ try {
     throw "Copying the new version failed; the old version is running again. Reason: $_"
 }
 Copy-Item (Join-Path $PSScriptRoot '*') (Join-Path $Root 'scripts') -Recurse -Force
+# Installs made before Settings > Backup had a "backup now" button lack this trigger. Adding it twice is a no-op.
+Add-BackupRequestTrigger
 
 '== Migrate'
 Push-Location $appDir

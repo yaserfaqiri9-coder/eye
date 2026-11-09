@@ -103,8 +103,8 @@ async function logout() {
     <form v-else @submit.prevent="changePassword">
       <label class="form-label" for="pw-current">رمز فعلی</label>
       <input id="pw-current" v-model="password.current" class="form-control mb-3" type="password" dir="ltr" autocomplete="current-password" required />
-      <label class="form-label" for="pw-next">رمز جدید (حداقل ۱۰ حرف)</label>
-      <input id="pw-next" v-model="password.next" class="form-control mb-3" type="password" dir="ltr" minlength="10" autocomplete="new-password" required />
+      <label class="form-label" for="pw-next">رمز جدید</label>
+      <input id="pw-next" v-model="password.next" class="form-control mb-3" type="password" dir="ltr" autocomplete="new-password" required />
       <div v-if="password.error" class="alert alert-danger" role="alert">{{ password.error }}</div>
       <div class="xr-form-actions">
         <button type="submit" class="btn btn-primary" :disabled="password.saving">تغییر رمز</button>

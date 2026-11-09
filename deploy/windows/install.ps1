@@ -43,15 +43,15 @@ $gpg = Find-Gpg
 # Install-AlShifa.exe asks in its own window and hands the password over in this process's environment, never on a command line.
 $adminPlain = $env:ALSHIFA_ADMIN_PASSWORD
 if (-not $adminPlain) {
-    $adminPassword = Read-Host "Password for the '$AdminUser' administrator (10+ characters, with capital, small letter and digit)" -AsSecureString
+    $adminPassword = Read-Host "Password for the '$AdminUser' administrator" -AsSecureString
     $adminAgain = Read-Host 'Same password again' -AsSecureString
     function ConvertTo-Plain([securestring]$Value) { [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($Value)) }
     $adminPlain = ConvertTo-Plain $adminPassword
     if ($adminPlain -cne (ConvertTo-Plain $adminAgain)) { throw 'The two passwords are different. Nothing was changed.' }
 }
-# The same rules the application enforces, so a weak password stops the install here and not near its end.
-if ($adminPlain.Length -lt 10 -or $adminPlain -cnotmatch '[A-Z]' -or $adminPlain -cnotmatch '[a-z]' -or $adminPlain -notmatch '\d') {
-    throw 'The password needs 10+ characters with a capital letter, a small letter and a digit. Nothing was changed.'
+# The same rule the application enforces (any non-empty password), so a refused password stops the install here and not near its end.
+if (-not $adminPlain) {
+    throw 'The password is empty. Nothing was changed.'
 }
 
 $step = 'folders and secrets'
@@ -156,11 +156,11 @@ Start-Service AlShifaApi
 
 $step = 'firewall'
 $step
+# Every network type, decided by the hospital: Windows marks each new router Public, and moving all computers to another router
+# must need nothing from anyone. LocalSubnet still keeps it to devices on the same router, never the internet. The cost: on a
+# public Wi-Fi others on it would see the login page, so the server stays on the hospital network.
 New-NetFirewallRule -DisplayName 'Al-Shifa HTTPS (hospital LAN)' -Direction Inbound -Protocol TCP -LocalPort $HttpsPort `
-    -RemoteAddress LocalSubnet -Profile Private, Domain -Action Allow | Out-Null
-if (Get-NetConnectionProfile | Where-Object NetworkCategory -eq 'Public') {
-    'WARNING: a network is marked Public, so the rule above does not apply on it. Run: Set-NetConnectionProfile -InterfaceAlias <name> -NetworkCategory Private'
-}
+    -RemoteAddress LocalSubnet -Profile Any -Action Allow | Out-Null
 
 $step = 'power settings'
 $step
@@ -185,6 +185,7 @@ $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddHours(6) -Repet
 $taskSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName 'AlShifa Backup' -Action (New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments) `
     -Trigger $trigger -Settings $taskSettings -User 'SYSTEM' -RunLevel Highest | Out-Null
+Add-BackupRequestTrigger
 
 $step = 'first backup and restore test'
 $step

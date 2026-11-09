@@ -15,6 +15,9 @@ param(
 . (Join-Path $PSScriptRoot 'common.ps1')
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
+# Persian on the command line can arrive as '?' on some systems. The name is then rebuilt from its letters (Sistem Alshifa).
+if ($ShortcutName -match '\?') { $ShortcutName = -join [char[]](0x633, 0x6CC, 0x633, 0x62A, 0x645, 0x20, 0x627, 0x644, 0x634, 0x641, 0x627) }
+
 # Taken out of the environment at once, so the other programs started below never inherit it. Only install.ps1 gets it back.
 $adminPassword = $env:ALSHIFA_ADMIN_PASSWORD
 Remove-Item Env:\ALSHIFA_ADMIN_PASSWORD -ErrorAction SilentlyContinue
@@ -63,7 +66,7 @@ function Find-VisualCppRuntime {
 function Set-PrivateNetwork([string]$Address) {
     $interface = (Get-NetIPAddress -IPAddress $Address -ErrorAction SilentlyContinue).InterfaceIndex
     if (-not $interface) { return }
-    # The firewall rule covers Private and Domain only, deliberately. A hospital network is Private, a cafe's Wi-Fi is not.
+    # The firewall rule covers every network type (see install.ps1). Private still tells Windows this network is trusted.
     try {
         $profile_ = Get-NetConnectionProfile -InterfaceIndex $interface -ErrorAction Stop
         if ($profile_.NetworkCategory -eq 'Public') {
@@ -75,23 +78,29 @@ function Set-PrivateNetwork([string]$Address) {
     }
 }
 
-function Add-Shortcut([string]$Url) {
+$appIcon = Join-Path $Root 'app\wwwroot\favicon.ico'
+
+$caCertificate = Join-Path $Root 'certs\alshifa-ca.cer'
+$launcher = Join-Path $package 'tools\AlShifa.exe'
+
+function Get-CaThumbprint { (New-Object Security.Cryptography.X509Certificates.X509Certificate2($caCertificate)).Thumbprint }
+
+function Add-Shortcut([int]$Port) {
     if (-not $ShortcutName) { return }
-    $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
-    # The last section lets uninstall.ps1 recognise this file. Windows ignores it.
-    [IO.File]::WriteAllText((Join-Path $desktop "$ShortcutName.url"), "[InternetShortcut]`r`nURL=$Url`r`n[AlShifa]`r`nManaged=1`r`n")
+    Install-AlShifaLauncher $ShortcutName $launcher $appIcon $Port (Get-CaThumbprint)
 }
 
-# What each staff laptop needs. None of it is secret: the private key of this certificate was destroyed when it was made.
-function Add-StaffFolder([string]$Url, [string]$Address) {
+# What each staff computer needs. None of it is secret: the private key of this certificate was destroyed when it was made.
+# The address is only a first guess: AlShifa.exe finds the server again whenever the network changes.
+function Add-StaffFolder([int]$Port, [string]$Address) {
     $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
     $folder = Join-Path $desktop 'AlShifa-Staff-Connect'
     New-Item -ItemType Directory -Force $folder | Out-Null
-    $certificate = Join-Path $Root 'certs\alshifa-ca.cer'
-    Copy-Item $certificate $folder -Force
+    Copy-Item $caCertificate $folder -Force
     Copy-Item (Join-Path $package 'tools\Connect-AlShifa.exe') $folder -Force
-    $thumbprint = (New-Object Security.Cryptography.X509Certificates.X509Certificate2($certificate)).Thumbprint
-    [IO.File]::WriteAllText((Join-Path $folder 'connect.ini'), "address=$Address`r`nport=$HttpsPort`r`nurl=$Url`r`nthumbprint=$thumbprint`r`n")
+    Copy-Item $launcher $folder -Force
+    if (Test-Path $appIcon) { Copy-Item $appIcon (Join-Path $folder 'alshifa.ico') -Force }
+    [IO.File]::WriteAllText((Join-Path $folder 'connect.ini'), "name=$AlShifaServerName`r`nport=$Port`r`nthumbprint=$(Get-CaThumbprint)`r`nserver=$env:COMPUTERNAME`r`naddress=$Address`r`n")
     "##STAFF $folder"
 }
 
@@ -143,8 +152,22 @@ try {
         $config = Get-Content (Join-Path $Root 'app\appsettings.Production.json') -Raw | ConvertFrom-Json
         $loopback = $config.Kestrel.Endpoints.Loopback.Url
         Test-Everything '' "$loopback/health"
-        $shortcut = Get-ChildItem ([Environment]::GetFolderPath('CommonDesktopDirectory')) -Filter '*.url' | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'Managed=1' } | Select-Object -First 1
-        if ($shortcut) { "##URL $(((Get-Content -LiteralPath $shortcut.FullName | Where-Object { $_ -like 'URL=*' }) -replace '^URL=', ''))" }
+        # As install.ps1 now makes it: another router must not need anyone to mark the network Private.
+        Get-NetFirewallRule -DisplayName 'Al-Shifa HTTPS (hospital LAN)' -ErrorAction SilentlyContinue | Set-NetFirewallRule -Profile Any
+        $shortcut = Get-AlShifaShortcut
+        $launcherSettings = Join-Path $AlShifaProgramFolder 'alshifa.ini'
+        if (Test-Path $launcherSettings) {
+            # Installed with AlShifa.exe: the new version of it for this computer and in the staff folder.
+            $port = [int]((Get-Content $launcherSettings | Where-Object { $_ -like 'port=*' }) -replace '^port=', '')
+            $name = if ($shortcut) { $shortcut.Name } else { $ShortcutName }
+            if ($name) { Install-AlShifaLauncher $name $launcher $appIcon $port (Get-CaThumbprint) }
+            Add-StaffFolder $port ''
+            "##URL https://127.0.0.1$(if ($port -ne 443) { ":$port" })/"
+        } elseif ($shortcut -and $shortcut.Url) {
+            # Installed before AlShifa.exe: its certificate names only the address, so its shortcut keeps that address.
+            Set-AlShifaShortcut $shortcut.Name $shortcut.Url $appIcon
+            "##URL $($shortcut.Url)"
+        }
         '##RESULT updated'
         exit 0
     }
@@ -216,8 +239,8 @@ try {
     $url = "https://$LanIp$(if ($HttpsPort -ne 443) { ":$HttpsPort" })/"
     # So the browser on this laptop opens the system without a warning too.
     Import-Certificate -FilePath (Join-Path $Root 'certs\alshifa-ca.cer') -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-    Add-Shortcut $url
-    Add-StaffFolder $url $LanIp
+    Add-Shortcut $HttpsPort
+    Add-StaffFolder $HttpsPort $LanIp
     "##URL $url"
 
     Test-Everything $url "http://127.0.0.1:$LoopbackPort/health"

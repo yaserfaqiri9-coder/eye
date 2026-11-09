@@ -86,7 +86,7 @@ public class PatientCall
 /// <summary>The clip names of the local voice pack. The spoken text belongs to the pack tool, deploy/windows/voice-phrases.json.</summary>
 public static class VoicePack
 {
-    public const int MaxNumber = 999;
+    public const int MaxNumber = 100;
     public const int MaxRoom = 20;
 
     /// <summary>The doctor's desk has no section: a doctor is always announced by room.</summary>

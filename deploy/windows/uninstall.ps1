@@ -8,6 +8,14 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# Only the tunnel remote-access.ps1 set up, never another Cloudflare installation on this computer.
+$tunnel = Get-CimInstance Win32_Service -Filter "Name='Cloudflared'" -ErrorAction SilentlyContinue
+if ($tunnel -and $tunnel.PathName -like "*$(Join-Path $Root 'cloudflared')\*") {
+    Stop-Service Cloudflared -Force -ErrorAction SilentlyContinue
+    & sc.exe delete Cloudflared | Out-Null
+    'Service removed: Cloudflared (online reports tunnel)'
+}
+
 foreach ($name in 'AlShifaApi', 'AlShifaMySQL') {
     if (Get-Service $name -ErrorAction SilentlyContinue) {
         Stop-Service $name -Force -ErrorAction SilentlyContinue
@@ -24,7 +32,16 @@ Unregister-ScheduledTask -TaskName 'AlShifa Backup' -Confirm:$false -ErrorAction
 Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -eq 'CN=Al-Shifa Hospital Local CA' | Remove-Item -ErrorAction SilentlyContinue
 $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
 Get-ChildItem $desktop -Filter '*.url' | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'Managed=1' } | Remove-Item -ErrorAction SilentlyContinue
+$shell = New-Object -ComObject WScript.Shell
+# The mark common.ps1 gives the desktop icon, and the folder of AlShifa.exe it opens.
+# Read through a copy with an ASCII name: WScript.Shell reads a Persian file name back empty (see Read-Shortcut in common.ps1).
+Get-ChildItem $desktop -Filter '*.lnk' | Where-Object {
+    $temp = Join-Path $env:TEMP "alshifa-$([guid]::NewGuid().ToString('N')).lnk"
+    Copy-Item -LiteralPath $_.FullName $temp
+    try { $shell.CreateShortcut($temp).Description -eq 'AlShifa managed shortcut' } finally { Remove-Item -LiteralPath $temp -ErrorAction SilentlyContinue }
+} | Remove-Item -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $desktop 'AlShifa-Staff-Connect') -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $env:ProgramData 'AlShifa') -Recurse -Force -ErrorAction SilentlyContinue
 
 $power = Join-Path $Root 'logs\power-before-install.pow'
 if (Test-Path $power) {

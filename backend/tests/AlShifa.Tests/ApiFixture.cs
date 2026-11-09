@@ -2,12 +2,14 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using AlShifa.Api.Features.Auth;
 using AlShifa.Api.Features.Finance;
+using AlShifa.Api.Features.Settings;
 using AlShifa.Api.Features.Users;
 using AlShifa.Api.Features.Visits;
 using AlShifa.Api.Infrastructure;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -54,7 +56,11 @@ public sealed class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
         builder.UseSetting("RateLimit:LoginPerMinute", "100000");
         builder.UseSetting("Storage:Path", Path.Combine(Path.GetTempPath(), "alshifa-test-storage"));
         builder.ConfigureLogging(logging => logging.ClearProviders());
+        // The real trigger writes to the Windows event log, which would start a real backup on a machine that has one installed.
+        builder.ConfigureTestServices(services => services.AddSingleton<IBackupTrigger>(BackupTrigger));
     }
+
+    public RecordingBackupTrigger BackupTrigger { get; } = new();
 
     public async ValueTask InitializeAsync()
     {
@@ -252,3 +258,12 @@ public sealed class ApiCollection : ICollectionFixture<ApiFixture>;
 
 /// <summary>What the cashier needs to collect one prepaid request.</summary>
 public sealed record OrderFee(long InvoiceId, decimal Balance, int InvoiceVersion);
+
+public sealed class RecordingBackupTrigger : IBackupTrigger
+{
+    private int requests;
+
+    public int Requests => requests;
+
+    public void Request() => Interlocked.Increment(ref requests);
+}

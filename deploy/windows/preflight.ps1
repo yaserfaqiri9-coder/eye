@@ -48,7 +48,8 @@ if ($LanIp) {
     Check ([bool]$address) 'LAN address' $(if ($address) { "$LanIp on $($address.InterfaceAlias)" } else { "$LanIp is not on this laptop. Check the router reservation." })
     if ($address) {
         $category = (Get-NetConnectionProfile -InterfaceIndex $address.InterfaceIndex -ErrorAction SilentlyContinue).NetworkCategory
-        Check ($category -ne 'Public') 'Network profile' "$category (the firewall rule does not apply on Public)" $(if ($BeforePrerequisites) { 'WARN' } else { 'FAIL' })
+        # The firewall rule covers every network type, so another router needs nothing. Public only means Windows trusts the network less.
+        Check ($category -ne 'Public') 'Network profile' "$category (Private is better for the hospital network)" 'WARN'
         Check ($address.InterfaceAlias -notmatch 'Wi-?Fi|Wireless') 'Connection type' "$($address.InterfaceAlias) (a cable is more reliable for the host)" 'WARN'
     }
 } else {

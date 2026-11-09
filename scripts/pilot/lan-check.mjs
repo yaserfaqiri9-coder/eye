@@ -106,7 +106,7 @@ async function workflow() {
   const authCookie = proxied.cookies.get('alshifa.auth')
   if (!authCookie) throw new Error('No session through the proxy path')
   await proxied.json('/reports/financial')
-  await proxied.json('/reports/operations')
+  await proxied.json('/reports/overview')
   const denied2 = await proxied.request('/users', { method: 'POST', body: {} })
   if (denied2.status !== 403 && denied2.status !== 400) throw new Error(`Director reached user management: ${denied2.status}`)
   const proxiedPatient = await proxied.json(`/patients/${patient.id}`)

@@ -107,12 +107,15 @@ try {
     $references = 'System.Windows.Forms.dll', 'System.Drawing.dll', 'System.Management.dll', 'System.ServiceProcess.dll', 'System.IO.Compression.dll', 'System.IO.Compression.FileSystem.dll', 'System.Core.dll'
     $tools = Join-Path $package 'tools'
     New-Item -ItemType Directory $tools | Out-Null
-    function New-InstallerProgram([string]$Source, [string]$Output) {
-        $arguments = @('/nologo', '/target:winexe', '/optimize+', '/codepage:65001', "/win32manifest:$(Join-Path $PSScriptRoot 'installer\app.manifest')", "/out:$Output") +
-            @($references | ForEach-Object { "/r:$_" }) + (Join-Path $PSScriptRoot "installer\$Source")
+    # -AsUser: no Administrator prompt. Only AlShifa.exe, the desktop icon, runs that way.
+    function New-InstallerProgram([string[]]$Source, [string]$Output, [switch]$AsUser) {
+        $manifest = if ($AsUser) { @() } else { @("/win32manifest:$(Join-Path $PSScriptRoot 'installer\app.manifest')") }
+        $arguments = @('/nologo', '/target:winexe', '/optimize+', '/codepage:65001') + $manifest + @("/win32icon:$(Join-Path $repo 'frontend\public\favicon.ico')", "/out:$Output") +
+            @($references | ForEach-Object { "/r:$_" }) + @($Source | ForEach-Object { Join-Path $PSScriptRoot "installer\$_" })
         Invoke-Native $csc $arguments | Out-Null
     }
-    New-InstallerProgram 'ConnectAlShifa.cs' (Join-Path $tools 'Connect-AlShifa.exe')
+    New-InstallerProgram 'ConnectAlShifa.cs', 'Discovery.cs' (Join-Path $tools 'Connect-AlShifa.exe')
+    New-InstallerProgram 'Launcher.cs', 'Discovery.cs' (Join-Path $tools 'AlShifa.exe') -AsUser
     New-InstallerProgram 'ImportVoice.cs' (Join-Path $target 'Import-AlShifa-Voice.exe')
     $installer = Join-Path $target 'Install-AlShifa.exe'
     New-InstallerProgram 'InstallAlShifa.cs' $installer

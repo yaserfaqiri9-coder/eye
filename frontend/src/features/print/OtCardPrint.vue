@@ -86,7 +86,7 @@ onMounted(async () => {
       <article class="card-sheet" dir="ltr" aria-label="کارت عملیات‌خانه">
         <header class="card-head">
           <div class="card-head__clinic" dir="auto">{{ hospital?.hospitalName }}</div>
-          <img v-if="hospital?.logoAttachmentId" :src="`/api/attachments/${hospital.logoAttachmentId}`" alt="" class="card-head__logo" />
+          <img src="/print/alshefa-official-logo.png" alt="لوگوی شفاخانه تخصصی چشم الشفا" class="card-head__logo" />
           <div class="card-head__no"><b>CARD NO:</b> {{ data.surgery.case.caseNumber }}</div>
         </header>
 
@@ -238,7 +238,9 @@ onMounted(async () => {
 }
 
 .card-head__logo {
-  max-height: 16mm;
+  width: 16mm;
+  height: 16mm;
+  object-fit: contain;
 }
 
 .row-line {

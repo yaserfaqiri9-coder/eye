@@ -23,16 +23,28 @@ $stagingRoot = Join-Path $Root 'backup-staging'
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
 $work = Join-Path $stagingRoot $stamp
 
-function Write-Status([object]$LastSuccessAt, [string]$LastError) {
-    $json = [ordered]@{ lastRunAt = (Get-Date).ToUniversalTime().ToString('o'); lastSuccessAt = $LastSuccessAt; lastError = $LastError } | ConvertTo-Json
-    # Replaced in one step, so the web app never reads a half-written file.
+$started = Get-Date
+
+# Fields not named in $Changes are kept, so a failed run still shows when the last good backup was made.
+# Replaced in one step, so the web app never reads a half-written file.
+function Update-Status([hashtable]$Changes) {
+    $status = [ordered]@{}
+    try { (Get-Content $statusFile -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $status[$_.Name] = $_.Value } } catch { }
+    foreach ($key in $Changes.Keys) { $status[$key] = $Changes[$key] }
     $temporary = "$statusFile.tmp"
-    [IO.File]::WriteAllText($temporary, $json)
+    [IO.File]::WriteAllText($temporary, ($status | ConvertTo-Json -Depth 4))
     Move-Item -Force $temporary $statusFile
 }
 
-function Get-LastSuccess {
-    try { return (Get-Content $statusFile -Raw | ConvertFrom-Json).lastSuccessAt } catch { return $null }
+# What Settings > Backup lists: the files on the main destination after old ones were removed.
+function Get-BackupList([string]$Folder) {
+    return @(Get-ChildItem $Folder -Filter 'alshifa-*.zip.gpg' | Sort-Object Name -Descending | ForEach-Object {
+        [ordered]@{
+            name = $_.Name
+            sizeBytes = $_.Length
+            createdAt = [DateTime]::ParseExact($_.Name.Substring(8, 16), 'yyyyMMddTHHmmssZ', $null, 'AssumeUniversal,AdjustToUniversal').ToString('o')
+        }
+    })
 }
 
 # The copy that counts is the one on the destination, so that is the one opened and compared with the original.
@@ -54,6 +66,7 @@ function Copy-Backup([string]$Source, [string]$Folder, [string]$OriginalHash) {
 
 try {
     New-Item -ItemType Directory -Force $work, (Split-Path $statusFile) | Out-Null
+    Update-Status @{ runningSince = $started.ToUniversalTime().ToString('o') }
 
     # A power cut during an earlier run can leave a readable dump behind. This run removes it.
     Get-ChildItem $stagingRoot | Where-Object { $_.Name -ne $stamp -and $_.LastWriteTime -lt (Get-Date).AddHours(-6) } | Remove-Item -Recurse -Force
@@ -97,11 +110,18 @@ try {
         try { Copy-Backup $encrypted $OptionalDestination $hash } catch { $optionalProblem = "$_" }
     }
 
-    Write-Status (Get-Date).ToUniversalTime().ToString('o') $optionalProblem
+    $now = (Get-Date).ToUniversalTime().ToString('o')
+    Update-Status @{
+        lastRunAt = $now; lastSuccessAt = $now; lastError = $optionalProblem; runningSince = $null
+        destination = $Destination; optionalDestination = $OptionalDestination
+        lastSizeBytes = (Get-Item $encrypted).Length; lastDurationSeconds = [int]((Get-Date) - $started).TotalSeconds
+        # @() again here: PowerShell turns a returned one-item array into the item, which would not be a JSON list.
+        backups = @(Get-BackupList $Destination)
+    }
     "Backup complete: $(Join-Path $Destination (Split-Path $encrypted -Leaf))"
 } catch {
     $message = "$_"
-    Write-Status (Get-LastSuccess) $message
+    try { Update-Status @{ lastRunAt = (Get-Date).ToUniversalTime().ToString('o'); lastError = $message; runningSince = $null } } catch { }
     # eventcreate needs an administrator, which the scheduled task is. Without one, the status file still records the failure.
     try { Invoke-Native 'eventcreate.exe' @('/T', 'ERROR', '/ID', '100', '/L', 'APPLICATION', '/SO', 'AlShifaBackup', '/D', "Al-Shifa backup failed: $message") | Out-Null } catch { }
     Write-Error "Backup failed: $message" -ErrorAction Continue

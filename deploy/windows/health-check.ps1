@@ -54,5 +54,7 @@ try {
 
 $tailscale = Get-Service Tailscale -ErrorAction SilentlyContinue
 "INFO   Remote access          Tailscale service: $(if ($tailscale) { $tailscale.Status } else { 'not installed' }) (never needed for hospital work)"
+$tunnel = Get-Service Cloudflared -ErrorAction SilentlyContinue
+"INFO   Online reports         Cloudflare Tunnel service: $(if ($tunnel) { "$($tunnel.Status), $($tunnel.StartType)" } else { 'not installed' }) (never needed for hospital work; stop with remote-access.ps1 -Disable)"
 
 if ($problems) { exit 1 }

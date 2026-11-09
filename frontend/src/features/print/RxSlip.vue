@@ -45,7 +45,7 @@ onMounted(async () => {
 
     <article class="slip" dir="ltr" :aria-label="title">
       <header class="slip__head">
-        <img v-if="hospital?.logoAttachmentId" :src="`/api/attachments/${hospital.logoAttachmentId}`" alt="" class="slip__logo" />
+        <img src="/print/alshefa-official-logo.png" alt="لوگوی شفاخانه تخصصی چشم الشفا" class="slip__logo" />
         <div class="slip__brand">
           <div class="slip__clinic" dir="auto">{{ hospital?.hospitalName }}</div>
           <h1 class="slip__title" dir="auto">{{ title }}</h1>
@@ -99,7 +99,7 @@ onMounted(async () => {
           <span v-if="hospital?.address">{{ hospital.address }}</span>
           <span v-if="hospital?.phone" dir="ltr">{{ hospital.phone }}</span>
         </div>
-        <div class="slip__sign"><b>Signature:</b> <span class="slip__sign-line"></span><small v-if="signedBy" dir="auto">{{ signedBy }}</small></div>
+        <div v-if="signedBy" class="slip__sign"><small dir="auto">{{ signedBy }}</small></div>
       </footer>
     </article>
   </div>
@@ -159,7 +159,9 @@ onMounted(async () => {
 }
 
 .slip__logo {
-  max-height: 16mm;
+  width: 16mm;
+  height: 16mm;
+  object-fit: contain;
 }
 
 .slip__brand {

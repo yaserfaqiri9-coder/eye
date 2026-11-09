@@ -39,7 +39,10 @@ builder.Services.AddDbContext<AppDbContext>(o => o.UseMySQL(connectionString));
 builder.Services
     .AddIdentity<AppUser, AppRole>(o =>
     {
-        o.Password.RequiredLength = 10;
+        o.Password.RequiredLength = 1;
+        o.Password.RequireDigit = false;
+        o.Password.RequireLowercase = false;
+        o.Password.RequireUppercase = false;
         o.Password.RequireNonAlphanumeric = false;
         o.User.RequireUniqueEmail = false;
         o.Lockout.MaxFailedAccessAttempts = 5;
@@ -107,6 +110,12 @@ builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database");
 
 builder.Services.AddScoped<CurrentUser>();
 builder.Services.AddScoped<AuditService>();
+builder.Services.AddSingleton<IBackupTrigger, EventLogBackupTrigger>();
+builder.Services.Configure<RemoteAccessOptions>(builder.Configuration.GetSection("RemoteAccess"));
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<IAccessKeySource, CloudflareAccessKeySource>();
+builder.Services.AddSingleton<AccessTokenValidator>();
 builder.Services.AddScoped<NumberService>();
 builder.Services.AddScoped<Outbox>();
 builder.Services.AddScoped<Idempotency>();
@@ -205,6 +214,9 @@ if (app.Environment.IsProduction())
     app.UseHsts();
 }
 
+// Only for requests that came in through Cloudflare Tunnel; the hospital network is not affected.
+app.UseRemoteAccessGate();
+
 if (hostsFrontend)
 {
     app.UseFrontendFiles();
@@ -212,6 +224,7 @@ if (hostsFrontend)
 
 app.UseRateLimiter();
 app.UseAuthentication();
+app.UseRemoteAccessUserCheck();
 app.UseAuthorization();
 
 // CSRF check for every state-changing API call; /api/auth/csrf is a GET so a client can always obtain a token.
@@ -258,7 +271,6 @@ app.MapSettings();
 app.MapReports();
 app.MapPrint();
 app.MapAudit();
-app.MapSystemStatus();
 
 if (hostsFrontend)
 {

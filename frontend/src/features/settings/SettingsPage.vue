@@ -4,6 +4,7 @@ import { api, errorMessage, uploadFile } from '@/api/http'
 import UiCard from '@/components/UiCard.vue'
 import UiModal from '@/components/UiModal.vue'
 import CallSettingsTab from '@/features/calls/CallSettingsTab.vue'
+import BackupSettingsTab from '@/features/settings/BackupSettingsTab.vue'
 import type { ServiceRow } from '@/features/finance/types'
 import { useAuthStore } from '@/stores/auth'
 import { money } from '@/utils/money'
@@ -39,6 +40,7 @@ const tabs = [
   { key: 'tests', label: 'فهرست آزمایش‌ها' },
   { key: 'registers', label: 'صندوق‌ها' },
   { key: 'calls', label: 'فراخوان' },
+  { key: 'backup', label: 'پشتیبان‌گیری' },
 ]
 
 const canEdit = () => auth.can('settings.edit')
@@ -305,6 +307,8 @@ onMounted(load)
       </template>
 
       <CallSettingsTab v-else-if="tab === 'calls'" />
+
+      <BackupSettingsTab v-else-if="tab === 'backup'" />
 
       <template v-else>
         <form v-if="canEdit()" class="row g-2 mb-3" @submit.prevent="saveRegister">

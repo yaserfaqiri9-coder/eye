@@ -94,19 +94,19 @@ async function submitDiscount() {
   }
 }
 
-const refund = reactive({ payment: null as PaymentRow | null, amount: 0, reason: '', saving: false, error: '', key: '' })
+const refund = reactive({ payment: null as PaymentRow | null, amount: 0, reason: '', saving: false, error: '', key: '', printedId: null as number | null })
 
 function openRefund(row: PaymentRow) {
   // Rounded because subtracting decimals in floating point can leave a tail the server rightly refuses.
-  Object.assign(refund, { payment: row, amount: Number((row.amount - row.refunded).toFixed(2)), reason: '', saving: false, error: '', key: newIdempotencyKey() })
+  Object.assign(refund, { payment: row, amount: Number((row.amount - row.refunded).toFixed(2)), reason: '', saving: false, error: '', key: newIdempotencyKey(), printedId: null })
 }
 
 async function submitRefund() {
   refund.saving = true
   refund.error = ''
   try {
-    await api('/refunds', { method: 'POST', idempotencyKey: refund.key, body: { paymentId: refund.payment!.id, amount: refund.amount, reason: refund.reason } })
-    refund.payment = null
+    const result = await api<{ id: number }>('/refunds', { method: 'POST', idempotencyKey: refund.key, body: { paymentId: refund.payment!.id, amount: refund.amount, reason: refund.reason } })
+    refund.printedId = result.id
     await loadAll()
   } catch (cause) {
     refund.error = errorMessage(cause)
@@ -302,7 +302,11 @@ onMounted(() => {
   </UiModal>
 
   <UiModal v-if="refund.payment" :title="`برگشت وجه ${refund.payment.receiptNumber}`" @close="refund.payment = null">
-    <form @submit.prevent="submitRefund">
+    <div v-if="refund.printedId" class="xr-form-actions">
+      <RouterLink :to="`/print/refund/${refund.printedId}`" target="_blank" class="btn btn-soft">چاپ رسید برگشت وجه</RouterLink>
+      <button type="button" class="btn btn-soft-danger" data-modal-cancel>بستن</button>
+    </div>
+    <form v-else @submit.prevent="submitRefund">
       <label class="form-label" for="rf-amount">مبلغ برگشت</label>
       <input id="rf-amount" v-model.number="refund.amount" class="form-control mb-3" type="number" min="0.01" step="0.01" :max="refund.payment.amount - refund.payment.refunded" required />
       <label class="form-label" for="rf-reason">دلیل</label>
