@@ -107,6 +107,58 @@ public sealed class RefractionTests(ApiFixture api)
     }
 
     [Fact]
+    public async Task Final_values_reach_the_optical_desk_and_a_correction_follows_them()
+    {
+        var (_, visit) = await NewVisitAsync();
+        var triage = await UserAsync(Roles.Triage);
+        var optical = await UserAsync(Roles.Optical);
+        var saved = await Read<RefractionDto>(await triage.PutAsJsonAsync($"/api/refractions/{visit.Id}", Sample(null)));
+
+        var complete = await triage.PostAsJsonAsync($"/api/refractions/{visit.Id}/complete", new CompleteRefractionRequest(ReturnToDoctor: false, SendToOptical: true));
+        Assert.Equal(HttpStatusCode.NoContent, complete.StatusCode);
+
+        // Straight to the optical desk: the doctor's queue does not get the patient back.
+        var after = await triage.GetFromJsonAsync<VisitRow>($"/api/visits/{visit.Id}", JsonOptions);
+        Assert.NotEqual(nameof(VisitStatus.ReadyForDoctor), after!.Status);
+
+        var rx = (await optical.GetFromJsonAsync<List<OpticalRxDto>>("/api/optical-prescriptions", JsonOptions))!.Single(p => p.VisitId == visit.Id);
+        Assert.True(rx.FromRefraction);
+        Assert.Equal(("-1.25", "-0.50", "90", "+1.00"), (rx.SphereOd, rx.CylinderOd, rx.AxisOd, rx.AddOd));
+        Assert.Null(rx.SphereOs);
+        Assert.Equal("62", rx.Pd);
+
+        var record = await triage.GetFromJsonAsync<RefractionDto>($"/api/refractions/{visit.Id}", JsonOptions);
+        Assert.Equal(rx.RxNumber, record!.OpticalRxNumber);
+
+        var again = await triage.PostAsync($"/api/refractions/{visit.Id}/send-to-optical", null);
+        Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
+
+        // No glasses ordered yet, so the corrected final values replace the copy's.
+        var amended = await triage.PutAsJsonAsync($"/api/refractions/{visit.Id}", Sample(record.Version, "-2.00") with { AmendReason = "اشتباه در ثبت" });
+        Assert.Equal(HttpStatusCode.OK, amended.StatusCode);
+        var corrected = (await optical.GetFromJsonAsync<List<OpticalRxDto>>("/api/optical-prescriptions", JsonOptions))!.Single(p => p.VisitId == visit.Id);
+        Assert.Equal("-2.00", corrected.SphereOd);
+    }
+
+    [Fact]
+    public async Task Sending_without_final_values_is_refused_and_completes_nothing()
+    {
+        var (_, visit) = await NewVisitAsync();
+        var triage = await UserAsync(Roles.Triage);
+        await Read<RefractionDto>(await triage.PutAsJsonAsync($"/api/refractions/{visit.Id}", Sample(null) with
+        {
+            Lines = [new RefractionLineInput(RefractionStage.Auto, EyeSide.OD, "-1.50", null, null, null, null)],
+        }));
+
+        var refused = await triage.PostAsJsonAsync($"/api/refractions/{visit.Id}/complete", new CompleteRefractionRequest(SendToOptical: true));
+        Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+
+        var record = await triage.GetFromJsonAsync<RefractionDto>($"/api/refractions/{visit.Id}", JsonOptions);
+        Assert.Null(record!.CompletedAt);
+        Assert.Null(record.OpticalRxNumber);
+    }
+
+    [Fact]
     public async Task Completing_locks_the_record_and_returns_the_patient_to_the_doctor()
     {
         var (_, visit) = await NewVisitAsync();

@@ -6,6 +6,7 @@ import UiPager from '@/components/UiPager.vue'
 import UiModal from '@/components/UiModal.vue'
 import { useAuthStore } from '@/stores/auth'
 import { roleLabel, roles } from './roles'
+import { isMenuParent, menu, type MenuItem } from '@/layouts/menu'
 
 interface UserRow {
   id: number
@@ -107,6 +108,60 @@ async function saveRoles() {
   }
 }
 
+/** Pages listed in the sidebar form: every menu page except home, grouped as in the sidebar. */
+const menuGroups = menu
+  .flatMap((section) => [
+    { label: section.title, items: section.items.filter((entry): entry is MenuItem => !isMenuParent(entry)) },
+    ...section.items.filter(isMenuParent).map((parent) => ({ label: parent.label, items: parent.children })),
+  ])
+  .map((group) => ({ ...group, items: group.items.filter((item) => item.permission) }))
+  .filter((group) => group.items.length > 0)
+
+const sidebar = reactive({
+  user: null as UserRow | null,
+  loading: false,
+  saving: false,
+  error: '',
+  permissions: [] as string[],
+  visible: [] as string[],
+})
+
+/** Only pages this user's roles open are offered; a role's other pages would not show anyway. */
+const sidebarGroups = computed(() =>
+  menuGroups
+    .map((group) => ({ ...group, items: group.items.filter((item) => sidebar.permissions.includes(item.permission!)) }))
+    .filter((group) => group.items.length > 0),
+)
+
+async function openSidebar(user: UserRow) {
+  Object.assign(sidebar, { user, loading: true, saving: false, error: '', permissions: [], visible: [] })
+  try {
+    const result = await api<{ permissions: string[]; hidden: string[] }>(`/users/${user.id}/sidebar`)
+    sidebar.permissions = result.permissions
+    sidebar.visible = sidebarGroups.value.flatMap((group) => group.items.map((item) => item.to)).filter((to) => !result.hidden.includes(to))
+  } catch (cause) {
+    sidebar.error = messageOf(cause)
+  } finally {
+    sidebar.loading = false
+  }
+}
+
+async function saveSidebar() {
+  sidebar.saving = true
+  sidebar.error = ''
+  const hidden = sidebarGroups.value.flatMap((group) => group.items.map((item) => item.to)).filter((to) => !sidebar.visible.includes(to))
+  try {
+    await api(`/users/${sidebar.user!.id}/sidebar`, { method: 'PUT', body: { hidden } })
+    // Your own menu changes at once; anyone else sees it on their next page load.
+    if (sidebar.user!.id === auth.user?.id) auth.user.hiddenMenu = hidden
+    sidebar.user = null
+  } catch (cause) {
+    sidebar.error = messageOf(cause)
+  } finally {
+    sidebar.saving = false
+  }
+}
+
 const editName = reactive({ user: null as UserRow | null, fullName: '', saving: false, error: '' })
 
 async function saveName() {
@@ -195,6 +250,7 @@ onMounted(load)
             <td v-if="auth.can('users.manage')" class="text-nowrap">
               <button type="button" class="btn btn-soft btn-sm" @click="Object.assign(editName, { user, fullName: user.fullName, saving: false, error: '' })">ویرایش</button>
               <button type="button" class="btn btn-soft btn-sm ms-2" @click="openRoles(user)">نقش‌ها</button>
+              <button type="button" class="btn btn-soft btn-sm ms-2" @click="openSidebar(user)">بخش‌های منو</button>
               <button type="button" class="btn btn-soft btn-sm ms-2" @click="Object.assign(reset, { user, password: '', error: '' })">بازنشانی رمز</button>
               <button
                 v-if="user.id !== auth.user?.id"
@@ -264,6 +320,30 @@ onMounted(load)
       <div v-if="reset.error" class="alert alert-danger" role="alert">{{ reset.error }}</div>
       <div class="xr-form-actions">
         <button type="submit" class="btn btn-primary" :disabled="reset.saving">بازنشانی رمز</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
+    </form>
+  </UiModal>
+
+  <UiModal v-if="sidebar.user" :title="`بخش‌های منوی ${sidebar.user.fullName}`" @close="sidebar.user = null">
+    <form @submit.prevent="saveSidebar">
+      <p class="text-muted small">
+        بخش‌های تیک‌خورده در منوی این کاربر دیده می‌شوند. فقط بخش‌هایی آمده‌اند که نقش‌های او اجازه می‌دهند.
+        پنهان کردن فقط منو را تغییر می‌دهد و صلاحیت را نمی‌گیرد. تغییر با بارگذاری دوباره صفحه کاربر دیده می‌شود.
+      </p>
+      <div v-if="sidebar.loading" class="xr-state" role="status">در حال بارگذاری...</div>
+      <div v-else-if="sidebarGroups.length === 0 && !sidebar.error" class="xr-state">نقش‌های این کاربر بخشی در منو ندارند.</div>
+      <div v-else class="row mb-3">
+        <fieldset v-for="group in sidebarGroups" :key="group.label" class="col-6 mb-2">
+          <legend class="form-label small fw-bold mb-1">{{ group.label }}</legend>
+          <label v-for="item in group.items" :key="item.to" class="form-check-label d-block">
+            <input v-model="sidebar.visible" class="form-check-input ms-2" type="checkbox" :value="item.to" />{{ item.label }}
+          </label>
+        </fieldset>
+      </div>
+      <div v-if="sidebar.error" class="alert alert-danger" role="alert">{{ sidebar.error }}</div>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="sidebar.saving || sidebar.loading || !!sidebar.error">ذخیره</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>

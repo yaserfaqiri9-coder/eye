@@ -57,6 +57,7 @@ public static class PrescriptionEndpoints
             {
                 var patientId = await ClinicalEndpoints.PatientOfVisitAsync(db, request.VisitId, ct);
                 await access.EnsureResponsibleAsync(request.VisitId, ct);
+                EnsureFuture(request.ValidUntil);
                 var rx = new MedicalPrescription
                 {
                     RxNumber = $"RX-{await numbers.NextAsync("rx", ct: ct):D7}",
@@ -64,6 +65,7 @@ public static class PrescriptionEndpoints
                     VisitId = request.VisitId,
                     DoctorUserId = user.Id,
                     Notes = Text.Clean(request.Notes),
+                    ValidUntil = request.ValidUntil,
                     Items = request.Items.Select(i => new MedicalPrescriptionItem
                     {
                         DrugName = i.DrugName.Trim(),
@@ -113,15 +115,18 @@ public static class PrescriptionEndpoints
                 Quantity = i.Quantity,
             }).ToList();
 
+            EnsureFuture(request.ValidUntil);
             Amendments.AddChanges(db, nameof(MedicalPrescription), id,
             [
                 (nameof(rx.Items), Describe(items), Describe(replacements)),
                 (nameof(rx.Notes), rx.Notes, Text.Clean(request.Notes)),
+                (nameof(rx.ValidUntil), rx.ValidUntil?.ToString("yyyy-MM-dd"), request.ValidUntil?.ToString("yyyy-MM-dd")),
             ], reason, user.Id);
 
             db.RemoveRange(items);
             db.AddRange(replacements);
             rx.Notes = Text.Clean(request.Notes);
+            rx.ValidUntil = request.ValidUntil;
 
             // The lines live in their own table: a change to only them must still move the version on.
             db.Entry(rx).State = EntityState.Modified;
@@ -130,6 +135,29 @@ public static class PrescriptionEndpoints
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
             return Results.Ok((await QueryAsync(db, db.MedicalPrescriptions.Where(p => p.Id == id), ct)).Single());
+        }).RequirePermission("prescriptions.edit");
+
+        // The doctor confirms the prescription again: after the pharmacy asked for review, or once its validity ran out.
+        medical.MapPost("/{id:long}/reapprove", async (long id, ReapprovePrescriptionRequest request, AppDbContext db, ClinicalAccess access, SaleService sales, AuditService audit, Outbox outbox, CancellationToken ct) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var rx = (await db.MedicalPrescriptions.FromSqlInterpolated($"SELECT * FROM MedicalPrescriptions WHERE Id = {id} FOR UPDATE").ToListAsync(ct)).SingleOrDefault() ?? throw AppException.NotFound();
+            await access.EnsureResponsibleAsync(rx.VisitId, ct);
+            db.Entry(rx).Property(p => p.Version).OriginalValue = request.Version;
+            if (rx.Status is PrescriptionStatus.Cancelled or PrescriptionStatus.Dispensed)
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "prescription_closed", "این نسخه لغو یا کامل تحویل شده است.");
+            }
+
+            EnsureFuture(request.ValidUntil);
+            var note = request.Note.Trim();
+            rx.ValidUntil = request.ValidUntil;
+            sales.SetPharmacyStatus(rx, PharmacyRxStatus.AwaitingDecision, $"تأیید دوباره داکتر: {note}");
+            audit.Add("PrescriptionReapproved", nameof(MedicalPrescription), id.ToString(), note);
+            outbox.Add("PrescriptionCreated", new { prescriptionId = id }, Groups.Pharmacy, Groups.Doctor);
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return Results.NoContent();
         }).RequirePermission("prescriptions.edit");
 
         medical.MapPost("/{id:long}/cancel", async (long id, int version, AppDbContext db, ClinicalAccess access, AuditService audit, CancellationToken ct) =>
@@ -251,13 +279,21 @@ public static class PrescriptionEndpoints
         }).RequirePermission("opticalrx.cancel");
     }
 
+    private static void EnsureFuture(DateOnly? validUntil)
+    {
+        if (validUntil < KabulClock.Today)
+        {
+            throw new AppException(StatusCodes.Status400BadRequest, "invalid_validity", "تاریخ اعتبار نسخه نمی‌تواند گذشته باشد.");
+        }
+    }
+
     private static string Describe(IEnumerable<MedicalPrescriptionItem> items) =>
         string.Join("\n", items.Select(i => string.Join(" — ", new[] { i.DrugName, i.Dose, i.Route, i.Duration, i.Instructions, $"×{i.Quantity:0.###}" }.Where(p => !string.IsNullOrEmpty(p)))));
 
     public static async Task<List<PrescriptionDto>> QueryAsync(AppDbContext db, IQueryable<MedicalPrescription> query, CancellationToken ct)
     {
         var rows = await query.AsNoTracking()
-            .Select(p => new { p.Id, p.RxNumber, p.PatientId, p.Patient!.FileNumber, p.Patient.FirstName, p.Patient.LastName, p.VisitId, p.Notes, p.Status, p.CreatedAt, p.Version })
+            .Select(p => new { p.Id, p.RxNumber, p.PatientId, p.Patient!.FileNumber, p.Patient.FirstName, p.Patient.LastName, p.VisitId, p.Notes, p.Status, p.CreatedAt, p.Version, p.PharmacyStatus, p.ValidUntil })
             .ToListAsync(ct);
 
         var ids = rows.Select(r => r.Id).ToList();
@@ -270,13 +306,13 @@ public static class PrescriptionEndpoints
             r.Id, r.RxNumber, r.PatientId, r.FileNumber, $"{r.FirstName} {r.LastName}".Trim(), r.VisitId, r.Notes, r.Status.ToString(), r.CreatedAt, r.Version,
             items.Where(i => i.PrescriptionId == r.Id)
                 .Select(i => new RxItemDto(i.Id, i.DrugName, i.Dose, i.Route, i.Duration, i.Instructions, i.Quantity, i.DispensedQuantity))
-                .ToList())).ToList();
+                .ToList(), r.PharmacyStatus.ToString(), r.ValidUntil)).ToList();
     }
 
     public static Task<List<OpticalRxDto>> QueryOpticalAsync(IQueryable<OpticalPrescription> query, CancellationToken ct) =>
         query.AsNoTracking()
             .Select(p => new OpticalRxDto(
                 p.Id, p.RxNumber, p.PatientId, p.Patient!.FileNumber, (p.Patient.FirstName + " " + (p.Patient.LastName ?? "")).Trim(), p.VisitId,
-                p.SphereOd, p.CylinderOd, p.AxisOd, p.AddOd, p.SphereOs, p.CylinderOs, p.AxisOs, p.AddOs, p.Pd, p.Notes, p.IsCancelled, p.CreatedAt, p.Version))
+                p.SphereOd, p.CylinderOd, p.AxisOd, p.AddOd, p.SphereOs, p.CylinderOs, p.AxisOs, p.AddOs, p.Pd, p.Notes, p.IsCancelled, p.CreatedAt, p.Version, p.RefractionId != null))
             .ToListAsync(ct);
 }

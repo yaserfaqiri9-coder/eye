@@ -10,6 +10,8 @@ public static class Accounts
     public const string Receivable = "1100";
     public const string Inventory = "1200";
     public const string Payable = "2000";
+    /// <summary>The other side of stock that was on the shelves before the system started: neither a purchase nor a gain.</summary>
+    public const string OpeningBalance = "3000";
     public const string ServiceRevenue = "4000";
     public const string PharmacyRevenue = "4100";
     public const string OpticalRevenue = "4200";
@@ -25,6 +27,7 @@ public static class Accounts
         (Receivable, "حساب‌های دریافتنی"),
         (Inventory, "موجودی اجناس"),
         (Payable, "حساب‌های پرداختنی"),
+        (OpeningBalance, "سرمایه افتتاحیه"),
         (ServiceRevenue, "درآمد خدمات"),
         (PharmacyRevenue, "فروش دواخانه"),
         (OpticalRevenue, "فروش عینک"),
@@ -283,7 +286,7 @@ public sealed class InvoiceService(AppDbContext db, NumberService numbers, Ledge
             (Accounts.Cash, payment.Amount, 0),
             (Accounts.Receivable, 0, payment.Amount));
         audit.Add("PaymentReceived", "Payment", payment.Id.ToString());
-        outbox.Add("PaymentReceived", new { invoiceId = invoice.Id }, Groups.Cashier, Groups.Finance, Groups.Management, Groups.Reception, Groups.Triage, Groups.Lab);
+        outbox.Add("PaymentReceived", new { invoiceId = invoice.Id }, Groups.Cashier, Groups.Finance, Groups.Management, Groups.Reception, Groups.Triage, Groups.Lab, Groups.Pharmacy);
         await db.SaveChangesAsync(ct);
         return payment;
     }

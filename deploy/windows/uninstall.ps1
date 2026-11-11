@@ -8,7 +8,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-# Only the tunnel remote-access.ps1 set up, never another Cloudflare installation on this computer.
+# Left by the old online reports (before online.ps1): only the tunnel this system set up, never another Cloudflare installation.
 $tunnel = Get-CimInstance Win32_Service -Filter "Name='Cloudflared'" -ErrorAction SilentlyContinue
 if ($tunnel -and $tunnel.PathName -like "*$(Join-Path $Root 'cloudflared')\*") {
     Stop-Service Cloudflared -Force -ErrorAction SilentlyContinue

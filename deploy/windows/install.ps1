@@ -117,7 +117,7 @@ $appDir = Join-Path $Root 'app'
     ConnectionStrings = @{ Default = "Server=127.0.0.1;Port=$MySqlPort;Database=alshifa;User=alshifa;Password=$($secrets.App);" }
     Kestrel = @{ Endpoints = [ordered]@{
         Lan = @{ Url = "https://0.0.0.0:$HttpsPort"; SslProtocols = @('Tls12', 'Tls13'); Certificate = @{ Path = (Join-Path $Root 'certs\server.pfx'); Password = $secrets.Pfx } }
-        # Only for this computer: health checks and Tailscale Serve, which adds its own HTTPS in front.
+        # Only for this computer: health checks and local tools.
         Loopback = @{ Url = "http://127.0.0.1:$LoopbackPort" }
     } }
     Storage = @{ Path = (Join-Path $Root 'storage') }
@@ -180,8 +180,8 @@ $step
 $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $Root 'scripts\backup.ps1')`" -Root `"$Root`" -Destination `"$BackupDestination`""
 if ($BackupOptionalDestination) { $arguments += " -OptionalDestination `"$BackupOptionalDestination`"" }
 if ($AllowSameDisk) { $arguments += ' -AllowSameDisk' }
-# Every 4 hours, and soon after start-up if a run was missed while the laptop was off.
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddHours(6) -RepetitionInterval (New-TimeSpan -Hours 4)
+# Every night at 02:00 Kabul time, and soon after start-up if a run was missed while the laptop was off.
+$trigger = New-ScheduledTaskTrigger -Daily -At (Get-NightlyBackupTime)
 $taskSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName 'AlShifa Backup' -Action (New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments) `
     -Trigger $trigger -Settings $taskSettings -User 'SYSTEM' -RunLevel Highest | Out-Null

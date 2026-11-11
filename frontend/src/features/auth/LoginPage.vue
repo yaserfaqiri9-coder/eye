@@ -11,6 +11,9 @@ const router = useRouter()
 
 const userName = ref('')
 const password = ref('')
+// Asked for only by the online copy, after the password was accepted.
+const code = ref('')
+const needsCode = ref(false)
 const error = ref('')
 const submitting = ref(false)
 
@@ -18,12 +21,16 @@ async function submit() {
   submitting.value = true
   error.value = ''
   try {
-    await auth.login(userName.value, password.value)
+    await auth.login(userName.value, password.value, needsCode.value ? code.value : undefined)
     const next = route.query.next
     // Only same-site paths are followed, so the link cannot send a user to another site.
     const target = typeof next === 'string' && next.startsWith('/') && !next.startsWith('//') ? next : '/'
     await router.push(target)
   } catch (cause) {
+    if (cause instanceof ApiError && (cause.code === 'two_factor_required' || cause.code === 'invalid_code')) {
+      needsCode.value = true
+      code.value = ''
+    }
     error.value = cause instanceof ApiError ? cause.message : 'ورود انجام نشد. دوباره تلاش کنید.'
   } finally {
     submitting.value = false
@@ -59,6 +66,19 @@ async function submit() {
             type="password"
             dir="ltr"
             autocomplete="current-password"
+            required
+          />
+        </div>
+        <div v-if="needsCode" class="login__field">
+          <label class="form-label" for="login-code">کد تأیید (برنامه Authenticator)</label>
+          <input
+            id="login-code"
+            v-model="code"
+            class="form-control"
+            dir="ltr"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength="7"
             required
           />
         </div>

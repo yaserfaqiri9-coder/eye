@@ -27,6 +27,25 @@ const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
 const notice = ref('')
+/** Chosen by the refractionist when completing: where the patient goes next. */
+const sendToOptical = ref(false)
+const returnToDoctor = ref(true)
+const opticalRxNumber = ref<string | null>(null)
+const sending = ref(false)
+
+async function sendNow() {
+  sending.value = true
+  error.value = ''
+  try {
+    await api(`/refractions/${props.visitId}/send-to-optical`, { method: 'POST' })
+    opticalRxNumber.value = (await api<Refraction>(`/refractions/${props.visitId}`)).opticalRxNumber ?? null
+    notice.value = 'نتیجه به بخش عینک فرستاده شد.'
+  } catch (cause) {
+    error.value = errorMessage(cause)
+  } finally {
+    sending.value = false
+  }
+}
 
 const blankRow = (): RxRow => ({ sphere: '', cylinder: '', axis: '', add: '', va: '' })
 const stages: RefractionStage[] = ['Current', 'Auto', 'Subjective', 'Final']
@@ -74,6 +93,7 @@ function tidy(key: AcuityKey) {
 function fill(row: Refraction) {
   version.value = row.version
   completed.value = !!row.completedAt
+  opticalRxNumber.value = row.opticalRxNumber ?? null
   const extras = parseRefractionExtras(row.measurements)
   applying(() => {
     Object.assign(form, {
@@ -175,13 +195,18 @@ async function save(complete: boolean) {
       return
     }
     if (complete) {
-      await api(`/refractions/${props.visitId}/complete`, { method: 'POST' })
+      await api(`/refractions/${props.visitId}/complete`, {
+        method: 'POST',
+        body: { returnToDoctor: returnToDoctor.value, sendToOptical: sendToOptical.value },
+      })
       completed.value = true
-      notice.value = 'رفرکشن تکمیل شد و مریض به صف داکتر برگشت.'
+      const sent = sendToOptical.value ? ' نتیجه به بخش عینک فرستاده شد.' : ''
+      notice.value = returnToDoctor.value ? `رفرکشن تکمیل شد و مریض به صف داکتر برگشت.${sent}` : `رفرکشن تکمیل شد.${sent}`
     } else {
       notice.value = 'ذخیره شد.'
     }
-    fill({ ...saved, completedAt: complete ? new Date().toISOString() : null })
+    // After completing, the stored record also names the optical prescription it produced.
+    fill(complete ? await api<Refraction>(`/refractions/${props.visitId}`) : { ...saved, completedAt: null })
     markSaved()
   } catch (cause) {
     error.value = errorMessage(cause)
@@ -215,7 +240,7 @@ onMounted(load)
 
       <fieldset :disabled="!canEdit || loading" class="xr-card__body">
         <div v-if="completed && !amending" class="alert alert-primary" role="status">این بینایی‌سنجی تکمیل شده است. برای تغییر، اصلاحیه با دلیل ثبت کنید.</div>
-        <div v-if="amending" class="alert alert-warning" role="status">مقدار قبلی و دلیل اصلاح در پرونده می‌ماند و داکتر آن را می‌بیند. نسخه عینکی که قبلاً صادر شده خودکار تغییر نمی‌کند.</div>
+        <div v-if="amending" class="alert alert-warning" role="status">مقدار قبلی و دلیل اصلاح در پرونده می‌ماند و داکتر آن را می‌بیند. اگر نتیجه به بخش عینک فرستاده شده و هنوز سفارش عینک روی آن ثبت نشده، نسخه بخش عینک هم اصلاح می‌شود. نسخه‌ای که داکتر نوشته تغییر نمی‌کند.</div>
         <div v-if="previousFinal" class="alert alert-primary" role="note">
           نسخه نهایی مراجعه قبلی ({{ formatDate(previous!.visitDate) }}):
           <span v-for="line in previousFinal" :key="line.eye" class="previous">
@@ -335,6 +360,8 @@ onMounted(load)
         <button type="button" class="btn btn-soft-danger text-nowrap" :disabled="saving" @click="amending = false; load()">انصراف</button>
       </div>
       <div v-else-if="canEdit" class="xr-action-bar">
+        <label class="form-check-label text-nowrap"><input v-model="sendToOptical" class="form-check-input ms-2" type="checkbox" />ارسال نتیجه به بخش عینک</label>
+        <label class="form-check-label text-nowrap"><input v-model="returnToDoctor" class="form-check-input ms-2" type="checkbox" />برگشت مریض به صف داکتر</label>
         <button type="button" class="btn btn-primary" :disabled="saving || loading" @click="save(true)">ذخیره و تکمیل</button>
         <button type="submit" class="btn btn-soft" :disabled="saving || loading">ذخیره</button>
         <span class="xr-action-bar__status" role="status">
@@ -344,7 +371,19 @@ onMounted(load)
       </div>
       <div v-else class="m-3">
         <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
+        <p v-if="completed && opticalRxNumber" class="mb-3">
+          نسخه بخش عینک: <span class="ltr-num">{{ opticalRxNumber }}</span>
+        </p>
         <button v-if="completed && auth.can('preexam.edit')" type="button" class="btn btn-soft" :disabled="loading" @click="amending = true">ثبت اصلاحیه</button>
+        <button
+          v-if="completed && !opticalRxNumber && auth.can('preexam.edit')"
+          type="button"
+          class="btn btn-soft ms-2"
+          :disabled="loading || sending"
+          @click="sendNow"
+        >
+          ارسال به بخش عینک
+        </button>
       </div>
     </form>
   </div>

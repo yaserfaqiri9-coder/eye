@@ -14,9 +14,32 @@ using Microsoft.Extensions.DependencyInjection;
 namespace AlShifa.Tests;
 
 [Collection("api")]
-public sealed class PrintDocumentTests(ApiFixture api)
+public sealed class PrintDocumentTests(ApiFixture api) : IAsyncLifetime
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    // Seeded straight into the database without ledger postings, so they must not outlive the test: the other
+    // classes check that the ledger and the invoices agree across the whole shared database.
+    private readonly List<long> seededInvoices = [];
+    private readonly List<long> seededTests = [];
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
+    {
+        using var scope = api.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        // MySQL cannot delete through a join on the table it deletes from, so the ids come first.
+        var payments = await db.Payments.Where(p => seededInvoices.Contains(p.InvoiceId)).Select(p => p.Id).ToListAsync();
+        await db.Refunds.Where(r => payments.Contains(r.PaymentId)).ExecuteDeleteAsync();
+        await db.Payments.Where(p => seededInvoices.Contains(p.InvoiceId)).ExecuteDeleteAsync();
+        await db.Sales.Where(s => seededInvoices.Contains(s.InvoiceId)).ExecuteDeleteAsync();
+        await db.VisitTokens.Where(t => seededInvoices.Contains(t.InvoiceId)).ExecuteDeleteAsync();
+        await db.DiagnosticOrders.Where(o => seededTests.Contains(o.TestId)).ExecuteDeleteAsync();
+        await db.DiagnosticTests.Where(t => seededTests.Contains(t.Id)).ExecuteDeleteAsync();
+        await db.InvoiceItems.Where(i => seededInvoices.Contains(i.InvoiceId)).ExecuteDeleteAsync();
+        await db.Invoices.Where(i => seededInvoices.Contains(i.Id)).ExecuteDeleteAsync();
+    }
 
     [Fact]
     public async Task Payment_receipt_title_comes_from_its_persisted_source_link()
@@ -70,6 +93,7 @@ public sealed class PrintDocumentTests(ApiFixture api)
                 IsVoid = true,
             });
             await db.SaveChangesAsync();
+            seededInvoices.AddRange([invoice.Id, voidInvoice.Id]);
             invoiceId = invoice.Id;
             paymentId = payment.Id;
             refundId = refund.Id;
@@ -85,11 +109,11 @@ public sealed class PrintDocumentTests(ApiFixture api)
 
         Assert.Equal(before, after);
         Assert.Contains(invoiceDocument.Fields, f => f.Label == "وضعیت" && f.Value == "پرداخت جزئی پس از برگشت");
-        Assert.Contains(invoiceDocument.Totals!, f => f.Label == "برگشت وجه" && f.Value!.Contains("50"));
-        Assert.Contains(invoiceDocument.Totals!, f => f.Label == "مانده" && f.Value!.Contains("150"));
+        Assert.Contains(invoiceDocument.Fields, f => f.Label == "برگشت وجه" && f.Value!.Contains("50"));
+        Assert.Contains(invoiceDocument.Fields, f => f.Label == "مانده" && f.Value!.Contains("150"));
         Assert.Contains(receiptDocument.Fields, f => f.Label == "وضعیت" && f.Value == "برگشت جزئی");
-        Assert.Contains(receiptDocument.Totals!, f => f.Label == "دریافت خالص" && f.Value!.Contains("150"));
-        Assert.Contains(receiptDocument.Totals!, f => f.Label == "مانده فاکتور" && f.Value!.Contains("150"));
+        Assert.Contains(receiptDocument.Fields, f => f.Label == "دریافت خالص" && f.Value!.Contains("150"));
+        Assert.Contains(receiptDocument.Fields, f => f.Label == "مانده فاکتور" && f.Value!.Contains("150"));
         Assert.Equal("رسید برگشت وجه", refundDocument.Title);
         Assert.Contains(refundDocument.Totals!, f => f.Label == "مبلغ برگشت" && f.Value!.Contains("50"));
         Assert.Contains(voidDocument.Fields, f => f.Label == "وضعیت" && f.Value == "باطل");
@@ -120,6 +144,7 @@ public sealed class PrintDocumentTests(ApiFixture api)
             var sale = new Sale { SaleNumber = Unique("PH"), Kind = SaleKind.Pharmacy, InvoiceId = invoice.Id, CreatedByUserId = userId };
             db.Sales.Add(sale);
             await db.SaveChangesAsync();
+            seededInvoices.Add(invoice.Id);
             saleId = sale.Id;
             invoiceNumber = invoice.InvoiceNumber;
         }
@@ -128,9 +153,13 @@ public sealed class PrintDocumentTests(ApiFixture api)
         Assert.Equal("فاکتور دواخانه", document.Title);
         Assert.Equal(invoiceNumber, document.Number);
         Assert.Equal("a4", document.Format);
-        Assert.Equal(["دوا", "تعداد", "قیمت واحد", "مبلغ"], document.Headers);
-        Assert.Contains(document.Rows!, row => row[0] == "Tobramycin eye drops" && row[1] == "2" && row[2]!.Contains("300") && row[3]!.Contains("600"));
-        Assert.Contains(document.Totals!, f => f.Label == "مانده" && f.Value!.Contains("250"));
+        Assert.Equal(["#", "نام دوا", "مقدار", "مبلغ"], document.Headers);
+        Assert.Contains(document.Rows!, row => row[0] == "1" && row[1] == "Tobramycin eye drops" && row[2] == "2" && row[3]!.Contains("600"));
+
+        // The band carries the total after discount; the unsettled balance is named under it.
+        Assert.Equal(("مجموع", "550 افغانی"), (document.Totals![0].Label, document.Totals[0].Value));
+        Assert.Contains(document.Fields, f => f.Label == "تخفیف" && f.Value!.Contains("50"));
+        Assert.Contains(document.Fields, f => f.Label == "مانده" && f.Value!.Contains("250"));
     }
 
     private async Task<List<(long PaymentId, string Title)>> SeedClassifiedReceiptsAsync()
@@ -152,19 +181,20 @@ public sealed class PrintDocumentTests(ApiFixture api)
         await db.SaveChangesAsync();
         db.InvoiceItems.Add(NewLine(visitInvoice.Invoice.Id, "فیس معاینه", 100, nameof(VisitToken), token.Id));
         await db.SaveChangesAsync();
-        result.Add((visitInvoice.Payment.Id, "رسید فیس معاینه داکتر"));
+        result.Add((visitInvoice.Payment.Id, "رسید پرداخت"));
 
         foreach (var (kind, title) in new[]
         {
-            (DiagnosticKind.Refraction, "رسید پرداخت رفرکشن"),
-            (DiagnosticKind.Imaging, "رسید پرداخت تصویربرداری"),
+            (DiagnosticKind.Refraction, "رسید رفراکشن"),
+            (DiagnosticKind.Imaging, "رسید تصویربرداری"),
             (DiagnosticKind.Lab, "رسید لابراتوار"),
         })
         {
             var diagnosticInvoice = await AddInvoiceAsync(db, session, userId);
-            var test = new DiagnosticTest { Name = $"آزمایش {kind} {Unique("T")}", Kind = kind, IsActive = true };
+            var test = new DiagnosticTest { Name = $"آزمایش {kind} {Unique("T")}", Kind = kind, IsActive = false };
             db.DiagnosticTests.Add(test);
             await db.SaveChangesAsync();
+            seededTests.Add(test.Id);
             var order = new DiagnosticOrder { OrderNumber = Unique("LAB"), PatientId = patient.Id, TestId = test.Id, RequestedByUserId = userId, InvoiceId = diagnosticInvoice.Invoice.Id };
             db.DiagnosticOrders.Add(order);
             await db.SaveChangesAsync();
@@ -176,15 +206,16 @@ public sealed class PrintDocumentTests(ApiFixture api)
         var surgeryInvoice = await AddInvoiceAsync(db, session, userId);
         db.InvoiceItems.Add(NewLine(surgeryInvoice.Invoice.Id, "عملیات ثبت‌شده", 100, nameof(SurgeryCase), 987654321));
         await db.SaveChangesAsync();
-        result.Add((surgeryInvoice.Payment.Id, "رسید خدمات عملیات"));
+        result.Add((surgeryInvoice.Payment.Id, "رسید عملیات"));
         return result;
     }
 
-    private static async Task<(Invoice Invoice, Payment Payment)> AddInvoiceAsync(AppDbContext db, CashSession session, long userId)
+    private async Task<(Invoice Invoice, Payment Payment)> AddInvoiceAsync(AppDbContext db, CashSession session, long userId)
     {
         var invoice = NewInvoice(userId, 100, 100, 0, InvoiceStatus.Paid);
         db.Invoices.Add(invoice);
         await db.SaveChangesAsync();
+        seededInvoices.Add(invoice.Id);
         var payment = NewPayment(invoice.Id, session, 100, 0);
         db.Payments.Add(payment);
         await db.SaveChangesAsync();

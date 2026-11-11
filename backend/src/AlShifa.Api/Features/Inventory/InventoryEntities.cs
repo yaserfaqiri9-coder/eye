@@ -205,6 +205,18 @@ public class Sale
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+    /// <summary>
+    /// When the goods left the shelf. Until then a pharmacy sale is a bill: its batches are only reserved, nothing is dispensed
+    /// and no cost is booked. An optical sale is delivered when it is made.
+    /// </summary>
+    public DateTime? DeliveredAt { get; set; }
+
+    public long? DeliveredByUserId { get; set; }
+
+    /// <summary>Set only when the goods were handed over before the bill was paid, under the pharmacy.approve permission.</summary>
+    [MaxLength(300)]
+    public string? UnpaidDeliveryReason { get; set; }
+
     public int Version { get; set; }
 
     public List<SaleItem> Items { get; set; } = [];

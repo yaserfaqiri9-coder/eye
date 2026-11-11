@@ -180,6 +180,26 @@ function Expand-Backup([string]$Gpg, [string]$File, [string]$OutputDir, [string]
     Remove-Item $zip
 }
 
+# Puts a backup back into the live database. Only for an update whose migration failed: the application service must be stopped,
+# and the backup must be the one taken (and restore-tested) at the start of that update.
+function Restore-AlShifaDatabase([string]$Root, [string]$BackupFile, [string]$Database = 'alshifa') {
+    $mysql = Join-Path $Root 'mysql\bin\mysql.exe'
+    $port = [int](Select-String -Path (Join-Path $Root 'mysql\alshifa.ini') -Pattern '^port=(\d+)').Matches[0].Groups[1].Value
+    $work = Join-Path $Root "backup-staging\rollback-$([Guid]::NewGuid().ToString('N'))"
+    $cnf = Join-Path $Root "secrets\rollback-$([Guid]::NewGuid().ToString('N')).cnf"
+    try {
+        Expand-Backup (Find-Gpg) $BackupFile $work (Join-Path $Root 'secrets\backup-password.txt')
+        $dump = Join-Path $work 'db.sql'
+        if ((Get-Content $dump -Tail 1) -notmatch '^-- Dump completed') { throw 'The backup dump is incomplete.' }
+        Write-ClientCnf $cnf 'root' (Get-Content (Join-Path $Root 'secrets\mysql-root.txt') -Raw).Trim() $port
+        Invoke-Native $mysql @("--defaults-extra-file=$cnf", '-e', "DROP DATABASE IF EXISTS $Database; CREATE DATABASE $Database CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;") | Out-Null
+        Invoke-Native $mysql @("--defaults-extra-file=$cnf", '--default-character-set=utf8mb4', $Database, '-e', "source $($dump -replace '\\', '/')") | Out-Null
+    } finally {
+        Remove-Item $cnf -Force -ErrorAction SilentlyContinue
+        Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # C: and D: are often two partitions of one physical disk, so comparing letters alone would not protect anything.
 function Test-SameDisk([string]$First, [string]$Second) {
     $firstRoot = [IO.Path]::GetPathRoot($First)
@@ -189,21 +209,57 @@ function Test-SameDisk([string]$First, [string]$Second) {
     return (Get-Partition -DriveLetter $firstRoot[0]).DiskNumber -eq (Get-Partition -DriveLetter $secondRoot[0]).DiskNumber
 }
 
-# Keeps the newest backup always, every backup for KeepAllDays, then one per day until KeepDailyDays.
-function Remove-ExpiredBackups([string]$Folder, [int]$KeepAllDays, [int]$KeepDailyDays) {
-    $now = (Get-Date).ToUniversalTime()
-    $backups = Get-ChildItem $Folder -Filter 'alshifa-*.zip.gpg' | ForEach-Object {
-        $when = [DateTime]::ParseExact($_.Name.Substring(8, 16), 'yyyyMMddTHHmmssZ', $null, 'AssumeUniversal,AdjustToUniversal')
-        [pscustomobject]@{ File = $_; When = $when; Age = ($now - $when).TotalDays }
-    } | Sort-Object When -Descending
+# Backup file names carry their UTC time: alshifa-yyyyMMddTHHmmssZ.zip.gpg.
+function Get-BackupTime([string]$Name) {
+    return [DateTime]::ParseExact($Name.Substring(8, 16), 'yyyyMMddTHHmmssZ', $null, 'AssumeUniversal,AdjustToUniversal')
+}
 
-    $seenDays = @{}
-    foreach ($backup in ($backups | Select-Object -Skip 1)) {
-        if ($backup.Age -le $KeepAllDays) { continue }
-        $day = $backup.When.ToString('yyyyMMdd')
-        if ($backup.Age -le $KeepDailyDays -and -not $seenDays.ContainsKey($day)) { $seenDays[$day] = $true; continue }
-        Remove-Item $backup.File.FullName
+# Which backups to keep: the newest always, then the newest of each of the last $Daily days, $Weekly weeks and $Monthly months.
+# Used for the local folder and the copy on the online server alike.
+function Select-BackupsToKeep([string[]]$Names, [int]$Daily = 7, [int]$Weekly = 4, [int]$Monthly = 3) {
+    $sorted = @($Names | Where-Object { $_ -match '^alshifa-\d{8}T\d{6}Z\.zip\.gpg$' } | Sort-Object { Get-BackupTime $_ } -Descending)
+    $keep = [Collections.Generic.HashSet[string]]::new()
+    if ($sorted.Count -eq 0) { return @() }
+    [void]$keep.Add($sorted[0])
+    $calendar = [Globalization.CultureInfo]::InvariantCulture.Calendar
+    foreach ($rule in @(
+            @{ Count = $Daily; Key = { param($t) $t.ToString('yyyyMMdd') } },
+            @{ Count = $Weekly; Key = { param($t) "$($t.Year)-$($calendar.GetWeekOfYear($t, 'FirstFourDayWeek', 'Saturday'))" } },
+            @{ Count = $Monthly; Key = { param($t) $t.ToString('yyyyMM') } })) {
+        $seen = @{}
+        foreach ($name in $sorted) {
+            # Periods follow Kabul time, so "one per day" means one per hospital day.
+            $key = & $rule.Key ((Get-BackupTime $name).AddHours(4.5))
+            if ($seen.ContainsKey($key)) { continue }
+            if ($seen.Count -ge $rule.Count) { break }
+            $seen[$key] = $true
+            [void]$keep.Add($name)
+        }
     }
+    return @($keep)
+}
+
+function Remove-ExpiredBackups([string]$Folder) {
+    $files = @(Get-ChildItem $Folder -Filter 'alshifa-*.zip.gpg')
+    $keep = Select-BackupsToKeep ($files | ForEach-Object Name)
+    foreach ($file in $files) {
+        if ($keep -notcontains $file.Name) { Remove-Item $file.FullName }
+    }
+}
+
+# 02:00 in Kabul, in this computer's own clock. Afghanistan has no daylight saving, so the time never moves.
+function Get-NightlyBackupTime {
+    $kabul = [TimeZoneInfo]::FindSystemTimeZoneById('Afghanistan Standard Time')
+    $twoAm = [DateTime]::SpecifyKind([DateTime]::Today.AddHours(2), 'Unspecified')
+    return [TimeZoneInfo]::ConvertTimeToUtc($twoAm, $kabul).ToLocalTime()
+}
+
+# Once a night, and soon after start-up if the laptop was off at 02:00. The "backup now" event trigger is kept.
+function Set-NightlyBackupSchedule([string]$TaskName = 'AlShifa Backup') {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    $events = @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskEventTrigger' })
+    $nightly = New-ScheduledTaskTrigger -Daily -At (Get-NightlyBackupTime)
+    Set-ScheduledTask -TaskName $TaskName -Trigger (@($nightly) + $events) | Out-Null
 }
 
 # Lets Settings > Backup start a backup now without giving the application any right to run programs:

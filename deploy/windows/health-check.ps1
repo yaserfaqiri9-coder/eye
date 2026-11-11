@@ -52,9 +52,8 @@ try {
     Report 'HTTPS certificate' $false 'could not read the certificate (run as Administrator)'
 }
 
-$tailscale = Get-Service Tailscale -ErrorAction SilentlyContinue
-"INFO   Remote access          Tailscale service: $(if ($tailscale) { $tailscale.Status } else { 'not installed' }) (never needed for hospital work)"
-$tunnel = Get-Service Cloudflared -ErrorAction SilentlyContinue
-"INFO   Online reports         Cloudflare Tunnel service: $(if ($tunnel) { "$($tunnel.Status), $($tunnel.StartType)" } else { 'not installed' }) (never needed for hospital work; stop with remote-access.ps1 -Disable)"
+$appConfig = Get-Content (Join-Path $Root 'app\appsettings.Production.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
+"INFO   Online copy            $(if ($appConfig.Sync.Url) { "sync to $($appConfig.Sync.Url) (status in Settings > Backup; never needed for hospital work)" } else { 'not set up (online.ps1)' })"
+if (Get-Service Cloudflared -ErrorAction SilentlyContinue) { "INFO   Old remote access      a Cloudflared service is installed; online.ps1 removes the one this system set up" }
 
 if ($problems) { exit 1 }

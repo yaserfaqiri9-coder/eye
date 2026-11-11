@@ -74,9 +74,9 @@ test('stock is bought, sold at the pharmacy, paid at the cashier and reconciled 
   await pick(pharmacy, pharmacy.locator('body'), 'جنس', drug)
   await pharmacy.getByLabel('مقدار ردیف 1').fill('2')
   await expect(pharmacy.locator('form.xr-card')).toContainText('۵۰۰')
-  await pharmacy.getByRole('button', { name: 'ثبت فروش' }).click()
+  await pharmacy.getByRole('button', { name: 'ایجاد بل و ارسال به صندوق' }).click()
   const saleDone = pharmacy.locator('.alert-success')
-  await expect(saleDone).toContainText('در صندوق قابل پرداخت است')
+  await expect(saleDone).toContainText('در صندوق مرکزی پرداخت کند')
   const invoiceNumber = (await saleDone.locator('.ltr-num').nth(1).innerText()).trim()
   await pharmacy.getByRole('link', { name: 'بازگشت به دواخانه' }).click()
 
@@ -84,7 +84,7 @@ test('stock is bought, sold at the pharmacy, paid at the cashier and reconciled 
   await pharmacy.getByRole('link', { name: 'فروش مستقل' }).click()
   await pick(pharmacy, pharmacy.locator('body'), 'جنس', drug)
   await pharmacy.getByLabel('مقدار ردیف 1').fill('4')
-  await pharmacy.getByRole('button', { name: 'ثبت فروش' }).click()
+  await pharmacy.getByRole('button', { name: 'ایجاد بل و ارسال به صندوق' }).click()
   await expect(pharmacy.getByRole('alert')).toContainText('موجودی این جنس کافی نیست')
   // The typed sale is still open, so leaving asks first.
   const asked: string[] = []

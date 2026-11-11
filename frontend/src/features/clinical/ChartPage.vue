@@ -10,7 +10,7 @@ import UiComboBox, { type ComboOption } from '@/components/UiComboBox.vue'
 import UiModal from '@/components/UiModal.vue'
 import TransferDoctorModal from '@/features/visits/TransferDoctorModal.vue'
 import { useAuthStore } from '@/stores/auth'
-import { formatDate, formatDateTime } from '@/utils/date'
+import { formatDate, formatDateTime, todayIso } from '@/utils/date'
 import { money } from '@/utils/money'
 import LensPicker from './LensPicker.vue'
 import PatientBanner from './PatientBanner.vue'
@@ -323,19 +323,20 @@ async function submitAmend() {
   }
 }
 
-const rx = reactive({ editing: null as Prescription | null, reason: '', notes: '', items: [{ drugName: '', dose: '', route: '', duration: '', instructions: '', quantity: 1 }], key: newIdempotencyKey(), saving: false })
+const rx = reactive({ editing: null as Prescription | null, reason: '', notes: '', validUntil: null as string | null, items: [{ drugName: '', dose: '', route: '', duration: '', instructions: '', quantity: 1 }], key: newIdempotencyKey(), saving: false })
 
 function editRx(p: Prescription) {
   Object.assign(rx, {
     editing: p,
     reason: '',
     notes: p.notes ?? '',
+    validUntil: p.validUntil ?? null,
     items: p.items.map((i) => ({ drugName: i.drugName, dose: i.dose ?? '', route: i.route ?? '', duration: i.duration ?? '', instructions: i.instructions ?? '', quantity: i.quantity })),
   })
 }
 
 function clearRx() {
-  Object.assign(rx, { editing: null, reason: '', notes: '', items: [{ drugName: '', dose: '', route: '', duration: '', instructions: '', quantity: 1 }], key: newIdempotencyKey() })
+  Object.assign(rx, { editing: null, reason: '', notes: '', validUntil: null, items: [{ drugName: '', dose: '', route: '', duration: '', instructions: '', quantity: 1 }], key: newIdempotencyKey() })
 }
 
 /** Once the exam is final or the visit closed, the server asks for a reason on any change. */
@@ -349,13 +350,13 @@ async function submitRx() {
   error.value = ''
   try {
     if (rx.editing) {
-      await api(`/prescriptions/${rx.editing.id}`, { method: 'PUT', body: { notes: rx.notes, items: rx.items, version: rx.editing.version, reason: rx.reason || undefined } })
+      await api(`/prescriptions/${rx.editing.id}`, { method: 'PUT', body: { notes: rx.notes, items: rx.items, version: rx.editing.version, reason: rx.reason || undefined, validUntil: rx.validUntil } })
       notice.value = 'نسخه ویرایش شد.'
     } else {
       await api('/prescriptions', {
         method: 'POST',
         idempotencyKey: rx.key,
-        body: { visitId: Number(props.visitId), notes: rx.notes, items: rx.items },
+        body: { visitId: Number(props.visitId), notes: rx.notes, items: rx.items, validUntil: rx.validUntil },
       })
       notice.value = 'نسخه ثبت و برای دواخانه ارسال شد.'
     }
@@ -368,6 +369,27 @@ async function submitRx() {
     rx.saving = false
   }
 }
+
+/** The doctor answers a pharmacy's request for review, or renews a prescription whose validity ran out. */
+const reapprove = reactive({ rx: null as Prescription | null, validUntil: null as string | null, note: '', saving: false, error: '' })
+
+async function submitReapprove() {
+  reapprove.saving = true
+  reapprove.error = ''
+  try {
+    await api(`/prescriptions/${reapprove.rx!.id}/reapprove`, { method: 'POST', body: { validUntil: reapprove.validUntil, note: reapprove.note, version: reapprove.rx!.version } })
+    reapprove.rx = null
+    notice.value = 'نسخه دوباره تأیید شد و دواخانه می‌تواند آن را تحویل دهد.'
+    await load()
+  } catch (cause) {
+    reapprove.error = errorMessage(cause)
+  } finally {
+    reapprove.saving = false
+  }
+}
+
+const rxNeedsDoctor = (p: Prescription) =>
+  ['Issued', 'PartiallyDispensed'].includes(p.status) && (p.pharmacyStatus === 'NeedsDoctorReview' || (!!p.validUntil && p.validUntil < todayIso()))
 
 const blankRow = (): RxRow => ({ sphere: '', cylinder: '', axis: '', add: '', va: '' })
 const optical = reactive({ editing: null as OpticalRx | null, reason: '', od: blankRow(), os: blankRow(), pd: '', uvaOd: '', uvaOs: '', lens: [] as string[], notes: '', key: newIdempotencyKey(), saving: false })
@@ -871,6 +893,9 @@ watch(() => props.visitId, () => {
           <div class="issued__head">
             <strong class="ltr-num">{{ p.rxNumber }}</strong>
             <span class="xr-badge xr-badge--primary">{{ rxStatusLabels[p.status] }}</span>
+            <span v-if="p.validUntil" class="small">معتبر تا {{ formatDate(p.validUntil) }}</span>
+            <span v-if="rxNeedsDoctor(p)" class="xr-badge xr-badge--orange">نیازمند تأیید دوباره داکتر</span>
+            <button v-if="rxNeedsDoctor(p) && auth.can('prescriptions.edit')" type="button" class="btn btn-soft btn-sm" @click="Object.assign(reapprove, { rx: p, validUntil: null, note: '', error: '' })">تأیید دوباره</button>
             <RouterLink v-if="auth.can('prescriptions.print')" :to="`/print/rx/${p.id}`" target="_blank" class="btn btn-soft btn-sm">چاپ</RouterLink>
             <button v-if="p.status === 'Issued' && auth.can('prescriptions.edit')" type="button" class="btn btn-soft btn-sm" @click="editRx(p)">ویرایش</button>
             <button v-if="p.status === 'Issued' && auth.can('prescriptions.cancel')" type="button" class="btn btn-soft-danger btn-sm" @click="cancelRx(p)">لغو نسخه</button>
@@ -903,6 +928,10 @@ watch(() => props.visitId, () => {
             <button type="button" class="btn btn-soft btn-sm mb-3" @click="rx.items.push({ drugName: '', dose: '', route: '', duration: '', instructions: '', quantity: 1 })">افزودن دوا</button>
             <label class="form-label d-block" for="rx-notes">توضیحات نسخه</label>
             <input id="rx-notes" v-model="rx.notes" class="form-control mb-3" maxlength="1000" />
+            <div class="mb-3 rx-valid">
+              <ShamsiDateInput v-model="rx.validUntil" label="اعتبار نسخه تا (اختیاری)" :min="todayIso()" />
+              <small class="form-hint">خالی یعنی داکتر محدودیتی تعیین نکرده است. پس از این تاریخ دواخانه بدون تأیید دوباره داکتر تحویل نمی‌دهد.</small>
+            </div>
             <template v-if="rx.editing && needsAmendReason">
               <label class="form-label d-block" for="rx-reason">دلیل اصلاح</label>
               <input id="rx-reason" v-model="rx.reason" class="form-control mb-3" minlength="3" maxlength="500" required />
@@ -1115,6 +1144,19 @@ watch(() => props.visitId, () => {
   <UiModal v-if="preExamOpen && currentChartVisit && chart?.preExam" title="معاینه ابتدایی مریض" size="lg" @close="preExamOpen = false">
     <div class="summary__document-close"><button type="button" class="btn btn-soft btn-sm" data-modal-cancel>بستن سند</button></div>
     <PreExamDocument :pre-exam="chart.preExam" :visit="chart.visit" />
+  </UiModal>
+
+  <UiModal v-if="reapprove.rx" :title="`تأیید دوباره نسخه ${reapprove.rx.rxNumber}`" @close="reapprove.rx = null">
+    <form @submit.prevent="submitReapprove">
+      <div class="mb-3"><ShamsiDateInput v-model="reapprove.validUntil" label="اعتبار تازه تا (اختیاری)" :min="todayIso()" /></div>
+      <label class="form-label" for="reapprove-note">توضیح داکتر</label>
+      <input id="reapprove-note" v-model="reapprove.note" class="form-control mb-3" minlength="3" maxlength="300" required />
+      <div v-if="reapprove.error" class="alert alert-danger" role="alert">{{ reapprove.error }}</div>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-primary" :disabled="reapprove.saving">تأیید</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
+    </form>
   </UiModal>
 
   <UiModal v-if="noteEdit.order" :title="`توضیح ${noteEdit.order.testName}`" @close="noteEdit.order = null">

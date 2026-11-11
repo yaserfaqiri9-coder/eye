@@ -149,7 +149,7 @@ onMounted(() => {
     </template>
 
     <div v-if="done" class="alert alert-success mb-0" role="status">
-      فروش <span class="ltr-num">{{ done.saleNumber }}</span> ثبت شد. فاکتور <span class="ltr-num">{{ done.invoiceNumber }}</span> در صندوق قابل پرداخت است.
+      بل <span class="ltr-num">{{ done.saleNumber }}</span> ثبت و موجودی آن نگه داشته شد. مریض فاکتور <span class="ltr-num">{{ done.invoiceNumber }}</span> را در صندوق مرکزی پرداخت کند؛ پس از پرداخت، دوا از بخش «آماده تحویل» دواخانه تحویل داده می‌شود.
       <div class="xr-form-actions mt-2">
         <RouterLink v-if="auth.can('pharmacy.print')" :to="`/print/sale/${done.id}`" target="_blank" class="btn btn-soft btn-sm">چاپ فاکتور</RouterLink>
         <button v-if="!rx" type="button" class="btn btn-soft btn-sm" @click="reset">فروش جدید</button>
@@ -185,7 +185,7 @@ onMounted(() => {
     </fieldset>
 
     <template #actions>
-      <button type="submit" class="btn btn-primary" :disabled="saving || loading || (!!correctId && !correcting)">{{ correctId ? 'برگشت و ثبت فروش تازه' : 'ثبت فروش' }}</button>
+      <button type="submit" class="btn btn-primary" :disabled="saving || loading || (!!correctId && !correcting)">{{ correctId ? 'لغو و ثبت بل تازه' : 'ایجاد بل و ارسال به صندوق' }}</button>
       <RouterLink :to="{ name: 'pharmacy' }" class="btn btn-soft-danger">انصراف</RouterLink>
     </template>
   </UiFormPage>

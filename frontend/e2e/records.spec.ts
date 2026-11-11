@@ -225,15 +225,17 @@ test('an expense, a sale and an invoice are corrected in place, and the books st
   await call(inventory, 'POST', '/inventory/purchases', { supplierName: 'تأمین', locationCode: 'pharmacy', items: [{ productId: product.id, quantity: 10, unitCost: 5 }] })
   const sale = await call<{ saleNumber: string }>(pharmacist, 'POST', '/pharmacy/sales', { items: [{ productId: product.id, quantity: 4 }] })
   await pharmacist.goto('/pharmacy')
+  await pharmacist.getByRole('tab', { name: 'سوابق فروش' }).click()
   await pharmacist.getByRole('row', { name: new RegExp(sale.saleNumber) }).getByRole('link', { name: 'اصلاح' }).click()
   await expect(pharmacist.getByRole('heading', { name: new RegExp(`اصلاح فروش ${sale.saleNumber}`) })).toBeVisible()
   await expect(pharmacist.getByText(drug)).toBeVisible()
   await pharmacist.getByLabel('مقدار ردیف 1').fill('2')
   await pharmacist.getByLabel('دلیل اصلاح').fill('مقدار اشتباه بود')
-  await pharmacist.getByRole('button', { name: 'برگشت و ثبت فروش تازه' }).click()
-  await expect(pharmacist.getByRole('status').filter({ hasText: 'ثبت شد' })).toBeVisible()
+  await pharmacist.getByRole('button', { name: 'لغو و ثبت بل تازه' }).click()
+  await expect(pharmacist.getByRole('status').filter({ hasText: 'ثبت و موجودی' })).toBeVisible()
   const stock = await call<{ items: { onHand: number }[] }>(inventory, 'GET', `/inventory/products?q=${encodeURIComponent(drug)}`)
-  expect(stock.items[0].onHand).toBe(8)
+  // A bill only holds stock; it leaves the shelf when the paid bill is handed over.
+  expect(stock.items[0].onHand).toBe(10)
 
   // Standalone invoice, from the cashier's list.
   const code = `S${stamp}`

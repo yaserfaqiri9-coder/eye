@@ -45,6 +45,8 @@ export interface Refraction {
   completedAt: string | null
   version: number
   lines: RefractionLine[]
+  /** The optical prescription made from this refraction's final values, while it is not cancelled. */
+  opticalRxNumber?: string | null
 }
 
 export const refractionStageLabels: Record<RefractionStage, string> = {
@@ -103,6 +105,10 @@ export interface Prescription {
   createdAt: string
   version: number
   items: RxItem[]
+  /** What the patient decided at the pharmacy; separate from the clinical status. */
+  pharmacyStatus: string
+  /** Last day the pharmacy may dispense without the doctor; null when the doctor set no limit. */
+  validUntil: string | null
 }
 
 export interface OpticalRx {
@@ -125,6 +131,8 @@ export interface OpticalRx {
   isCancelled: boolean
   createdAt: string
   version: number
+  /** Sent by the refraction desk rather than written by the doctor. */
+  fromRefraction?: boolean
 }
 
 export interface DiagnosticOrder {
@@ -249,6 +257,20 @@ export const rxStatusLabels: Record<string, string> = {
   PartiallyDispensed: 'تحویل ناقص',
   Dispensed: 'تحویل‌شده',
   Cancelled: 'لغو شده',
+}
+
+/** A prescription's place at the pharmacy: the patient's decision, or what its bills and deliveries show. */
+export const rxStageLabels: Record<string, string> = {
+  AwaitingVisit: 'ثبت‌شده، در انتظار مراجعه',
+  AwaitingDecision: 'مراجعه کرده، در انتظار تصمیم خرید',
+  BuyingOutside: 'خرید از بیرون',
+  NotNow: 'فعلاً بدون خرید',
+  NeedsDoctorReview: 'نیازمند تأیید دوباره داکتر',
+  AwaitingPayment: 'منتظر پرداخت در صندوق',
+  ReadyToDeliver: 'پرداخت شده، آماده تحویل',
+  Partial: 'خرید قسمتی',
+  Delivered: 'تحویل کامل',
+  Cancelled: 'لغو شده توسط داکتر',
 }
 
 export const diagnosticStatusLabels: Record<string, string> = {

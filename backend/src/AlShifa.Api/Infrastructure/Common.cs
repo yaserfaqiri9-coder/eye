@@ -94,9 +94,17 @@ public sealed class CurrentUser(IHttpContextAccessor accessor)
 }
 
 /// <summary>Adds audit rows to the current unit of work so they commit atomically with the change they describe.</summary>
-public sealed class AuditService(AppDbContext db, CurrentUser user)
+public sealed class AuditService(AppDbContext db, CurrentUser user, Features.Sync.SyncSwitch sync, ILogger<AuditService> logger)
 {
-    public void Add(string action, string entity, string? entityId, string? details = null, long? userId = null) =>
+    public void Add(string action, string entity, string? entityId, string? details = null, long? userId = null)
+    {
+        // The online copy's audit table holds the hospital's rows and is read-only there. Its own events go to the server log.
+        if (sync.ReadOnly)
+        {
+            logger.LogWarning("Online audit: {Action} {Entity} {EntityId} by user {UserId} from {Address}. {Details}", action, entity, entityId, userId ?? user.IdOrNull, user.IpAddress, details);
+            return;
+        }
+
         db.AuditLogs.Add(new AuditLog
         {
             UserId = userId ?? user.IdOrNull,
@@ -106,6 +114,7 @@ public sealed class AuditService(AppDbContext db, CurrentUser user)
             Details = details,
             IpAddress = user.IpAddress,
         });
+    }
 }
 
 public sealed class DatabaseHealthCheck(AppDbContext db) : IHealthCheck

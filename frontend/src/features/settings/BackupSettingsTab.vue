@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, errorMessage } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
 import { faDigits, formatDateTime } from '@/utils/date'
+import SyncStatusPanel from './SyncStatusPanel.vue'
 
 interface BackupFile {
   name: string
@@ -22,6 +23,9 @@ interface BackupStatus {
   lastSizeBytes: number | null
   lastDurationSeconds: number | null
   backups: BackupFile[]
+  offsiteTarget: string | null
+  offsiteLastSuccessAt: string | null
+  offsiteError: string | null
 }
 
 // Fast while a backup is running or was just requested, so the result shows up without reloading the page.
@@ -91,6 +95,8 @@ onBeforeUnmount(() => clearTimeout(timer))
 </script>
 
 <template>
+  <SyncStatusPanel />
+  <h3 class="h6 mb-2">پشتیبان‌گیری</h3>
   <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
   <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
   <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
@@ -101,8 +107,8 @@ onBeforeUnmount(() => clearTimeout(timer))
 
   <template v-else-if="status">
     <p class="form-hint">
-      سیستم هر ۴ ساعت خودکار از کل دیتابیس، فایل‌های بارگذاری‌شده و کلیدهای ورود پشتیبان می‌گیرد. فایل پشتیبان رمزگذاری می‌شود و پس از نوشتن روی مقصد باز و بررسی می‌شود.
-      همه پشتیبان‌های ۷ روز اخیر و پس از آن یکی در هر روز تا ۳۵ روز نگه داشته می‌شوند.
+      سیستم هر شب ساعت ۲ بامداد (وقت کابل) خودکار از کل دیتابیس، فایل‌های بارگذاری‌شده و کلیدهای ورود پشتیبان فشرده می‌گیرد. فایل پشتیبان رمزگذاری می‌شود و پس از نوشتن روی مقصد باز و بررسی می‌شود.
+      ۷ پشتیبان روزانه، ۴ هفتگی و ۳ ماهانه نگه داشته می‌شوند. اگر سرور آنلاین تنظیم شده باشد، یک نسخه رمزگذاری‌شده هم به آن فرستاده می‌شود.
     </p>
 
     <div v-if="running" class="alert alert-info" role="status">
@@ -124,6 +130,12 @@ onBeforeUnmount(() => clearTimeout(timer))
         <strong dir="ltr">{{ status.destination ?? '—' }}</strong>
         <div v-if="status.optionalDestination" class="xr-meta" dir="ltr">{{ status.optionalDestination }}</div>
       </div>
+    </div>
+
+    <div v-if="status.offsiteTarget" class="mb-3">
+      <div class="xr-meta">نسخه بیرون از شفاخانه</div>
+      <strong>{{ formatDateTime(status.offsiteLastSuccessAt) }}</strong>
+      <span v-if="status.offsiteError" class="text-danger" dir="auto"> — {{ status.offsiteError }}</span>
     </div>
 
     <button v-if="auth.can('settings.edit')" type="button" class="btn btn-primary mb-3" :disabled="requesting || running" @click="runNow">

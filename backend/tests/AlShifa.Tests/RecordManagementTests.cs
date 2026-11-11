@@ -379,14 +379,19 @@ public sealed class RecordManagementTests(ApiFixture api)
         var product = await NewProduct(inventory, 10, ProductKind.Drug);
         await Buy(inventory, product, 10, 5, "pharmacy");
         var sale = (await (await pharmacist.SendAsync(ApiFixture.Keyed("/api/pharmacy/sales", new CreateSaleRequest(null, null, [new SaleLineInput(product, 4)])))).Content.ReadFromJsonAsync<SaleRow>())!;
-        Assert.Equal(6, await OnHand(product));
+
+        // An unpaid bill only reserves; nothing has left the shelf.
+        Assert.Equal(10, await OnHand(product));
 
         var detail = (await pharmacist.GetFromJsonAsync<SaleDetail>($"/api/pharmacy/sales/{sale.Id}"))!;
         Assert.Equal(4, detail.Items.Single().Quantity);
 
         var corrected = await pharmacist.PostAsJsonAsync($"/api/pharmacy/sales/{sale.Id}/correct", new CorrectSaleRequest([new SaleLineInput(product, 2)], "مقدار اشتباه بود", detail.Version));
         Assert.Equal(HttpStatusCode.OK, corrected.StatusCode);
-        Assert.Equal(20, (await corrected.Content.ReadFromJsonAsync<SaleRow>())!.Total);
+        var replacement = (await corrected.Content.ReadFromJsonAsync<SaleRow>())!;
+        Assert.Equal(20, replacement.Total);
+        Assert.Equal(10, await OnHand(product));
+        await api.PayAndDeliverAsync(pharmacist, replacement.Id);
         Assert.Equal(8, await OnHand(product));
         Assert.True((await InDb(db => db.Sales.SingleAsync(s => s.Id == sale.Id))).IsReturned);
         await AssertBooksBalance(accountant);
@@ -477,6 +482,7 @@ public sealed class RecordManagementTests(ApiFixture api)
         var product = await NewProduct(inventory, 10, ProductKind.Drug);
         await Buy(inventory, product, 5, 5, "pharmacy");
         var item = edited.Items.Single();
+        await InDb(db => db.Products.Where(p => p.Id == product).ExecuteUpdateAsync(u => u.SetProperty(p => p.Name, item.DrugName)));
         Assert.Equal(HttpStatusCode.Created, (await pharmacist.SendAsync(ApiFixture.Keyed("/api/pharmacy/sales", new CreateSaleRequest(visit.PatientId, rx.Id, [new SaleLineInput(product, 1, item.Id)])))).StatusCode);
         var dispensed = (await doctor.GetFromJsonAsync<ChartDto>($"/api/consultations/{visit.Id}/chart", JsonOptions))!.Prescriptions.Single();
         Assert.Equal(HttpStatusCode.Conflict, (await doctor.PutAsJsonAsync($"/api/prescriptions/{rx.Id}", new EditPrescriptionRequest(null, [Drug("دیگر")], dispensed.Version, "دلیل"))).StatusCode);

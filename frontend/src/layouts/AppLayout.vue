@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/api/http'
 import { warmLookups } from '@/api/lookups'
@@ -24,6 +24,19 @@ const sidebarCollapsed = ref(sidebarMini.value)
 const mounted = ref(false)
 const backupProblem = ref<{ lastSuccessAt: string | null } | null>(null)
 let backupTimer: ReturnType<typeof setInterval> | undefined
+
+// The online copy shows how fresh its data is, since it only changes when the hospital server sends.
+const readOnly = computed(() => auth.user?.readOnly === true)
+const mirrorUpdatedAt = ref<string | null>(null)
+let mirrorTimer: ReturnType<typeof setInterval> | undefined
+
+async function checkMirror() {
+  try {
+    mirrorUpdatedAt.value = (await api<{ lastSuccessAt: string | null }>('/sync/status')).lastSuccessAt
+  } catch {
+    // Shown again on the next check.
+  }
+}
 
 async function checkBackup() {
   try {
@@ -69,7 +82,10 @@ onMounted(() => {
   connectRealtime()
   // Give the first connection a moment before warning about it.
   setTimeout(() => (mounted.value = true), 3000)
-  if (auth.can('settings.view')) {
+  if (readOnly.value) {
+    checkMirror()
+    mirrorTimer = setInterval(checkMirror, 60_000)
+  } else if (auth.can('settings.view')) {
     checkBackup()
     backupTimer = setInterval(checkBackup, BACKUP_CHECK_MS)
   }
@@ -81,6 +97,7 @@ onBeforeUnmount(() => {
   clearTimeout(progressTimer)
   disconnectRealtime()
   clearInterval(backupTimer)
+  clearInterval(mirrorTimer)
 })
 </script>
 
@@ -97,6 +114,11 @@ onBeforeUnmount(() => {
     <div class="layout__main">
       <AppHeader @toggle-sidebar="sidebarOpen = !sidebarOpen" />
       <main class="layout__content">
+        <div v-if="readOnly" class="alert alert-info" role="status">
+          <i class="ri-eye-line" aria-hidden="true"></i>
+          نسخه آنلاین فقط برای مشاهده است.
+          {{ mirrorUpdatedAt ? `اطلاعات تا ${formatDateTime(mirrorUpdatedAt)} به‌روز است.` : 'هنوز اطلاعاتی از سرور شفاخانه نرسیده است.' }}
+        </div>
         <div v-if="mounted && !liveConnected" class="alert alert-warning" role="status">
           اتصال زنده قطع است. اطلاعات این صفحه ممکن است تازه نباشد؛ سیستم خودکار دوباره وصل می‌شود.
         </div>

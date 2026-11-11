@@ -423,6 +423,11 @@ namespace AlShifa.Api.Infrastructure.Migrations
                     b.Property<long>("PatientId")
                         .HasColumnType("bigint");
 
+                    b.Property<string>("PharmacyStatus")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("varchar(30)");
+
                     b.Property<string>("RxNumber")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -433,6 +438,9 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("varchar(30)");
 
+                    b.Property<DateTime?>("ValidUntil")
+                        .HasColumnType("date");
+
                     b.Property<int>("Version")
                         .IsConcurrencyToken()
                         .HasColumnType("int");
@@ -442,12 +450,12 @@ namespace AlShifa.Api.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("PatientId");
-
                     b.HasIndex("RxNumber")
                         .IsUnique();
 
                     b.HasIndex("VisitId");
+
+                    b.HasIndex("PatientId", "Id");
 
                     b.HasIndex("Status", "Id");
 
@@ -552,6 +560,9 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .HasMaxLength(10)
                         .HasColumnType("varchar(10)");
 
+                    b.Property<long?>("RefractionId")
+                        .HasColumnType("bigint");
+
                     b.Property<string>("RxNumber")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -575,6 +586,8 @@ namespace AlShifa.Api.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("PatientId");
+
+                    b.HasIndex("RefractionId");
 
                     b.HasIndex("RxNumber")
                         .IsUnique();
@@ -644,6 +657,37 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("PreExaminations");
+                });
+
+            modelBuilder.Entity("AlShifa.Api.Features.Clinical.PrescriptionPharmacyEvent", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(300)
+                        .HasColumnType("varchar(300)");
+
+                    b.Property<long>("PrescriptionId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("varchar(30)");
+
+                    b.Property<long>("UserId")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PrescriptionId", "Id");
+
+                    b.ToTable("PrescriptionPharmacyEvents");
                 });
 
             modelBuilder.Entity("AlShifa.Api.Features.Clinical.Refraction", b =>
@@ -1624,6 +1668,12 @@ namespace AlShifa.Api.Infrastructure.Migrations
                     b.Property<long>("CreatedByUserId")
                         .HasColumnType("bigint");
 
+                    b.Property<DateTime?>("DeliveredAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<long?>("DeliveredByUserId")
+                        .HasColumnType("bigint");
+
                     b.Property<long>("InvoiceId")
                         .HasColumnType("bigint");
 
@@ -1646,6 +1696,10 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("varchar(20)");
 
+                    b.Property<string>("UnpaidDeliveryReason")
+                        .HasMaxLength(300)
+                        .HasColumnType("varchar(300)");
+
                     b.Property<int>("Version")
                         .IsConcurrencyToken()
                         .HasColumnType("int");
@@ -1662,6 +1716,8 @@ namespace AlShifa.Api.Infrastructure.Migrations
 
                     b.HasIndex("SaleNumber")
                         .IsUnique();
+
+                    b.HasIndex("Kind", "DeliveredAt");
 
                     b.ToTable("Sales");
                 });
@@ -1996,6 +2052,48 @@ namespace AlShifa.Api.Infrastructure.Migrations
                     b.HasIndex("OwnerType", "OwnerId");
 
                     b.ToTable("Attachments");
+                });
+
+            modelBuilder.Entity("AlShifa.Api.Features.Sync.SyncChange", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("KeyJson")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("varchar(300)");
+
+                    b.Property<string>("TableName")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("SyncChanges");
+                });
+
+            modelBuilder.Entity("AlShifa.Api.Features.Sync.SyncState", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(40)
+                        .HasColumnType("varchar(40)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Value")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("SyncStates");
                 });
 
             modelBuilder.Entity("AlShifa.Api.Features.Users.AppRole", b =>
@@ -2810,6 +2908,11 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("AlShifa.Api.Features.Clinical.Refraction", null)
+                        .WithMany()
+                        .HasForeignKey("RefractionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("AlShifa.Api.Features.Visits.Visit", "Visit")
                         .WithMany()
                         .HasForeignKey("VisitId")
@@ -2830,6 +2933,15 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Visit");
+                });
+
+            modelBuilder.Entity("AlShifa.Api.Features.Clinical.PrescriptionPharmacyEvent", b =>
+                {
+                    b.HasOne("AlShifa.Api.Features.Clinical.MedicalPrescription", null)
+                        .WithMany()
+                        .HasForeignKey("PrescriptionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("AlShifa.Api.Features.Clinical.Refraction", b =>

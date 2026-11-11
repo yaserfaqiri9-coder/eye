@@ -65,7 +65,8 @@ test('admin configures the hospital, a charged visit prints a slip and an A4 inv
   await expect(reception).toHaveURL(/\/patients\/\d+$/)
   await admitFromRecord(reception, 'داکتر', serviceName)
 
-  // Admission slip carries hospital details and the queue, in Dari, with no controls in print mode.
+  // Admission slip carries the hospital name and the queue, in Dari, with no controls in print mode. The approved
+  // print design has no footer, so the configured footer text stays off the paper.
   await reception.goto('/reception')
   await reception.getByRole('tab', { name: /در جریان/ }).click()
   const row = reception.getByRole('row', { name: new RegExp(firstName) })
@@ -73,7 +74,7 @@ test('admin configures the hospital, a charged visit prints a slip and an A4 inv
   await expect(slip.getByRole('heading', { name: 'رسید پذیرش' })).toBeVisible()
   await expect(slip.getByText(hospitalName)).toBeVisible()
   await expect(slip.getByText(firstName)).toBeVisible()
-  await expect(slip.getByText('پاورقی آزمایشی')).toBeVisible()
+  await expect(slip.getByText('پاورقی آزمایشی')).toHaveCount(0)
   await slip.emulateMedia({ media: 'print' })
   await expect(slip.getByRole('button', { name: 'چاپ' })).toBeHidden()
 

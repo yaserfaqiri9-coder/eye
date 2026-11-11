@@ -255,7 +255,8 @@ public sealed class ConcurrencyTests(ApiFixture api)
     private async Task<(long PatientId, long RxId, long ItemId, int ProductId)> PrescriptionInStockAsync(decimal prescribed)
     {
         var manager = await UserAsync(Roles.Inventory);
-        var productResponse = await manager.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest(Name("D"), "جنس " + Name("n"), ProductKind.Drug, null, "عدد", 0, 100));
+        var drug = "جنس " + Name("n");
+        var productResponse = await manager.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest(Name("D"), drug, ProductKind.Drug, null, "عدد", 0, 100));
         var productId = JsonDocument.Parse(await productResponse.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
         Assert.Equal(HttpStatusCode.Created, (await manager.SendAsync(Post("/api/inventory/purchases", new CreatePurchaseRequest("تأمین‌کننده", "pharmacy",
             [new PurchaseLineInput(productId, Name("L"), DateOnly.FromDateTime(DateTime.UtcNow.AddYears(1)), 100, 40)])))).StatusCode);
@@ -265,7 +266,7 @@ public sealed class ConcurrencyTests(ApiFixture api)
         var departments = await reception.GetFromJsonAsync<List<LookupItem>>("/api/lookups/departments");
         var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, (int)departments!.Single(d => d.Name == "داکتر").Id, null, null, null, await api.PaidTokenAsync()))));
         var doctor = await UserAsync(Roles.Doctor);
-        var rx = await Created<PrescriptionDto>(await doctor.SendAsync(Post("/api/prescriptions", new CreatePrescriptionRequest(visit.Id, null, [new RxItemInput("دوا", null, null, null, null, prescribed)]))));
+        var rx = await Created<PrescriptionDto>(await doctor.SendAsync(Post("/api/prescriptions", new CreatePrescriptionRequest(visit.Id, null, [new RxItemInput(drug, null, null, null, null, prescribed)]))));
 
         using var scope = api.Services.CreateScope();
         var itemId = (await scope.ServiceProvider.GetRequiredService<AppDbContext>().Set<MedicalPrescriptionItem>().AsNoTracking().SingleAsync(i => i.PrescriptionId == rx.Id)).Id;
@@ -279,7 +280,13 @@ public sealed class ConcurrencyTests(ApiFixture api)
         var pharmacists = await Task.WhenAll(Enumerable.Range(0, Racers).Select(_ => UserAsync(Roles.Pharmacist)));
         var responses = await Task.WhenAll(pharmacists.Select(p => p.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(rx.PatientId, rx.RxId, [new SaleLineInput(rx.ProductId, 2, rx.ItemId)])))));
 
-        Assert.Equal(1, responses.Count(r => r.StatusCode == HttpStatusCode.Created));
+        // A bill not yet paid already holds the prescribed amount, so no second bill can be made for it.
+        var won = Assert.Single(responses, r => r.StatusCode == HttpStatusCode.Created);
+        Assert.Equal(0, await api.InDbAsync(db => db.Set<MedicalPrescriptionItem>().Where(i => i.Id == rx.ItemId).Select(i => i.DispensedQuantity).SingleAsync()));
+        Assert.Equal(100, await api.InDbAsync(db => db.StockBatches.Where(b => b.ProductId == rx.ProductId).SumAsync(b => b.Quantity)));
+
+        var sale = (await won.Content.ReadFromJsonAsync<SaleRow>(JsonOptions))!;
+        await api.PayAndDeliverAsync(pharmacists[0], sale.Id);
         using var check = api.Services.CreateScope();
         var db = check.ServiceProvider.GetRequiredService<AppDbContext>();
         Assert.Equal(2, (await db.Set<MedicalPrescriptionItem>().AsNoTracking().SingleAsync(i => i.Id == rx.ItemId)).DispensedQuantity);
@@ -293,11 +300,14 @@ public sealed class ConcurrencyTests(ApiFixture api)
         var pharmacists = await Task.WhenAll(Enumerable.Range(0, Racers).Select(_ => UserAsync(Roles.Pharmacist)));
 
         // Already partly dispensed, so the prescription's status does not change and cannot reveal the overlap.
-        Assert.Equal(HttpStatusCode.Created, (await pharmacists[0].SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(rx.PatientId, rx.RxId, [new SaleLineInput(rx.ProductId, 1, rx.ItemId)])))).StatusCode);
+        var first = await Created<SaleRow>(await pharmacists[0].SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(rx.PatientId, rx.RxId, [new SaleLineInput(rx.ProductId, 1, rx.ItemId)]))));
+        await api.PayAndDeliverAsync(pharmacists[0], first.Id);
 
         var responses = await Task.WhenAll(pharmacists.Select(p => p.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(rx.PatientId, rx.RxId, [new SaleLineInput(rx.ProductId, 2, rx.ItemId)])))));
 
         Assert.All(responses, r => Assert.Equal(HttpStatusCode.Created, r.StatusCode));
+        var bills = await Task.WhenAll(responses.Select(r => r.Content.ReadFromJsonAsync<SaleRow>(JsonOptions)));
+        await Task.WhenAll(bills.Select((b, i) => api.PayAndDeliverAsync(pharmacists[i], b!.Id)));
         using var check = api.Services.CreateScope();
         var db = check.ServiceProvider.GetRequiredService<AppDbContext>();
         Assert.Equal(1 + (2 * Racers), (await db.Set<MedicalPrescriptionItem>().AsNoTracking().SingleAsync(i => i.Id == rx.ItemId)).DispensedQuantity);
@@ -333,6 +343,8 @@ public sealed class ConcurrencyTests(ApiFixture api)
 
         var cashier = await CashierWithOpenSessionAsync();
         var payment = await Created<PaymentRow>(await cashier.SendAsync(Post("/api/payments", new PaymentRequest(sale.InvoiceId, sale.Balance, PaymentMethod.Cash, null))));
+        await api.PayAndDeliverAsync(pharmacist, sale.Id);
+        sale = sale with { Version = await api.InDbAsync(db => db.Sales.Where(s => s.Id == sale.Id).Select(s => s.Version).SingleAsync()) };
         var accountant = await UserAsync(Roles.Accountant);
         Assert.Equal(HttpStatusCode.Created, (await accountant.SendAsync(Post("/api/refunds", new RefundRequest(payment.Id, payment.Amount, "برگشت آزمایشی")))).StatusCode);
 

@@ -108,6 +108,41 @@ public sealed class AuthTests(ApiFixture api)
     }
 
     [Fact]
+    public async Task Admin_hides_sidebar_pages_per_user_without_touching_permissions()
+    {
+        var adminName = Name("admin");
+        await api.CreateUserAsync(adminName, Roles.SuperAdmin);
+        var admin = await api.LoginAsync(adminName);
+
+        var name = Name("doc");
+        var id = await api.CreateUserAsync(name, Roles.Doctor);
+        var doctor = await api.LoginAsync(name);
+
+        var before = await admin.GetFromJsonAsync<SidebarResponse>($"/api/users/{id}/sidebar");
+        Assert.Contains("visits.view", before!.Permissions);
+        Assert.Empty(before.Hidden);
+
+        var set = await admin.PutAsJsonAsync($"/api/users/{id}/sidebar", new SetSidebarRequest(["/reception", "/reports", "/reception"]));
+        Assert.Equal(HttpStatusCode.NoContent, set.StatusCode);
+
+        // The open session sees the change on its next load, and keeps every permission its role gives.
+        var me = await doctor.GetFromJsonAsync<CurrentUserDto>("/api/auth/me");
+        Assert.Equal(["/reception", "/reports"], me!.HiddenMenu);
+        Assert.Contains("visits.view", me.Permissions);
+
+        var shrink = await admin.PutAsJsonAsync($"/api/users/{id}/sidebar", new SetSidebarRequest(["/reports"]));
+        Assert.Equal(HttpStatusCode.NoContent, shrink.StatusCode);
+        var after = await admin.GetFromJsonAsync<SidebarResponse>($"/api/users/{id}/sidebar");
+        Assert.Equal(["/reports"], after!.Hidden);
+
+        var invalid = await admin.PutAsJsonAsync($"/api/users/{id}/sidebar", new SetSidebarRequest(["/"]));
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+
+        var self = await doctor.PutAsJsonAsync($"/api/users/{id}/sidebar", new SetSidebarRequest([]));
+        Assert.Equal(HttpStatusCode.Forbidden, self.StatusCode);
+    }
+
+    [Fact]
     public async Task Admin_reset_ends_the_old_session_and_only_the_new_password_works()
     {
         var adminName = Name("admin");

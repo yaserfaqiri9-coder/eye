@@ -246,16 +246,22 @@ public sealed class HospitalReadinessTests(ApiFixture api)
 
         // Two items, one already started: the status stays PartiallyDispensed, so no version check catches a lost update.
         var doctor = await UserAsync(Roles.Doctor);
+        var drug = await api.InDbAsync(db => db.Products.Where(p => p.Id == productId).Select(p => p.Name).SingleAsync());
         var rx = await Created<PrescriptionDto>(await doctor.SendAsync(Post("/api/prescriptions",
-            new CreatePrescriptionRequest(visit.Id, null, [new RxItemInput("دوا الف", null, null, null, null, 50), new RxItemInput("دوا ب", null, null, null, null, 50)]))));
+            new CreatePrescriptionRequest(visit.Id, null, [new RxItemInput(drug, "یک قطره", null, null, null, 50), new RxItemInput(drug, "دو قطره", null, null, null, 50)]))));
 
         var pharmacist = await UserAsync(Roles.Pharmacist);
-        await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(patient.Id, rx.Id, [new SaleLineInput(productId, 1, rx.Items[1].Id)]))));
+        var started = await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(patient.Id, rx.Id, [new SaleLineInput(productId, 1, rx.Items[1].Id)]))));
+        await api.PayAndDeliverAsync(pharmacist, started.Id);
 
         var responses = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
             pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(patient.Id, rx.Id, [new SaleLineInput(productId, 1, rx.Items[0].Id)])))));
         var sold = responses.Count(r => r.StatusCode == HttpStatusCode.Created);
         Assert.True(sold > 0);
+
+        // The paid bills are handed over at the same moment too.
+        var bills = await Task.WhenAll(responses.Where(r => r.StatusCode == HttpStatusCode.Created).Select(r => r.Content.ReadFromJsonAsync<SaleRow>(JsonOptions)));
+        await Task.WhenAll(bills.Select(b => api.PayAndDeliverAsync(pharmacist, b!.Id)));
 
         var stored = Assert.Single((await pharmacist.GetFromJsonAsync<List<PrescriptionDto>>("/api/prescriptions?q=" + rx.RxNumber, JsonOptions))!);
         Assert.Equal(sold, stored.Items[0].DispensedQuantity);
@@ -345,6 +351,7 @@ public sealed class HospitalReadinessTests(ApiFixture api)
     {
         var serviceId = await NewServiceAsync(500);
         var productId = await NewProductAsync(100);
+        var drug = await api.InDbAsync(db => db.Products.Where(p => p.Id == productId).Select(p => p.Name).SingleAsync());
         var reception = await UserAsync(Roles.Receptionist);
         var doctor = await UserAsync(Roles.Doctor);
         var pharmacist = await UserAsync(Roles.Pharmacist);
@@ -371,11 +378,12 @@ public sealed class HospitalReadinessTests(ApiFixture api)
             await PayOpenAsync();
             var saved = await doctor.PutAsJsonAsync($"/api/consultations/{visit.Id}", new SaveConsultationRequest("یافته OD", "یافته OS", "درمان", null, [new DiagnosisInput(EyeSide.OD, "تشخیص")], null));
             Assert.True(saved.IsSuccessStatusCode, await saved.Content.ReadAsStringAsync());
-            var rx = await Created<PrescriptionDto>(await doctor.SendAsync(Post("/api/prescriptions", new CreatePrescriptionRequest(visit.Id, null, [new RxItemInput("قطره", null, null, null, null, 2)]))));
+            var rx = await Created<PrescriptionDto>(await doctor.SendAsync(Post("/api/prescriptions", new CreatePrescriptionRequest(visit.Id, null, [new RxItemInput(drug, null, null, null, null, 2)]))));
 
             var sale = await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(patient.Id, rx.Id, [new SaleLineInput(productId, 2, rx.Items[0].Id)]))));
 
             await PayOpenAsync();
+            await api.PayAndDeliverAsync(pharmacist, sale.Id);
 
             var settled = await cashier.GetFromJsonAsync<PagedResult<InvoiceRow>>($"/api/invoices?unpaid=true&q={patient.FileNumber}", JsonOptions);
             Assert.Empty(settled!.Items);

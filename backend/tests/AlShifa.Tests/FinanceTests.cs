@@ -289,6 +289,12 @@ public sealed class FinanceTests(ApiFixture api)
         Assert.All(codes, body => Assert.True(body.Contains("insufficient_stock") || body.Contains("busy"), body));
         Assert.InRange(sold, 1, 5);
 
+        // Bills only reserve; the stock leaves when each paid bill is handed over.
+        foreach (var bill in await Task.WhenAll(responses.Where(r => r.StatusCode == HttpStatusCode.Created).Select(r => r.Content.ReadFromJsonAsync<SaleRow>(JsonOptions))))
+        {
+            await api.PayAndDeliverAsync(pharmacist, bill!.Id);
+        }
+
         using var scope = api.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var onHand = await db.StockBatches.Where(b => b.ProductId == productId).SumAsync(b => b.Quantity);
@@ -311,18 +317,22 @@ public sealed class FinanceTests(ApiFixture api)
         var visit = await Created<VisitRow>(await reception.SendAsync(Post("/api/visits", new CreateVisitRequest(patient.Id, (int)departments![0].Id, null, null, null, await api.PaidTokenAsync()))));
 
         var doctor = await UserAsync(Roles.Doctor);
-        var rx = await Created<PrescriptionDto>(await doctor.SendAsync(Post("/api/prescriptions", new CreatePrescriptionRequest(visit.Id, null, [new RxItemInput("دوا", null, null, null, null, 2)]))));
+        var drug = await api.InDbAsync(db => db.Products.Where(p => p.Id == productId).Select(p => p.Name).SingleAsync());
+        var rx = await Created<PrescriptionDto>(await doctor.SendAsync(Post("/api/prescriptions", new CreatePrescriptionRequest(visit.Id, null, [new RxItemInput(drug, null, null, null, null, 2)]))));
 
         var pharmacist = await UserAsync(Roles.Pharmacist);
         var itemId = rx.Items[0].Id;
         var over = await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(patient.Id, rx.Id, [new SaleLineInput(productId, 3, itemId)])));
         Assert.Contains("over_dispense", await over.Content.ReadAsStringAsync());
 
-        await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(patient.Id, rx.Id, [new SaleLineInput(productId, 1, itemId)]))));
+        var first = await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(patient.Id, rx.Id, [new SaleLineInput(productId, 1, itemId)]))));
+        Assert.Equal(nameof(PrescriptionStatus.Issued), (await pharmacist.GetFromJsonAsync<List<PrescriptionDto>>("/api/prescriptions?q=" + rx.RxNumber, JsonOptions))!.Single().Status);
+        await api.PayAndDeliverAsync(pharmacist, first.Id);
         var partial = (await pharmacist.GetFromJsonAsync<List<PrescriptionDto>>("/api/prescriptions?q=" + rx.RxNumber, JsonOptions))!.Single();
         Assert.Equal(nameof(PrescriptionStatus.PartiallyDispensed), partial.Status);
 
-        await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(patient.Id, rx.Id, [new SaleLineInput(productId, 1, itemId)]))));
+        var second = await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(patient.Id, rx.Id, [new SaleLineInput(productId, 1, itemId)]))));
+        await api.PayAndDeliverAsync(pharmacist, second.Id);
         var full = (await pharmacist.GetFromJsonAsync<List<PrescriptionDto>>("/api/prescriptions?q=" + rx.RxNumber, JsonOptions))!.Single();
         Assert.Equal(nameof(PrescriptionStatus.Dispensed), full.Status);
     }
@@ -379,7 +389,8 @@ public sealed class FinanceTests(ApiFixture api)
         Assert.Equal(HttpStatusCode.Created, purchase.StatusCode);
 
         var pharmacist = await UserAsync(Roles.Pharmacist);
-        await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(null, null, [new SaleLineInput(productId, 3)]))));
+        var sale = await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(null, null, [new SaleLineInput(productId, 3)]))));
+        await api.PayAndDeliverAsync(pharmacist, sale.Id);
 
         using var scope = api.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();

@@ -21,7 +21,7 @@ public sealed class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
 {
     public const string TestPassword = "Test-Password-123";
 
-    private static string ConnectionString
+    internal static string ConnectionString
     {
         get
         {
@@ -212,7 +212,14 @@ public sealed class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
 
     Task IAsyncLifetime.InitializeAsync() => InitializeAsync().AsTask();
 
-    Task IAsyncLifetime.DisposeAsync() => Task.CompletedTask;
+    /// <summary>The test database exists only while the tests run; nothing is left behind on the development MySQL.</summary>
+    async Task IAsyncLifetime.DisposeAsync()
+    {
+        await base.DisposeAsync();
+        MySql.Data.MySqlClient.MySqlConnection.ClearAllPools();
+        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseMySQL(ConnectionString).Options);
+        await db.Database.EnsureDeletedAsync();
+    }
 
     public async Task<long> CreateUserAsync(string userName, params string[] roles)
     {
@@ -223,6 +230,29 @@ public sealed class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
         Assert.True(result.Succeeded, string.Join(";", result.Errors.Select(e => e.Description)));
         await users.AddToRolesAsync(user, roles);
         return user.Id;
+    }
+
+    /// <summary>The patient pays the pharmacy bill at the central cashier and the pharmacist hands the drugs over: the only way stock leaves.</summary>
+    public async Task PayAndDeliverAsync(HttpClient pharmacist, long saleId)
+    {
+        var bill = await InDbAsync(db => db.Sales.Where(s => s.Id == saleId)
+            .Select(s => new { s.InvoiceId, Balance = s.Invoice!.Total - s.Invoice.Discount - s.Invoice.Paid }).SingleAsync());
+        if (bill.Balance > 0)
+        {
+            var cashier = await FeeCashierAsync();
+            var paid = await cashier.SendAsync(Keyed("/api/payments", new PaymentRequest(bill.InvoiceId, bill.Balance, PaymentMethod.Cash, null)));
+            Assert.True(paid.IsSuccessStatusCode, await paid.Content.ReadAsStringAsync());
+        }
+
+        var version = await InDbAsync(db => db.Sales.Where(s => s.Id == saleId).Select(s => s.Version).SingleAsync());
+        var delivered = await pharmacist.PostAsJsonAsync($"/api/pharmacy/sales/{saleId}/deliver", new AlShifa.Api.Features.Inventory.DeliverSaleRequest(version));
+        Assert.True(delivered.IsSuccessStatusCode, await delivered.Content.ReadAsStringAsync());
+    }
+
+    public async Task<T> InDbAsync<T>(Func<AppDbContext, Task<T>> read)
+    {
+        using var scope = Services.CreateScope();
+        return await read(scope.ServiceProvider.GetRequiredService<AppDbContext>());
     }
 
     public async Task<HttpClient> LoginAsync(string userName, string password = TestPassword)

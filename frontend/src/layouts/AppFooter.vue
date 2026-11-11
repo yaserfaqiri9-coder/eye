@@ -1,14 +1,14 @@
-<script setup lang="ts">
-import { todayShamsi } from '@/utils/date'
-import { quantity } from '@/utils/money'
-
-const year = String(todayShamsi().year).replace(/\d/g, (digit) => quantity(Number(digit)))
-</script>
-
 <template>
   <footer class="footer">
-    <span>سیستم مدیریت شفاخانه</span>
-    <span>{{ year }} <span class="footer__brand">الشفا</span> تمام حقوق محفوظ است.</span>
+    <span>
+      توسعه داده شده توسط
+      <a
+        class="footer__brand"
+        href="https://novatechsoft.com"
+        target="_blank"
+        rel="noopener noreferrer"
+      >شرکت خدمات تکنالوژی نواتیک</a>
+    </span>
   </footer>
 </template>
 
@@ -17,7 +17,7 @@ const year = String(todayShamsi().year).replace(/\d/g, (digit) => quantity(Numbe
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 8px 24px;
   min-height: 55px;
   margin: var(--xr-gap-y) 3px 20px;
@@ -29,6 +29,13 @@ const year = String(todayShamsi().year).replace(/\d/g, (digit) => quantity(Numbe
 
 .footer__brand {
   color: var(--xr-primary);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.footer__brand:hover,
+.footer__brand:focus-visible {
+  text-decoration: underline;
 }
 
 @media (max-width: 991.98px) {

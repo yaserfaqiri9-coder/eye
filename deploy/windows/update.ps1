@@ -21,10 +21,14 @@ Stop-Service AlShifaApi
 
 '== Backup before changing anything'
 try {
-    & (Join-Path $PSScriptRoot 'backup.ps1') -Root $Root -Destination $BackupDestination -AllowSameDisk:$AllowSameDisk
+    $backupOutput = & (Join-Path $PSScriptRoot 'backup.ps1') -Root $Root -Destination $BackupDestination -AllowSameDisk:$AllowSameDisk
+    $backupOutput
     if ($LASTEXITCODE) { throw 'The backup failed.' }
+    $line = @($backupOutput | ForEach-Object { "$_" } | Where-Object { $_ -match '^Backup complete: (.+)$' }) | Select-Object -Last 1
+    if (-not $line) { throw 'The backup did not report its file.' }
+    $backupFile = [regex]::Match($line, '^Backup complete: (.+)$').Groups[1].Value
     # MySQL cannot undo a schema change, so this backup is the only way back. It must be known to open and restore.
-    & (Join-Path $PSScriptRoot 'restore-test.ps1') -Root $Root -Backup $BackupDestination
+    & (Join-Path $PSScriptRoot 'restore-test.ps1') -Root $Root -Backup $backupFile
 } catch {
     Start-Service AlShifaApi
     throw "The update was not started and the current version is running again. Reason: $_"
@@ -46,19 +50,37 @@ try {
     throw "Copying the new version failed; the old version is running again. Reason: $_"
 }
 Copy-Item (Join-Path $PSScriptRoot '*') (Join-Path $Root 'scripts') -Recurse -Force
+# Replaced by the online copy (online.ps1); the old scripts must not be run by mistake.
+foreach ($old in 'director-access.ps1', 'remote-access.ps1') { Remove-Item (Join-Path $Root "scripts\$old") -Force -ErrorAction SilentlyContinue }
 # Installs made before Settings > Backup had a "backup now" button lack this trigger. Adding it twice is a no-op.
 Add-BackupRequestTrigger
+# Earlier installs ran every 4 hours; backups now run nightly at 02:00 Kabul time.
+Set-NightlyBackupSchedule
 
 '== Migrate'
 Push-Location $appDir
 try {
     Invoke-Native (Join-Path $appDir 'AlShifa.Api.exe') @('--migrate', '--backup-taken') | Out-Null
 } catch {
-    # A failed migration can leave the schema half changed, so starting either version automatically would be unsafe.
-    throw "Migration failed and the application is stopped. See 'Rollback' in DEPLOYMENT-WINDOWS.md. Reason: $_"
-} finally {
+    $reason = $_
     Pop-Location
+    # A failed migration can leave the schema half changed. The backup taken and restore-tested above goes back,
+    # with the previous version of the program, so the hospital is never left with a half-installed system.
+    "Migration failed: $reason"
+    '== Automatic rollback: the database from the backup above, then the previous version'
+    try {
+        Restore-AlShifaDatabase $Root $backupFile
+        Remove-Item $appDir -Recurse -Force
+        Move-Item $previous $appDir
+        Start-Service AlShifaApi
+        Start-Sleep -Seconds 5
+        & (Join-Path $Root 'scripts\health-check.ps1') -Root $Root
+    } catch {
+        throw "Migration failed and the automatic rollback failed too. The application is stopped. Follow 'Rollback' in DEPLOYMENT-WINDOWS.md with $backupFile. Migration: $reason. Rollback: $_"
+    }
+    throw "The update failed and was undone: the previous version runs on the database as it was before the update ($backupFile). Reason: $reason"
 }
+Pop-Location
 
 Start-Service AlShifaApi
 Start-Sleep -Seconds 5

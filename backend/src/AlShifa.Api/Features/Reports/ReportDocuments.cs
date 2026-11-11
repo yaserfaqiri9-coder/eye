@@ -610,7 +610,8 @@ public static class ReportDocuments
         }
 
         var lines = await db.Sales.AsNoTracking()
-            .Where(s => s.CreatedAt >= p.StartUtc && s.CreatedAt < p.EndUtc && !s.IsReturned && ((s.Kind == SaleKind.Pharmacy && seesPharmacy) || (s.Kind == SaleKind.Optical && seesOptical)))
+            // A bill counts as a sale once its goods were handed over; an unpaid or undelivered bill is not a completed sale.
+            .Where(s => s.DeliveredAt >= p.StartUtc && s.DeliveredAt < p.EndUtc && !s.IsReturned && ((s.Kind == SaleKind.Pharmacy && seesPharmacy) || (s.Kind == SaleKind.Optical && seesOptical)))
             .SelectMany(s => s.Items.Select(i => new { s.Id, s.Kind, i.Product!.Name, i.Quantity, Amount = i.Quantity * i.UnitPrice }))
             .ToListAsync(ct);
 

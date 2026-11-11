@@ -16,7 +16,10 @@ public sealed record BackupStatusDto(
     string? OptionalDestination,
     long? LastSizeBytes,
     int? LastDurationSeconds,
-    IReadOnlyList<BackupFileDto> Backups);
+    IReadOnlyList<BackupFileDto> Backups,
+    string? OffsiteTarget = null,
+    DateTime? OffsiteLastSuccessAt = null,
+    string? OffsiteError = null);
 
 /// <summary>Reads the status file written by deploy/windows/backup.ps1, so a backup that stops working cannot go unnoticed.</summary>
 public static class BackupStatus
@@ -30,9 +33,13 @@ public static class BackupStatus
         string? OptionalDestination,
         long? LastSizeBytes,
         int? LastDurationSeconds,
-        List<BackupFileDto>? Backups);
+        List<BackupFileDto>? Backups,
+        string? OffsiteTarget,
+        DateTime? OffsiteLastSuccessAt,
+        string? OffsiteError);
 
-    private static readonly TimeSpan MaxAge = TimeSpan.FromHours(24);
+    // The backup runs once a day at 02:00 Kabul time; a little slack keeps a run that took longer from raising an alarm.
+    private static readonly TimeSpan MaxAge = TimeSpan.FromHours(26);
 
     // A run that was cut off by a power failure never clears its start time; after this long it is no longer "running".
     private static readonly TimeSpan MaxRunTime = TimeSpan.FromHours(2);
@@ -64,12 +71,15 @@ public static class BackupStatus
             status?.LastRunAt?.ToUniversalTime(),
             running,
             status?.LastError,
-            stale || !string.IsNullOrEmpty(status?.LastError),
+            stale || !string.IsNullOrEmpty(status?.LastError) || !string.IsNullOrEmpty(status?.OffsiteError),
             status?.Destination,
             status?.OptionalDestination,
             status?.LastSizeBytes,
             status?.LastDurationSeconds,
-            status?.Backups?.OrderByDescending(b => b.CreatedAt).ToList() ?? []);
+            status?.Backups?.OrderByDescending(b => b.CreatedAt).ToList() ?? [],
+            status?.OffsiteTarget,
+            status?.OffsiteLastSuccessAt?.ToUniversalTime(),
+            status?.OffsiteError);
     }
 }
 

@@ -9,6 +9,7 @@ using AlShifa.Api.Features.Patients;
 using AlShifa.Api.Features.Realtime;
 using AlShifa.Api.Features.Reports;
 using AlShifa.Api.Features.Settings;
+using AlShifa.Api.Features.Sync;
 using AlShifa.Api.Features.Users;
 using AlShifa.Api.Features.Visits;
 using AlShifa.Api.Infrastructure;
@@ -36,7 +37,13 @@ var connectionString = builder.Configuration.GetConnectionString("Default")
 
 builder.Services.AddDbContext<AppDbContext>(o => o.UseMySQL(connectionString));
 
-builder.Services
+// The hospital server records changes for the online copy; the online copy (Mirror:Enabled) only shows them.
+var syncSwitch = SyncSwitch.From(builder.Configuration);
+builder.Services.AddSingleton(syncSwitch);
+builder.Services.Configure<SyncOptions>(builder.Configuration.GetSection("Sync"));
+builder.Services.Configure<MirrorOptions>(builder.Configuration.GetSection("Mirror"));
+
+var identity = builder.Services
     .AddIdentity<AppUser, AppRole>(o =>
     {
         o.Password.RequiredLength = 1;
@@ -51,6 +58,10 @@ builder.Services
     .AddEntityFrameworkStores<AppDbContext>()
     .AddSignInManager<AppSignInManager>()
     .AddDefaultTokenProviders();
+if (syncSwitch.ReadOnly)
+{
+    identity.AddClaimsPrincipalFactory<MirrorClaimsPrincipalFactory>();
+}
 
 // Re-validated on every request: role changes and deactivation take effect immediately.
 builder.Services.Configure<SecurityStampValidatorOptions>(o => o.ValidationInterval = TimeSpan.Zero);
@@ -111,11 +122,8 @@ builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database");
 builder.Services.AddScoped<CurrentUser>();
 builder.Services.AddScoped<AuditService>();
 builder.Services.AddSingleton<IBackupTrigger, EventLogBackupTrigger>();
-builder.Services.Configure<RemoteAccessOptions>(builder.Configuration.GetSection("RemoteAccess"));
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IAccessKeySource, CloudflareAccessKeySource>();
-builder.Services.AddSingleton<AccessTokenValidator>();
 builder.Services.AddScoped<NumberService>();
 builder.Services.AddScoped<Outbox>();
 builder.Services.AddScoped<Idempotency>();
@@ -130,7 +138,29 @@ builder.Services.AddScoped<SaleService>();
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<IUserIdProvider, UserIdFromNameIdentifier>();
 builder.Services.AddSingleton<ConnectionTracker>();
-builder.Services.AddHostedService<OutboxDispatcher>();
+if (syncSwitch.ReadOnly)
+{
+    // The hospital server sends its batches compressed.
+    builder.Services.AddRequestDecompression();
+}
+else
+{
+    builder.Services.AddHostedService<OutboxDispatcher>();
+}
+
+// A failing background task (sync, live updates) is logged and must never take the hospital application down with it.
+builder.Services.Configure<HostOptions>(o => o.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore);
+
+if (syncSwitch.Capture)
+{
+    builder.Services.AddHttpClient(SyncWorker.HttpClientName);
+    builder.Services.AddSingleton<SyncWorker>();
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncWorker>());
+}
+else if (!syncSwitch.ReadOnly)
+{
+    builder.Services.AddHostedService<SyncOffMarker>();
+}
 
 var app = builder.Build();
 
@@ -141,7 +171,12 @@ if (args.Contains("--migrate") || args.Contains("--create-admin"))
     var operatorDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await DatabaseSafety.EnsureOperatorMayMigrateAsync(operatorDb, args.Contains(DatabaseSafety.BackupTakenFlag));
     await operatorDb.Database.MigrateAsync();
-    await Seeder.SeedReferenceDataAsync(scope.ServiceProvider);
+
+    // Online, every row including roles and reference data comes from the hospital server; seeded rows would collide with them.
+    if (!syncSwitch.ReadOnly)
+    {
+        await Seeder.SeedReferenceDataAsync(scope.ServiceProvider);
+    }
 
     if (args.Contains("--create-admin"))
     {
@@ -158,12 +193,44 @@ if (args.Contains("--migrate") || args.Contains("--create-admin"))
     return;
 }
 
+// Operator command: opening stock from the clinic's counted sheet. Dry run unless --apply is given.
+if (args.Contains(OpeningStockImport.Command))
+{
+    var position = Array.IndexOf(args, OpeningStockImport.Command) + 1;
+    var path = position < args.Length ? args[position] : throw new InvalidOperationException($"Usage: {OpeningStockImport.Command} <inventory_staging.json> [--apply --backup-taken]");
+    using var scope = app.Services.CreateScope();
+    string? After(string flag) => Array.IndexOf(args, flag) is var i and >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+    if (OpeningStockSheet.Handles(path))
+    {
+        // A typed sheet (.xlsx/.csv). The launcher in deploy\stock-import passes the preview's count, so the apply imports exactly what was shown.
+        await OpeningStockSheet.RunAsync(scope.ServiceProvider, path, Environment.GetEnvironmentVariable("ALSHIFA_IMPORT_USER"),
+            args.Contains(OpeningStockImport.ApplyFlag), args.Contains(DatabaseSafety.BackupTakenFlag),
+            int.TryParse(After(OpeningStockSheet.ExpectFlag), out var expect) ? expect : null, After(OpeningStockSheet.ReportFlag), Console.Out);
+    }
+    else
+    {
+        await OpeningStockImport.RunAsync(scope.ServiceProvider, path, Environment.GetEnvironmentVariable("ALSHIFA_IMPORT_USER"),
+            args.Contains(OpeningStockImport.ApplyFlag), args.Contains(DatabaseSafety.BackupTakenFlag), Console.Out);
+    }
+
+    return;
+}
+
+// Operator command on the online server: lets one synced account sign in online, with its own password and an authenticator app.
+if (args.Contains("--online-access") || args.Contains("--online-revoke"))
+{
+    using var scope = app.Services.CreateScope();
+    await OnlineAccess.RunAsync(scope.ServiceProvider, revoke: args.Contains("--online-revoke"));
+    return;
+}
+
 using (var scope = app.Services.CreateScope())
 {
     var startupDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
     // The environment name alone is not enough: a wrong setting on the host must not change a real database.
-    if ((app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Testing")) && DatabaseSafety.IsDisposable(connectionString))
+    // The online copy runs on a reading database account; its schema is migrated by the deployment, never here.
+    if ((app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Testing")) && DatabaseSafety.IsDisposable(connectionString) && !syncSwitch.ReadOnly)
     {
         await startupDb.Database.MigrateAsync();
         await Seeder.SeedReferenceDataAsync(scope.ServiceProvider);
@@ -214,8 +281,11 @@ if (app.Environment.IsProduction())
     app.UseHsts();
 }
 
-// Only for requests that came in through Cloudflare Tunnel; the hospital network is not affected.
-app.UseRemoteAccessGate();
+if (syncSwitch.ReadOnly)
+{
+    app.UseReadOnlyMirror();
+    app.UseRequestDecompression();
+}
 
 if (hostsFrontend)
 {
@@ -224,7 +294,6 @@ if (hostsFrontend)
 
 app.UseRateLimiter();
 app.UseAuthentication();
-app.UseRemoteAccessUserCheck();
 app.UseAuthorization();
 
 // CSRF check for every state-changing API call; /api/auth/csrf is a GET so a client can always obtain a token.
@@ -232,7 +301,9 @@ app.Use(async (http, next) =>
 {
     var method = http.Request.Method;
     var unsafeMethod = !(HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsOptions(method));
-    if (unsafeMethod && http.Request.Path.StartsWithSegments("/api"))
+    // The online copy's sync endpoints carry no cookie; each request is signed by the hospital server instead.
+    var signed = syncSwitch.ReadOnly && http.Request.Path.StartsWithSegments("/api/sync/mirror");
+    if (unsafeMethod && !signed && http.Request.Path.StartsWithSegments("/api"))
     {
         var antiforgery = http.RequestServices.GetRequiredService<IAntiforgery>();
         if (!await antiforgery.IsRequestValidAsync(http))
@@ -267,10 +338,16 @@ app.MapSurgeries();
 app.MapSurgeryPackages();
 app.MapFinance();
 app.MapInventory();
+app.MapPharmacy();
 app.MapSettings();
 app.MapReports();
 app.MapPrint();
 app.MapAudit();
+app.MapSyncStatus(syncSwitch.ReadOnly);
+if (syncSwitch.ReadOnly)
+{
+    app.MapMirror();
+}
 
 if (hostsFrontend)
 {

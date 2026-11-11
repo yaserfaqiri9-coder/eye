@@ -212,13 +212,46 @@ public class MedicalPrescription
     [MaxLength(1000)]
     public string? Notes { get; set; }
 
+    /// <summary>Clinical state, set by the doctor; dispensing progress also moves it. Buying decisions live in <see cref="PharmacyStatus"/>.</summary>
     public PrescriptionStatus Status { get; set; } = PrescriptionStatus.Issued;
+
+    /// <summary>What the patient decided at the pharmacy. Payment and delivery are read from the prescription's sales.</summary>
+    public PharmacyRxStatus PharmacyStatus { get; set; } = PharmacyRxStatus.AwaitingVisit;
+
+    /// <summary>Last day the pharmacy may dispense without the doctor seeing the patient again. Set by the doctor; null means the doctor set no limit.</summary>
+    public DateOnly? ValidUntil { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public int Version { get; set; }
 
     public List<MedicalPrescriptionItem> Items { get; set; } = [];
+}
+
+public enum PharmacyRxStatus
+{
+    AwaitingVisit,
+    AwaitingDecision,
+    BuyingOutside,
+    NotNow,
+    NeedsDoctorReview,
+}
+
+/// <summary>Every change of a prescription's pharmacy status, with who made it and when.</summary>
+public class PrescriptionPharmacyEvent
+{
+    public long Id { get; set; }
+
+    public long PrescriptionId { get; set; }
+
+    public PharmacyRxStatus Status { get; set; }
+
+    [MaxLength(300)]
+    public string? Note { get; set; }
+
+    public long UserId { get; set; }
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
 public class MedicalPrescriptionItem
@@ -263,6 +296,9 @@ public class OpticalPrescription
     public Visit? Visit { get; set; }
 
     public long DoctorUserId { get; set; }
+
+    /// <summary>Set when the refraction desk sent its final values to the optical desk; DoctorUserId is then the refractionist.</summary>
+    public long? RefractionId { get; set; }
 
     [MaxLength(10)] public string? SphereOd { get; set; }
     [MaxLength(10)] public string? CylinderOd { get; set; }

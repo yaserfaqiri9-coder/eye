@@ -67,6 +67,8 @@ CREATE DATABASE alshifa_test CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 CREATE USER 'alshifa'@'localhost' IDENTIFIED BY '$($secrets.app)';
 GRANT ALL PRIVILEGES ON alshifa_dev.* TO 'alshifa'@'localhost';
 GRANT ALL PRIVILEGES ON alshifa_test.* TO 'alshifa'@'localhost';
+GRANT ALL PRIVILEGES ON alshifa_synclocal_test.* TO 'alshifa'@'localhost';
+GRANT ALL PRIVILEGES ON alshifa_mirror_test.* TO 'alshifa'@'localhost';
 FLUSH PRIVILEGES;
 "@
     $sql | & "$bin\mysql.exe" --protocol=TCP -h 127.0.0.1 -P $port -u root

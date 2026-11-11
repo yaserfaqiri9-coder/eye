@@ -4,6 +4,7 @@ using AlShifa.Api.Features.Finance;
 using AlShifa.Api.Features.Inventory;
 using AlShifa.Api.Features.Patients;
 using AlShifa.Api.Features.Settings;
+using AlShifa.Api.Features.Sync;
 using AlShifa.Api.Features.Users;
 using AlShifa.Api.Features.Visits;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
@@ -12,9 +13,12 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace AlShifa.Api.Infrastructure;
 
-public class AppDbContext(DbContextOptions<AppDbContext> options)
+public class AppDbContext(DbContextOptions<AppDbContext> options, SyncSwitch? sync = null)
     : IdentityDbContext<AppUser, AppRole, long>(options)
 {
+    public DbSet<SyncChange> SyncChanges => Set<SyncChange>();
+    public DbSet<SyncState> SyncStates => Set<SyncState>();
+
     public DbSet<Department> Departments => Set<Department>();
     public DbSet<Staff> Staff => Set<Staff>();
     public DbSet<Patient> Patients => Set<Patient>();
@@ -35,6 +39,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<Diagnosis> Diagnoses => Set<Diagnosis>();
     public DbSet<ClinicalAmendment> ClinicalAmendments => Set<ClinicalAmendment>();
     public DbSet<MedicalPrescription> MedicalPrescriptions => Set<MedicalPrescription>();
+    public DbSet<PrescriptionPharmacyEvent> PrescriptionPharmacyEvents => Set<PrescriptionPharmacyEvent>();
     public DbSet<OpticalPrescription> OpticalPrescriptions => Set<OpticalPrescription>();
     public DbSet<FollowUp> FollowUps => Set<FollowUp>();
     public DbSet<ClinicalAccessGrant> ClinicalAccessGrants => Set<ClinicalAccessGrant>();
@@ -96,6 +101,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
                 fk.DeleteBehavior = DeleteBehavior.Restrict;
             }
         }
+
+        b.Entity<SyncState>().HasKey(x => x.Key);
 
         b.Entity<Department>().HasIndex(x => x.Code).IsUnique();
         b.Entity<Department>().Property(x => x.Version).IsConcurrencyToken();
@@ -308,6 +315,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
             e.Property(x => x.Version).IsConcurrencyToken();
             e.HasIndex(x => x.SaleNumber).IsUnique();
             e.HasIndex(x => x.CreatedAt);
+            e.HasIndex(x => new { x.Kind, x.DeliveredAt });
             e.HasMany(x => x.Items).WithOne().HasForeignKey(x => x.SaleId);
         });
 
@@ -353,7 +361,14 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
             e.HasIndex(x => x.RxNumber).IsUnique();
             e.HasIndex(x => new { x.Status, x.Id });
             e.HasIndex(x => x.VisitId);
+            e.HasIndex(x => new { x.PatientId, x.Id });
             e.HasMany(x => x.Items).WithOne().HasForeignKey(x => x.PrescriptionId);
+        });
+
+        b.Entity<PrescriptionPharmacyEvent>(e =>
+        {
+            e.HasOne<MedicalPrescription>().WithMany().HasForeignKey(x => x.PrescriptionId);
+            e.HasIndex(x => new { x.PrescriptionId, x.Id });
         });
 
         b.Entity<MedicalPrescriptionItem>(e =>
@@ -368,6 +383,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
             e.Property(x => x.Version).IsConcurrencyToken();
             e.HasIndex(x => x.RxNumber).IsUnique();
             e.HasIndex(x => x.VisitId);
+
+            // Not unique: a cancelled copy stays on record and the refraction can be sent again.
+            e.HasOne<Refraction>().WithMany().HasForeignKey(x => x.RefractionId).OnDelete(DeleteBehavior.Restrict);
         });
 
         b.Entity<FollowUp>().HasIndex(x => x.DueDate);
@@ -411,16 +429,71 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
         });
     }
 
-    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    public override int SaveChanges(bool acceptAllChangesOnSuccess) =>
+        SaveChangesAsync(acceptAllChangesOnSuccess).GetAwaiter().GetResult();
+
+    public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
         BumpVersions();
-        return base.SaveChanges(acceptAllChangesOnSuccess);
+        if (sync is { ReadOnly: true, OperatorWrites: false })
+        {
+            SyncCapture.EnsureReadOnlyAllowed(ChangeTracker);
+        }
+
+        if (sync?.Capture != true)
+        {
+            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        }
+
+        var pending = SyncCapture.Collect(ChangeTracker);
+        if (pending.Count == 0)
+        {
+            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        }
+
+        // The change and its sync entry commit together, so the online copy can never miss a committed change.
+        var own = Database.CurrentTransaction is null ? await Database.BeginTransactionAsync(cancellationToken) : null;
+        try
+        {
+            var saved = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+            if (SyncCapture.InsertSql(pending) is var (sql, parameters))
+            {
+                await Database.ExecuteSqlRawAsync(sql, parameters, cancellationToken);
+            }
+
+            if (own is not null)
+            {
+                await own.CommitAsync(cancellationToken);
+            }
+
+            return saved;
+        }
+        finally
+        {
+            if (own is not null)
+            {
+                await own.DisposeAsync();
+            }
+        }
     }
 
-    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    /// <summary>ExecuteDelete bypasses SaveChanges. This records the deleted rows for the online copy in the same transaction.</summary>
+    public async Task<int> ExecuteDeleteSyncedAsync<T>(IQueryable<T> rows, CancellationToken ct)
+        where T : class
     {
-        BumpVersions();
-        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        if (sync?.Capture == true)
+        {
+            var type = Model.FindEntityType(typeof(T))!;
+            var key = type.FindPrimaryKey()!.Properties;
+            var deleted = await rows.AsNoTracking().ToListAsync(ct);
+            var pending = deleted.Select(e => new SyncCapture.Pending(Entry(e), type.GetTableName()!, key, SyncCapture.KeyJson(Entry(e), key)));
+            if (SyncCapture.InsertSql(pending) is var (sql, parameters))
+            {
+                await Database.ExecuteSqlRawAsync(sql, parameters, ct);
+            }
+        }
+
+        return await rows.ExecuteDeleteAsync(ct);
     }
 
     private void BumpVersions()

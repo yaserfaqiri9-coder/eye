@@ -66,7 +66,7 @@ public sealed record CreateSaleRequest(long? PatientId, long? PrescriptionId, [R
 
 public sealed record ReturnSaleRequest(int Version, [Required, MinLength(3), MaxLength(300)] string Reason);
 
-public sealed record SaleRow(long Id, string SaleNumber, string Kind, long? PatientId, string? PatientName, long? PrescriptionId, long InvoiceId, string InvoiceNumber, decimal Total, decimal Balance, string InvoiceStatus, bool IsReturned, DateTime CreatedAt, int Version);
+public sealed record SaleRow(long Id, string SaleNumber, string Kind, long? PatientId, string? PatientName, long? PrescriptionId, long InvoiceId, string InvoiceNumber, decimal Total, decimal Balance, string InvoiceStatus, bool IsReturned, DateTime CreatedAt, int Version, DateTime? DeliveredAt = null);
 
 public sealed record CreateOpticalOrderRequest(long? PatientId, long? OpticalPrescriptionId, [MaxLength(500)] string? Description, SaleLineInput[]? Items, CustomLineInput[]? CustomLines);
 
@@ -275,7 +275,16 @@ public static class InventoryEndpoints
             else
             {
                 Apply(movement.BatchId, movement.Kind, -movement.Quantity);
-                await ledger.ReverseAsync("Adjustment", "StockMovement", id, ct);
+
+                // Opening stock has a ledger entry only when its purchase price was known.
+                if (movement.SourceType != OpeningStockImport.SourceType)
+                {
+                    await ledger.ReverseAsync("Adjustment", "StockMovement", id, ct);
+                }
+                else if (await db.LedgerTransactions.AnyAsync(t => t.Kind == OpeningStockSheet.LedgerKind && t.SourceType == "StockMovement" && t.SourceId == id, ct))
+                {
+                    await ledger.ReverseAsync(OpeningStockSheet.LedgerKind, "StockMovement", id, ct);
+                }
             }
 
             audit.Add("StockMovementReversed", nameof(StockMovement), id.ToString(), reason);
@@ -352,7 +361,9 @@ public static class InventoryEndpoints
                 }
 
                 var batch = await db.StockBatches.FromSqlInterpolated($"SELECT * FROM StockBatches WHERE Id = {request.BatchId} FOR UPDATE").SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
-                if (batch.Quantity + request.Quantity < 0)
+
+                // Stock promised to an unpaid pharmacy bill stays for that bill.
+                if (batch.Quantity + request.Quantity < 0 || (request.Quantity < 0 && await stock.FreeAsync(batch, ct) + request.Quantity < 0))
                 {
                     throw new AppException(StatusCodes.Status409Conflict, "insufficient_stock", "موجودی این بچ کافی نیست.");
                 }
@@ -390,7 +401,7 @@ public static class InventoryEndpoints
                     throw new AppException(StatusCodes.Status400BadRequest, "same_location", "مبدأ و مقصد یکی است.");
                 }
 
-                if (source.Quantity < request.Quantity)
+                if (source.Quantity < request.Quantity || await stock.FreeAsync(source, ct) < request.Quantity)
                 {
                     throw new AppException(StatusCodes.Status409Conflict, "insufficient_stock", "موجودی این بچ کافی نیست.");
                 }
@@ -727,7 +738,7 @@ public static class InventoryEndpoints
 
     private static IQueryable<SaleRow> ProjectSales(IQueryable<Sale> sales) => sales.Select(s => new SaleRow(
         s.Id, s.SaleNumber, s.Kind.ToString(), s.PatientId, s.Patient != null ? (s.Patient.FirstName + " " + (s.Patient.LastName ?? "")).Trim() : null, s.PrescriptionId,
-        s.InvoiceId, s.Invoice!.InvoiceNumber, s.Invoice.Total, s.Invoice.Total - s.Invoice.Discount - s.Invoice.Paid, s.Invoice.Status.ToString(), s.IsReturned, s.CreatedAt, s.Version));
+        s.InvoiceId, s.Invoice!.InvoiceNumber, s.Invoice.Total, s.Invoice.Total - s.Invoice.Discount - s.Invoice.Paid, s.Invoice.Status.ToString(), s.IsReturned, s.CreatedAt, s.Version, s.DeliveredAt));
 
     private sealed record OrderProjection(long Id, string OrderNumber, long? PatientId, string? PatientName, long? OpticalPrescriptionId, string? Description, OpticalOrderStatus Status, long InvoiceId, string InvoiceNumber, decimal Total, decimal Balance, DateTime? DeliveredAt, DateTime CreatedAt, int Version);
 

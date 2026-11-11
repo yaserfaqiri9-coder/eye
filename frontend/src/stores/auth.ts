@@ -9,6 +9,10 @@ export interface CurrentUser {
   fullName: string
   roles: string[]
   permissions: string[]
+  /** Sidebar pages an administrator hid for this user. Display only: the permissions stay. */
+  hiddenMenu?: string[]
+  /** The online copy: everything can be viewed, nothing changed. */
+  readOnly?: boolean
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -32,9 +36,9 @@ export const useAuthStore = defineStore('auth', () => {
     loaded.value = true
   }
 
-  async function login(userName: string, password: string) {
+  async function login(userName: string, password: string, code?: string) {
     clearLookups()
-    user.value = await api<CurrentUser>('/auth/login', { method: 'POST', body: { userName, password } })
+    user.value = await api<CurrentUser>('/auth/login', { method: 'POST', body: { userName, password, code: code || undefined } })
     loaded.value = true
   }
 

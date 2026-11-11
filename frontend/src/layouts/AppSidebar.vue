@@ -91,7 +91,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => observer?.disconnect())
 
-const allowed = (item: MenuItem) => !item.permission || auth.can(item.permission)
+const allowed = (item: MenuItem) =>
+  (!item.permission || auth.can(item.permission)) && !auth.user?.hiddenMenu?.includes(item.to)
 
 const sections = computed(() =>
   menu

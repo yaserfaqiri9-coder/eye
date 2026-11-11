@@ -106,7 +106,10 @@ onMounted(load)
           <thead><tr><th>شماره</th><th>مریض</th><th><span class="xr-eye xr-eye--od">OD</span> SPH / CYL / AXIS / ADD</th><th><span class="xr-eye xr-eye--os">OS</span> SPH / CYL / AXIS / ADD</th><th>PD</th><th>فراخوان</th><th>عملیات</th></tr></thead>
           <tbody>
             <tr v-for="rx in prescriptions" :key="rx.id">
-              <td><span class="ltr-num">{{ rx.rxNumber }}</span></td>
+              <td>
+                <span class="ltr-num">{{ rx.rxNumber }}</span>
+                <span v-if="rx.fromRefraction" class="xr-badge xr-badge--cyan ms-2">بینایی‌سنجی</span>
+              </td>
               <td><span class="xr-person__name">{{ rx.patientName }}</span></td>
               <td><span class="ltr-num">{{ rx.sphereOd ?? '—' }} / {{ rx.cylinderOd ?? '—' }} / {{ rx.axisOd ?? '—' }} / {{ rx.addOd ?? '—' }}</span></td>
               <td><span class="ltr-num">{{ rx.sphereOs ?? '—' }} / {{ rx.cylinderOs ?? '—' }} / {{ rx.axisOs ?? '—' }} / {{ rx.addOs ?? '—' }}</span></td>

@@ -125,6 +125,13 @@ const appChildren: RouteRecordRaw[] = [
     meta: { permission: 'pharmacy.create', title: 'دواخانه' },
   },
   {
+    path: 'pharmacy/rx/:id(\\d+)',
+    name: 'pharmacy-rx',
+    component: pages.pharmacyRx,
+    props: true,
+    meta: { permission: 'pharmacy.create', title: 'نسخه در دواخانه' },
+  },
+  {
     path: 'pharmacy/sale',
     name: 'pharmacy-sale',
     component: pages.pharmacySale,

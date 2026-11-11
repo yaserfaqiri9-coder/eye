@@ -1,4 +1,5 @@
-# Encrypted backup of the database, uploaded files and session keys. Runs from Task Scheduler (see install.ps1).
+# Encrypted backup of the database, uploaded files and session keys. Runs nightly at 02:00 Kabul time from Task Scheduler (see install.ps1).
+# Keeps 7 daily, 4 weekly and 3 monthly backups. With secrets\offsite-backup.json, an encrypted copy also goes to the online server over SFTP.
 # Any failure is recorded in logs\backup-status.json (the web app shows a warning from it) and in the Windows Application log.
 param(
     # Must be on a different physical disk from the database: external drive or network share.
@@ -9,8 +10,6 @@ param(
     [string]$Database = 'alshifa',
     [string]$MySqlBin,
     [string]$Gpg,
-    [int]$KeepAllDays = 7,
-    [int]$KeepDailyDays = 35,
     [switch]$AllowSameDisk
 )
 
@@ -19,6 +18,7 @@ param(
 if (-not $MySqlBin) { $MySqlBin = Join-Path $Root 'mysql\bin' }
 $statusFile = Join-Path $Root 'logs\backup-status.json'
 $passwordFile = Join-Path $Root 'secrets\backup-password.txt'
+$offsiteFile = Join-Path $Root 'secrets\offsite-backup.json'
 $stagingRoot = Join-Path $Root 'backup-staging'
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
 $work = Join-Path $stagingRoot $stamp
@@ -61,7 +61,52 @@ function Copy-Backup([string]$Source, [string]$Folder, [string]$OriginalHash) {
         Remove-Item $check -Force -ErrorAction SilentlyContinue
     }
     Move-Item -Force $partial (Join-Path $Folder $name)
-    Remove-ExpiredBackups $Folder $KeepAllDays $KeepDailyDays
+    Remove-ExpiredBackups $Folder
+}
+
+# The copy outside the hospital: SFTP with a key that opens only an upload folder on the online server, and a pinned host key.
+# The file is already encrypted here; the server never sees the password. Like the local copy, it is read back and compared before it counts.
+function Copy-Offsite([string]$Source, [string]$OriginalHash) {
+    $settings = Get-Content $offsiteFile -Raw | ConvertFrom-Json
+    $sftp = Join-Path $env:SystemRoot 'System32\OpenSSH\sftp.exe'
+    if (-not (Test-Path $sftp)) { throw 'Windows OpenSSH client (sftp.exe) is not installed.' }
+    $port = if ($settings.port) { [int]$settings.port } else { 22 }
+    $dir = $settings.remoteDir.TrimEnd('/')
+    $base = @('-P', "$port", '-i', (Join-Path $Root 'secrets\offsite_ed25519'),
+        '-o', "UserKnownHostsFile=$(Join-Path $Root 'secrets\offsite_known_hosts')", '-o', 'StrictHostKeyChecking=yes',
+        '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=30', "$($settings.user)@$($settings.host)")
+    function Invoke-Sftp([string[]]$Commands) {
+        # Commands go in a file without a byte order mark: piped, some PowerShell hosts put one in front of the first command,
+        # which sftp then refuses as "Invalid command".
+        $batch = Join-Path $work "sftp-$([Guid]::NewGuid().ToString('N')).txt"
+        [IO.File]::WriteAllLines($batch, $Commands, (New-Object System.Text.UTF8Encoding $false))
+        try {
+            $output = Invoke-Native $sftp (@('-b', $batch) + $base)
+        } catch {
+            throw "sftp failed: $_"
+        } finally {
+            Remove-Item $batch -Force -ErrorAction SilentlyContinue
+        }
+        return $output
+    }
+
+    $name = Split-Path $Source -Leaf
+    $check = Join-Path $work 'offsite-check.gpg'
+    Invoke-Sftp @("put `"$($Source -replace '\\', '/')`" `"$dir/$name.partial`"", "get `"$dir/$name.partial`" `"$($check -replace '\\', '/')`"") | Out-Null
+    $verify = Join-Path $work 'offsite-verify.zip'
+    try {
+        Unprotect-BackupFile $script:gpgExe $check $verify $passwordFile $work
+        if ((Get-FileHash $verify -Algorithm SHA256).Hash -ne $OriginalHash) { throw 'The copy on the online server does not match the original.' }
+    } finally {
+        Remove-Item $check, $verify -Force -ErrorAction SilentlyContinue
+    }
+    Invoke-Sftp @("rename `"$dir/$name.partial`" `"$dir/$name`"") | Out-Null
+
+    $remote = @(Invoke-Sftp @("ls -1 `"$dir`"") | ForEach-Object { Split-Path "$_".Trim() -Leaf } | Where-Object { $_ -match '^alshifa-\d{8}T\d{6}Z\.zip\.gpg$' })
+    $keep = Select-BackupsToKeep $remote
+    $expired = @($remote | Where-Object { $keep -notcontains $_ })
+    if ($expired.Count) { Invoke-Sftp @($expired | ForEach-Object { "rm `"$dir/$_`"" }) | Out-Null }
+    return "$($settings.user)@$($settings.host):$dir"
 }
 
 try {
@@ -109,6 +154,19 @@ try {
     if ($OptionalDestination -and (Test-Path ([IO.Path]::GetPathRoot($OptionalDestination)))) {
         try { Copy-Backup $encrypted $OptionalDestination $hash } catch { $optionalProblem = "$_" }
     }
+
+    # A failed offsite copy is reported but does not undo the local backup, which is already safe.
+    $offsite = @{}
+    if (Test-Path $offsiteFile) {
+        try {
+            $target = Copy-Offsite $encrypted $hash
+            $offsite = @{ offsiteTarget = $target; offsiteLastSuccessAt = (Get-Date).ToUniversalTime().ToString('o'); offsiteError = $null }
+        } catch {
+            $offsite = @{ offsiteError = "$_" }
+            try { Invoke-Native 'eventcreate.exe' @('/T', 'WARNING', '/ID', '101', '/L', 'APPLICATION', '/SO', 'AlShifaBackup', '/D', "Al-Shifa offsite backup copy failed: $_") | Out-Null } catch { }
+        }
+    }
+    Update-Status $offsite
 
     $now = (Get-Date).ToUniversalTime().ToString('o')
     Update-Status @{

@@ -56,10 +56,14 @@ public sealed record RxItemInput(
     [MaxLength(300)] string? Instructions,
     [Range(0.001, 100000)] decimal Quantity);
 
-public sealed record CreatePrescriptionRequest(long VisitId, [MaxLength(1000)] string? Notes, [Required, MinLength(1)] RxItemInput[] Items);
+/// <param name="ValidUntil">Last day the pharmacy may dispense it without the doctor. Left empty, the doctor set no limit.</param>
+public sealed record CreatePrescriptionRequest(long VisitId, [MaxLength(1000)] string? Notes, [Required, MinLength(1)] RxItemInput[] Items, DateOnly? ValidUntil = null);
 
 /// <param name="Reason">Required once the exam is final. Before that the change is free, though still kept in the history.</param>
-public sealed record EditPrescriptionRequest([MaxLength(1000)] string? Notes, [Required, MinLength(1)] RxItemInput[] Items, int Version, [MaxLength(500)] string? Reason = null);
+public sealed record EditPrescriptionRequest([MaxLength(1000)] string? Notes, [Required, MinLength(1)] RxItemInput[] Items, int Version, [MaxLength(500)] string? Reason = null, DateOnly? ValidUntil = null);
+
+/// <summary>The doctor's answer when the pharmacy asks for review or the validity ran out.</summary>
+public sealed record ReapprovePrescriptionRequest(DateOnly? ValidUntil, [Required, MinLength(3), MaxLength(300)] string Note, int Version);
 
 public sealed record EditOpticalRxRequest(
     [MaxLength(10)] string? SphereOd, [MaxLength(10)] string? CylinderOd, [MaxLength(10)] string? AxisOd, [MaxLength(10)] string? AddOd,
@@ -68,7 +72,7 @@ public sealed record EditOpticalRxRequest(
 
 public sealed record RxItemDto(long Id, string DrugName, string? Dose, string? Route, string? Duration, string? Instructions, decimal Quantity, decimal DispensedQuantity);
 
-public sealed record PrescriptionDto(long Id, string RxNumber, long PatientId, string PatientFileNumber, string PatientName, long VisitId, string? Notes, string Status, DateTime CreatedAt, int Version, IReadOnlyList<RxItemDto> Items);
+public sealed record PrescriptionDto(long Id, string RxNumber, long PatientId, string PatientFileNumber, string PatientName, long VisitId, string? Notes, string Status, DateTime CreatedAt, int Version, IReadOnlyList<RxItemDto> Items, string PharmacyStatus = "AwaitingVisit", DateOnly? ValidUntil = null);
 
 public sealed record CreateOpticalRxRequest(
     long VisitId,
@@ -79,7 +83,7 @@ public sealed record CreateOpticalRxRequest(
 public sealed record OpticalRxDto(
     long Id, string RxNumber, long PatientId, string PatientFileNumber, string PatientName, long VisitId,
     string? SphereOd, string? CylinderOd, string? AxisOd, string? AddOd, string? SphereOs, string? CylinderOs, string? AxisOs, string? AddOs,
-    string? Pd, string? Notes, bool IsCancelled, DateTime CreatedAt, int Version);
+    string? Pd, string? Notes, bool IsCancelled, DateTime CreatedAt, int Version, bool FromRefraction = false);
 
 public sealed record CreateFollowUpRequest(long VisitId, DateOnly DueDate, [MaxLength(300)] string? Note);
 

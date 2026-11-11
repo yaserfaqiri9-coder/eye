@@ -16,7 +16,7 @@ public static class Roles
     public const string Inventory = "Inventory";
     public const string AudioStation = "AudioStation";
 
-    /// <summary>Reads work reports online through Cloudflare Access, and nothing else. Online sign-in accepts only accounts with this role alone.</summary>
+    /// <summary>Reads work reports (counts only), and nothing else.</summary>
     public const string DoctorReportsViewer = "DoctorReportsViewer";
 }
 
@@ -48,7 +48,8 @@ public static class RolePermissions
         {
             // visits.manage moves a patient to another doctor when the responsible one cannot. It opens no clinical data.
             ["patients"] = "V", ["visits"] = "VM", ["appointments"] = "V", ["diagnostics"] = "V", ["surgery"] = "V",
-            ["pharmacy"] = "V", ["optical"] = "V", ["inventory"] = "V", ["invoices"] = "VO", ["payments"] = "VO",
+            // pharmacy.approve: lets a bill be handed over before it is paid, in an emergency, with a recorded reason.
+            ["pharmacy"] = "VA", ["optical"] = "V", ["inventory"] = "V", ["invoices"] = "VO", ["payments"] = "VO",
             ["cash"] = "V", ["ledger"] = "V", ["expenses"] = "V", ["reports"] = "VPO", ["users"] = "V",
             ["settings"] = "V", ["audit"] = "V",
         },

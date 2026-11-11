@@ -56,7 +56,7 @@ if ($LanIp) {
     Report 'SKIP' 'LAN address' 'pass -LanIp'
 }
 
-# Another VPN can capture traffic or break the LAN path. Tailscale itself is expected.
+# A VPN can capture traffic or break the LAN path. Tailscale is left out because other programs on the laptop may use it.
 $tunnels = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.Name -notmatch 'Tailscale' -and $_.InterfaceDescription -match 'TAP|TUN|Wintun|VPN|WireGuard' }
 Check (-not $tunnels) 'Other VPNs' $(if ($tunnels) { "turn off: $(($tunnels.Name) -join ', ')" } else { 'none active' }) 'WARN'
 

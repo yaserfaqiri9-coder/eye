@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using AlShifa.Api.Features.Sync;
 using AlShifa.Api.Features.Users;
 using AlShifa.Api.Infrastructure;
 using Microsoft.AspNetCore.Antiforgery;
@@ -6,11 +7,12 @@ using Microsoft.AspNetCore.Identity;
 
 namespace AlShifa.Api.Features.Auth;
 
-public sealed record LoginRequest([Required, MaxLength(100)] string UserName, [Required, MaxLength(200)] string Password);
+/// <param name="Code">The six digits from the authenticator app. Asked for online only.</param>
+public sealed record LoginRequest([Required, MaxLength(100)] string UserName, [Required, MaxLength(200)] string Password, [MaxLength(10)] string? Code = null);
 
 public sealed record ChangePasswordRequest([Required, MaxLength(200)] string CurrentPassword, [Required, MaxLength(200)] string NewPassword);
 
-public sealed record CurrentUserDto(long Id, string UserName, string FullName, IReadOnlyList<string> Roles, IReadOnlyList<string> Permissions);
+public sealed record CurrentUserDto(long Id, string UserName, string FullName, IReadOnlyList<string> Roles, IReadOnlyList<string> Permissions, IReadOnlyList<string> HiddenMenu, bool ReadOnly = false);
 
 public static class AuthEndpoints
 {
@@ -33,7 +35,8 @@ public static class AuthEndpoints
             UserManager<AppUser> users,
             IAntiforgery antiforgery,
             AuditService audit,
-            AppDbContext db) =>
+            AppDbContext db,
+            SyncSwitch sync) =>
         {
             var user = await users.FindByNameAsync(request.UserName);
             var result = user is null
@@ -43,29 +46,43 @@ public static class AuthEndpoints
             // IsNotAllowed (deactivated) and bad credentials share one message so accounts cannot be probed.
             if (!result.Succeeded)
             {
-                audit.Add("LoginFailed", "User", user?.Id.ToString(), RemoteAccess.Email(http) is { } email ? $"Online, Cloudflare Access: {email}" : null);
+                audit.Add("LoginFailed", "User", user?.Id.ToString());
                 await db.SaveChangesAsync();
                 var message = result.IsLockedOut ? "حساب به‌طور موقت قفل شده است. بعداً تلاش کنید." : "نام کاربری یا رمز درست نیست.";
                 throw new AppException(StatusCodes.Status401Unauthorized, "invalid_login", message);
             }
 
-            // Checked after the password, so a refusal says nothing about accounts the caller cannot sign in to.
-            var remoteEmail = RemoteAccess.Email(http);
-            if (RemoteAccess.IsRemote(http) && !RemoteAccess.MayUse(await signIn.CreateUserPrincipalAsync(user!)))
+            // Online, a password alone is not enough: the account must have been enabled there with an authenticator app.
+            if (sync.ReadOnly)
             {
-                audit.Add("RemoteLoginDenied", "User", user!.Id.ToString(), $"Cloudflare Access: {remoteEmail}", userId: user.Id);
-                await db.SaveChangesAsync();
-                throw new AppException(StatusCodes.Status403Forbidden, "remote_not_allowed", "این حساب برای دسترسی آنلاین مجاز نیست.");
+                if (!user!.TwoFactorEnabled)
+                {
+                    audit.Add("OnlineLoginDenied", "User", user.Id.ToString(), "Online access not enabled", userId: user.Id);
+                    throw new AppException(StatusCodes.Status403Forbidden, "online_not_enabled", "این حساب برای ورود آنلاین فعال نشده است.");
+                }
+
+                if (string.IsNullOrWhiteSpace(request.Code))
+                {
+                    throw new AppException(StatusCodes.Status401Unauthorized, "two_factor_required", "کد شش‌رقمی برنامه تأیید هویت را وارد کنید.");
+                }
+
+                var code = request.Code.Replace(" ", "").Replace("-", "");
+                if (!await users.VerifyTwoFactorTokenAsync(user, users.Options.Tokens.AuthenticatorTokenProvider, code))
+                {
+                    await users.AccessFailedAsync(user);
+                    audit.Add("LoginFailed", "User", user.Id.ToString(), "Wrong authenticator code", userId: user.Id);
+                    throw new AppException(StatusCodes.Status401Unauthorized, "invalid_code", "کد تأیید درست نیست یا منقضی شده است.");
+                }
             }
 
             await signIn.SignInAsync(user!, isPersistent: false);
-            audit.Add("Login", "User", user!.Id.ToString(), remoteEmail is null ? null : $"Online, Cloudflare Access: {remoteEmail}", userId: user.Id);
+            audit.Add("Login", "User", user!.Id.ToString(), sync.ReadOnly ? "Online" : null, userId: user.Id);
             await db.SaveChangesAsync();
 
             // The antiforgery token is bound to the identity, so it must be reissued after login.
             http.User = await signIn.CreateUserPrincipalAsync(user);
             IssueXsrfCookie(http, antiforgery);
-            return Results.Ok(ToDto(user, http));
+            return Results.Ok(await ToDto(user, http, users, sync));
         }).RequireRateLimiting("login");
 
         group.MapPost("/logout", async (HttpContext http, SignInManager<AppUser> signIn, IAntiforgery antiforgery) =>
@@ -95,10 +112,10 @@ public static class AuthEndpoints
             return Results.NoContent();
         }).RequireAuthorization();
 
-        group.MapGet("/me", async (HttpContext http, UserManager<AppUser> users) =>
+        group.MapGet("/me", async (HttpContext http, UserManager<AppUser> users, SyncSwitch sync) =>
         {
             var user = await users.GetUserAsync(http.User);
-            return user is null ? Results.Unauthorized() : Results.Ok(ToDto(user, http));
+            return user is null ? Results.Unauthorized() : Results.Ok(await ToDto(user, http, users, sync));
         }).RequireAuthorization();
     }
 
@@ -114,10 +131,13 @@ public static class AuthEndpoints
         });
     }
 
-    private static CurrentUserDto ToDto(AppUser user, HttpContext http) => new(
+    // Hidden sidebar pages come from the database, so a change shows on the user's next page load without signing in again.
+    private static async Task<CurrentUserDto> ToDto(AppUser user, HttpContext http, UserManager<AppUser> users, SyncSwitch sync) => new(
         user.Id,
         user.UserName!,
         user.FullName,
         http.User.FindAll(System.Security.Claims.ClaimTypes.Role).Select(c => c.Value).Distinct().ToList(),
-        http.User.FindAll(RolePermissions.ClaimType).Select(c => c.Value).Distinct().Order().ToList());
+        http.User.FindAll(RolePermissions.ClaimType).Select(c => c.Value).Distinct().Order().ToList(),
+        (await users.GetClaimsAsync(user)).Where(c => c.Type == Sidebar.HiddenClaim).Select(c => c.Value).Order().ToList(),
+        sync.ReadOnly);
 }

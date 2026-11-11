@@ -151,8 +151,10 @@ public sealed class ReportTests(ApiFixture api)
         var doc = (await cashier.GetFromJsonAsync<PrintDocument>($"/api/print/receipt/{first.Id}", JsonOptions))!;
         Assert.Equal(first.ReceiptNumber, doc.Number);
         Assert.Equal(hospital, doc.Hospital.HospitalName);
-        Assert.Contains(doc.Totals!, t => t.Value!.Contains("100"));
-        Assert.Contains(doc.Totals!, t => t.Value!.Contains("150"));
+        Assert.Equal(("مبلغ", "100 افغانی"), (doc.Totals![0].Label, doc.Totals[0].Value));
+
+        // 150 of the 300 is still owed after both payments, so the receipt names the balance rather than reading as settled.
+        Assert.Contains(doc.Fields, f => f.Label == "مانده فاکتور" && f.Value == "150 افغانی");
     }
 
     [Fact]

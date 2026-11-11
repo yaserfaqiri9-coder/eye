@@ -298,3 +298,22 @@ test('touch screens keep the full menu even when collapsing was saved earlier', 
 
   await context.close()
 })
+
+test('pages an administrator hid for the user stay out of the menu', async ({ page }) => {
+  await page.route(/^https?:\/\/[^/]+\/api\//, (route) =>
+    route.request().url().includes('/auth/me')
+      ? route.fulfill({
+          json: { id: 1, userName: 'doc', fullName: 'داکتر', roles: ['Manager'], permissions, hiddenMenu: ['/reception', '/reports'] },
+        })
+      : route.fulfill({ json: { items: [], total: 0, page: 1, pageSize: 20 } }),
+  )
+  await page.route(/^https?:\/\/[^/]+\/hubs\//, (route) => route.abort())
+  await page.setViewportSize({ width: 1600, height: 900 })
+  await page.goto('/patients')
+  await page.locator('.sidebar__link').first().waitFor()
+
+  const sidebar = page.locator('.sidebar')
+  await expect(sidebar.getByRole('link', { name: 'مریضان' })).toBeVisible()
+  await expect(sidebar.getByRole('link', { name: 'پذیرش و صف' })).toHaveCount(0)
+  await expect(sidebar.getByRole('link', { name: 'گزارش‌ها' })).toHaveCount(0)
+})

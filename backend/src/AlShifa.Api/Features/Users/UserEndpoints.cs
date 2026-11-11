@@ -1,4 +1,6 @@
 using System.ComponentModel.DataAnnotations;
+using System.Security.Claims;
+using System.Text.RegularExpressions;
 using AlShifa.Api.Features.Auth;
 using AlShifa.Api.Features.Realtime;
 using AlShifa.Api.Infrastructure;
@@ -20,6 +22,35 @@ public sealed record SetRolesRequest([Required, MinLength(1)] string[] Roles);
 public sealed record EditUserRequest([Required, MaxLength(150)] string FullName);
 
 public sealed record ResetPasswordRequest([Required, MaxLength(200)] string NewPassword);
+
+public sealed record SidebarResponse(IReadOnlyList<string> Permissions, IReadOnlyList<string> Hidden);
+
+public sealed record SetSidebarRequest([Required] string[] Hidden);
+
+/// <summary>
+/// Sidebar pages an administrator hides from one user, stored as user claims. Display only: it grants and removes no
+/// permission, and the API still answers every request the user's roles allow.
+/// </summary>
+public static partial class Sidebar
+{
+    public const string HiddenClaim = "sidebar.hidden";
+
+    private const int MaxItems = 50;
+
+    [GeneratedRegex("^(/[a-z0-9-]+)+$")]
+    private static partial Regex PagePath();
+
+    public static List<string> Normalize(IEnumerable<string> hidden)
+    {
+        var values = hidden.Select(v => v?.Trim() ?? "").Distinct().Order().ToList();
+        if (values.Count > MaxItems || values.Any(v => v.Length > 100 || !PagePath().IsMatch(v)))
+        {
+            throw new AppException(StatusCodes.Status400BadRequest, "invalid_sidebar", "بخش انتخاب‌شده معتبر نیست.");
+        }
+
+        return values;
+    }
+}
 
 public static class UserEndpoints
 {
@@ -109,6 +140,52 @@ public static class UserEndpoints
             audit.Add("UserRolesChanged", "User", user.Id.ToString(), $"{string.Join(",", current)} -> {string.Join(",", request.Roles)}");
             await db.SaveChangesAsync();
             connections.Disconnect(id);
+            return Results.NoContent();
+        }).RequirePermission("users.manage");
+
+        group.MapGet("/{id:long}/sidebar", async (long id, AppDbContext db, CancellationToken ct) =>
+        {
+            if (!await db.Users.AnyAsync(u => u.Id == id, ct))
+            {
+                throw AppException.NotFound();
+            }
+
+            // The pages the user's roles open, so the form lists only those.
+            var permissions = await (
+                from ur in db.UserRoles
+                join rc in db.RoleClaims on ur.RoleId equals rc.RoleId
+                where ur.UserId == id && rc.ClaimType == RolePermissions.ClaimType
+                select rc.ClaimValue!).Distinct().OrderBy(p => p).ToListAsync(ct);
+
+            var hidden = await db.UserClaims
+                .Where(c => c.UserId == id && c.ClaimType == Sidebar.HiddenClaim)
+                .Select(c => c.ClaimValue!)
+                .OrderBy(v => v)
+                .ToListAsync(ct);
+
+            return Results.Ok(new SidebarResponse(permissions, hidden));
+        }).RequirePermission("users.manage");
+
+        group.MapPut("/{id:long}/sidebar", async (long id, SetSidebarRequest request, UserManager<AppUser> users, AuditService audit, AppDbContext db) =>
+        {
+            var hidden = Sidebar.Normalize(request.Hidden);
+            var user = await users.FindByIdAsync(id.ToString()) ?? throw AppException.NotFound();
+
+            var current = (await users.GetClaimsAsync(user)).Where(c => c.Type == Sidebar.HiddenClaim).ToList();
+            var removed = current.Where(c => !hidden.Contains(c.Value)).ToList();
+            if (removed.Count > 0)
+            {
+                await users.RemoveClaimsAsync(user, removed);
+            }
+
+            var added = hidden.Except(current.Select(c => c.Value)).Select(v => new Claim(Sidebar.HiddenClaim, v)).ToList();
+            if (added.Count > 0)
+            {
+                await users.AddClaimsAsync(user, added);
+            }
+
+            audit.Add("UserSidebarChanged", "User", id.ToString(), string.Join(",", hidden));
+            await db.SaveChangesAsync();
             return Results.NoContent();
         }).RequirePermission("users.manage");
 

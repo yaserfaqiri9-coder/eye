@@ -33,12 +33,17 @@ public sealed record RefractionLineDto(string Stage, string Eye, string? Sphere,
 public sealed record RefractionDto(
     long Id, long VisitId, DateOnly VisitDate, string? UnaidedVaOd, string? UnaidedVaOs, string? PinholeVaOd, string? PinholeVaOs,
     string? NearVaOd, string? NearVaOs, string? Pd, string? Measurements, string? Notes, DateTime RecordedAt, DateTime? CompletedAt, int Version,
-    IReadOnlyList<RefractionLineDto> Lines);
+    IReadOnlyList<RefractionLineDto> Lines, string? OpticalRxNumber = null);
+
+/// <param name="ReturnToDoctor">The patient goes back to the requesting doctor's queue. Without it the patient leaves for the optical desk only.</param>
+/// <param name="SendToOptical">The final values and PD become an optical prescription the optical desk sees at once.</param>
+public sealed record CompleteRefractionRequest(bool ReturnToDoctor = true, bool SendToOptical = false);
 
 /// <summary>
 /// Recorded under the pre-exam permissions. It starts only from the doctor's paid request and, once complete, returns
 /// the patient to the doctor. Values are stored exactly as entered. Fields are provisional until the medical lead
-/// confirms them (WORKFLOWS.md M-8).
+/// confirms them (WORKFLOWS.md M-8). The refractionist may send the final values to the optical desk as an optical
+/// prescription; a correction to the refraction then follows into it until glasses are ordered against it.
 /// </summary>
 public static class RefractionEndpoints
 {
@@ -58,7 +63,7 @@ public static class RefractionEndpoints
             var patientId = await ClinicalEndpoints.PatientOfVisitAsync(db, visitId, ct);
             await access.EnsureCanViewAsync(patientId, ct);
             var row = await Query(db).SingleOrDefaultAsync(r => r.VisitId == visitId, ct);
-            return row is null ? Results.NoContent() : Results.Ok(ToDto(row));
+            return row is null ? Results.NoContent() : Results.Ok(await ToDtoAsync(db, row, ct));
         }).RequirePermission("preexam.view");
 
         group.MapGet("/queue", async (AppDbContext db, CancellationToken ct) =>
@@ -84,7 +89,7 @@ public static class RefractionEndpoints
             return Results.Ok(rows.Select(r => new { r.Id, r.VisitId, r.QueueNumber, PatientFileNumber = r.FileNumber, PatientName = $"{r.FirstName} {r.LastName}".Trim(), r.Status, r.Paid }));
         }).RequirePermission("preexam.view");
 
-        group.MapPut("/{visitId:long}", async (long visitId, SaveRefractionRequest request, AppDbContext db, CurrentUser user, AuditService audit, CancellationToken ct) =>
+        group.MapPut("/{visitId:long}", async (long visitId, SaveRefractionRequest request, AppDbContext db, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
         {
             await using var tx = await db.Database.BeginTransactionAsync(ct);
             ClinicalEndpoints.EnsureNotCancelled(await Visits.VisitService.LockAsync(db, visitId, ct));
@@ -174,21 +179,27 @@ public static class RefractionEndpoints
             audit.Add("RefractionSaved", "Visit", visitId.ToString());
             await db.SaveChangesAsync(ct);
 
-            await db.RefractionLines.Where(l => l.RefractionId == row.Id).ExecuteDeleteAsync(ct);
+            await db.ExecuteDeleteSyncedAsync(db.RefractionLines.Where(l => l.RefractionId == row.Id), ct);
             foreach (var line in lines)
             {
                 line.RefractionId = row.Id;
             }
 
             db.RefractionLines.AddRange(lines);
+            if (amendReason is not null)
+            {
+                await FollowCorrectionAsync(db, row, lines, amendReason, user, audit, outbox, ct);
+            }
+
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
 
-            return Results.Ok(ToDto(await Query(db).SingleAsync(r => r.Id == row.Id, ct)));
+            return Results.Ok(await ToDtoAsync(db, await Query(db).SingleAsync(r => r.Id == row.Id, ct), ct));
         }).RequirePermission("preexam.edit");
 
-        group.MapPost("/{visitId:long}/complete", async (long visitId, AppDbContext db, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
+        group.MapPost("/{visitId:long}/complete", async (long visitId, CompleteRefractionRequest? request, AppDbContext db, NumberService numbers, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
         {
+            request ??= new CompleteRefractionRequest();
             await using var tx = await db.Database.BeginTransactionAsync(ct);
             await Visits.VisitService.LockAsync(db, visitId, ct);
             var row = await db.Refractions.SingleOrDefaultAsync(r => r.VisitId == visitId, ct)
@@ -202,10 +213,35 @@ public static class RefractionEndpoints
             row.CompletedAt = DateTime.UtcNow;
             order.Status = DiagnosticStatus.ResultReady;
             db.DiagnosticResults.Add(new DiagnosticResult { OrderId = order.Id, ResultText = "نتیجه در فرم بینایی‌سنجی ثبت شد.", PerformedByUserId = user.Id });
-            audit.Add("RefractionCompleted", "Visit", visitId.ToString());
+            audit.Add("RefractionCompleted", "Visit", visitId.ToString(), request.ReturnToDoctor ? null : "Not returned to the doctor");
             outbox.Add("DiagnosticResultReady", new { orderId = order.Id, visitId }, Groups.Doctor, Groups.Triage);
             await db.SaveChangesAsync(ct);
-            await DiagnosticGate.ReturnToDoctorAsync(db, visitId, user, outbox, ct);
+            if (request.SendToOptical)
+            {
+                await SendToOpticalAsync(db, row, numbers, user, audit, outbox, ct);
+            }
+
+            if (request.ReturnToDoctor)
+            {
+                await DiagnosticGate.ReturnToDoctorAsync(db, visitId, user, outbox, ct);
+            }
+
+            await tx.CommitAsync(ct);
+            return Results.NoContent();
+        }).RequirePermission("preexam.edit");
+
+        // For a refraction completed without sending, or whose copy at the optical desk was cancelled.
+        group.MapPost("/{visitId:long}/send-to-optical", async (long visitId, AppDbContext db, NumberService numbers, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            ClinicalEndpoints.EnsureNotCancelled(await Visits.VisitService.LockAsync(db, visitId, ct));
+            var row = await db.Refractions.SingleOrDefaultAsync(r => r.VisitId == visitId, ct);
+            if (row?.CompletedAt is null)
+            {
+                throw new AppException(StatusCodes.Status409Conflict, "not_completed", "ابتدا بینایی‌سنجی را تکمیل کنید.");
+            }
+
+            await SendToOpticalAsync(db, row, numbers, user, audit, outbox, ct);
             await tx.CommitAsync(ct);
             return Results.NoContent();
         }).RequirePermission("preexam.edit");
@@ -214,7 +250,10 @@ public static class RefractionEndpoints
         {
             await access.EnsureCanViewAsync(patientId, ct);
             var rows = await Query(db).Where(r => r.Visit!.PatientId == patientId).OrderByDescending(r => r.Id).Take(20).ToListAsync(ct);
-            return Results.Ok(rows.Select(ToDto).ToList());
+            var ids = rows.Select(r => r.Id).ToList();
+            var sent = await ActiveCopies(db).Where(p => ids.Contains(p.RefractionId!.Value))
+                .Select(p => new { RefractionId = p.RefractionId!.Value, p.RxNumber }).ToListAsync(ct);
+            return Results.Ok(rows.Select(r => ToDto(r, sent.FirstOrDefault(s => s.RefractionId == r.Id)?.RxNumber)).ToList());
         }).RequirePermission("preexam.view").WithTags("Refraction");
     }
 
@@ -223,11 +262,103 @@ public static class RefractionEndpoints
             && (o.Status == DiagnosticStatus.Requested || o.Status == DiagnosticStatus.InProgress), ct)
         ?? throw new AppException(StatusCodes.Status409Conflict, "refraction_not_requested", "رفرکشن فقط با درخواست داکتر شروع می‌شود.");
 
+    private static IQueryable<OpticalPrescription> ActiveCopies(AppDbContext db) =>
+        db.OpticalPrescriptions.Where(p => p.RefractionId != null && !p.IsCancelled);
+
+    private static (string? Sphere, string? Cylinder, string? Axis, string? Add) FinalOf(IEnumerable<RefractionLine> lines, EyeSide eye) =>
+        lines.SingleOrDefault(l => l.Stage == RefractionStage.Final && l.Eye == eye) is { } l ? (l.Sphere, l.Cylinder, l.Axis, l.Add) : default;
+
+    /// <summary>Copies the final row of each eye and the PD into an optical prescription. The caller holds the visit lock.</summary>
+    private static async Task SendToOpticalAsync(AppDbContext db, Refraction row, NumberService numbers, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct)
+    {
+        if (await ActiveCopies(db).AnyAsync(p => p.RefractionId == row.Id, ct))
+        {
+            throw new AppException(StatusCodes.Status409Conflict, "already_sent", "نتیجه این بینایی‌سنجی قبلاً به بخش عینک فرستاده شده است.");
+        }
+
+        var lines = await db.RefractionLines.AsNoTracking().Where(l => l.RefractionId == row.Id && l.Stage == RefractionStage.Final).ToListAsync(ct);
+        var od = FinalOf(lines, EyeSide.OD);
+        var os = FinalOf(lines, EyeSide.OS);
+        if (od is (null, null, null, null) && os is (null, null, null, null))
+        {
+            throw new AppException(StatusCodes.Status409Conflict, "no_final_values", "برای ارسال به بخش عینک، ردیف «نهایی» (Final) را پر و ذخیره کنید.");
+        }
+
+        var rx = new OpticalPrescription
+        {
+            RxNumber = $"OP-{await numbers.NextAsync("optical-rx", ct: ct):D7}",
+            PatientId = await db.Visits.Where(v => v.Id == row.VisitId).Select(v => v.PatientId).SingleAsync(ct),
+            VisitId = row.VisitId,
+            DoctorUserId = user.Id,
+            RefractionId = row.Id,
+            SphereOd = od.Sphere,
+            CylinderOd = od.Cylinder,
+            AxisOd = od.Axis,
+            AddOd = od.Add,
+            SphereOs = os.Sphere,
+            CylinderOs = os.Cylinder,
+            AxisOs = os.Axis,
+            AddOs = os.Add,
+            Pd = row.Pd,
+            Notes = "از بینایی‌سنجی",
+        };
+        db.OpticalPrescriptions.Add(rx);
+        await db.SaveChangesAsync(ct);
+
+        audit.Add("RefractionSentToOptical", "OpticalPrescription", rx.Id.ToString(), $"Visit {row.VisitId}");
+        outbox.Add("OpticalPrescriptionCreated", new { prescriptionId = rx.Id }, Groups.Optical, Groups.Doctor);
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// A correction reaches the optical desk's copy while no glasses are ordered on it. Once lenses may be in the
+    /// workshop the copy stays as ordered, the rule the doctor's own optical prescriptions follow.
+    /// </summary>
+    private static async Task FollowCorrectionAsync(AppDbContext db, Refraction row, List<RefractionLine> lines, string reason, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct)
+    {
+        var rx = await ActiveCopies(db).SingleOrDefaultAsync(p => p.RefractionId == row.Id, ct);
+        if (rx is null)
+        {
+            return;
+        }
+
+        if (await db.OpticalOrders.AnyAsync(o => o.OpticalPrescriptionId == rx.Id && o.Status != Inventory.OpticalOrderStatus.Cancelled, ct))
+        {
+            audit.Add("RefractionAmendedAfterOpticalOrder", "OpticalPrescription", rx.Id.ToString(), reason);
+            return;
+        }
+
+        var od = FinalOf(lines, EyeSide.OD);
+        var os = FinalOf(lines, EyeSide.OS);
+        Amendments.AddChanges(db, nameof(OpticalPrescription), rx.Id,
+        [
+            (nameof(rx.SphereOd), rx.SphereOd, od.Sphere),
+            (nameof(rx.CylinderOd), rx.CylinderOd, od.Cylinder),
+            (nameof(rx.AxisOd), rx.AxisOd, od.Axis),
+            (nameof(rx.AddOd), rx.AddOd, od.Add),
+            (nameof(rx.SphereOs), rx.SphereOs, os.Sphere),
+            (nameof(rx.CylinderOs), rx.CylinderOs, os.Cylinder),
+            (nameof(rx.AxisOs), rx.AxisOs, os.Axis),
+            (nameof(rx.AddOs), rx.AddOs, os.Add),
+            (nameof(rx.Pd), rx.Pd, row.Pd),
+        ], reason, user.Id);
+
+        (rx.SphereOd, rx.CylinderOd, rx.AxisOd, rx.AddOd) = od;
+        (rx.SphereOs, rx.CylinderOs, rx.AxisOs, rx.AddOs) = os;
+        rx.Pd = row.Pd;
+        audit.Add("OpticalPrescriptionEdited", "OpticalPrescription", rx.Id.ToString(), reason);
+        outbox.Add("OpticalPrescriptionCreated", new { prescriptionId = rx.Id }, Groups.Optical, Groups.Doctor);
+    }
+
+    private static async Task<RefractionDto> ToDtoAsync(AppDbContext db, Refraction r, CancellationToken ct) =>
+        ToDto(r, await ActiveCopies(db).Where(p => p.RefractionId == r.Id).Select(p => p.RxNumber).FirstOrDefaultAsync(ct));
+
     private static IQueryable<Refraction> Query(AppDbContext db) =>
         db.Refractions.AsNoTracking().Include(r => r.Visit).Include(r => r.Lines);
 
-    private static RefractionDto ToDto(Refraction r) => new(
+    private static RefractionDto ToDto(Refraction r, string? opticalRxNumber) => new(
         r.Id, r.VisitId, r.Visit!.VisitDate, r.UnaidedVaOd, r.UnaidedVaOs, r.PinholeVaOd, r.PinholeVaOs, r.NearVaOd, r.NearVaOs, r.Pd, r.Measurements, r.Notes,
         r.RecordedAt, r.CompletedAt, r.Version,
-        r.Lines.OrderBy(l => l.Stage).ThenBy(l => l.Eye).Select(l => new RefractionLineDto(l.Stage.ToString(), l.Eye.ToString(), l.Sphere, l.Cylinder, l.Axis, l.Add, l.Va)).ToList());
+        r.Lines.OrderBy(l => l.Stage).ThenBy(l => l.Eye).Select(l => new RefractionLineDto(l.Stage.ToString(), l.Eye.ToString(), l.Sphere, l.Cylinder, l.Axis, l.Add, l.Va)).ToList(),
+        opticalRxNumber);
 }
