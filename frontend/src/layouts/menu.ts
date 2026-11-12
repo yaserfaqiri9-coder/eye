@@ -29,12 +29,12 @@ export function isMenuParent(entry: MenuEntry): entry is MenuParent {
 export const menu: MenuSection[] = [
   {
     title: 'داشبورد',
-    items: [{ label: 'صفحه اصلی', icon: 'ri-home-4-fill', to: '/' }],
+    items: [{ label: 'صفحه اصلی', icon: 'ri-home-5-fill', to: '/' }],
   },
   {
     title: 'مریضان',
     items: [
-      { label: 'پذیرش و صف', icon: 'ri-survey-fill', to: '/reception', permission: 'visits.view' },
+      { label: 'پذیرش و صف', icon: 'ri-clipboard-fill', to: '/reception', permission: 'visits.view' },
       { label: 'مریضان', icon: 'ri-user-heart-fill', to: '/patients', permission: 'patients.view' },
     ],
   },
@@ -64,7 +64,7 @@ export const menu: MenuSection[] = [
         children: [
           { label: 'دواخانه', icon: 'ri-capsule-fill', to: '/pharmacy', permission: 'pharmacy.create' },
           { label: 'عینک', icon: 'ri-glasses-fill', to: '/optical', permission: 'optical.view' },
-          { label: 'گدام', icon: 'ri-archive-fill', to: '/inventory', permission: 'inventory.view' },
+          { label: 'گدام', icon: 'ri-archive-2-fill', to: '/inventory', permission: 'inventory.view' },
         ],
       },
       {
@@ -80,10 +80,10 @@ export const menu: MenuSection[] = [
   {
     title: 'مدیریت',
     items: [
-      { label: 'گزارش‌ها', icon: 'ri-file-chart-fill', to: '/reports', permission: 'reports.view' },
+      { label: 'گزارش‌ها', icon: 'ri-bar-chart-box-fill', to: '/reports', permission: 'reports.view' },
       {
         label: 'مدیریت سازمان',
-        icon: 'ri-building-2-fill',
+        icon: 'ri-building-4-fill',
         children: [
           { label: 'فهرست داکتران', icon: 'ri-stethoscope-fill', to: '/doctors', permission: 'users.view' },
           { label: 'مدیریت بخش‌ها', icon: 'ri-hospital-fill', to: '/departments', permission: 'settings.view' },
