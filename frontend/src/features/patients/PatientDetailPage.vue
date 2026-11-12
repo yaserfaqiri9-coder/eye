@@ -62,11 +62,12 @@ async function load() {
   error.value = ''
   const id = props.id
   try {
-    const nextPatient = await api<Patient>(`/patients/${id}`)
-    const [nextVisits, nextChanges, nextInvoices] = await Promise.all([
+    // Independent reads go out together; only the chart waits, because it needs the latest visit.
+    const [nextPatient, nextVisits, nextChanges, nextInvoices] = await Promise.all([
+      api<Patient>(`/patients/${id}`),
       auth.can('visits.view') ? api<{ items: VisitRow[]; total: number }>(`/visits?patientId=${id}&pageSize=100`) : { items: [], total: 0 },
       auth.can('patients.edit') ? api<ChangeRow[]>(`/patients/${id}/changes`) : [],
-      canSeeMoney.value ? api<{ items: InvoiceRow[] }>(`/invoices?q=${encodeURIComponent(nextPatient.fileNumber)}&pageSize=100`).then((r) => r.items) : [],
+      canSeeMoney.value ? api<{ items: InvoiceRow[] }>(`/invoices?patientId=${id}&pageSize=100`).then((r) => r.items) : [],
     ])
     const latest = nextVisits.items.find((visit) => visit.status !== 'Cancelled')
     const nextChart = await loadChart(latest?.id)

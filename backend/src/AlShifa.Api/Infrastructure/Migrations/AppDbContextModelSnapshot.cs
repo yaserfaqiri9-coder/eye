@@ -1959,8 +1959,12 @@ namespace AlShifa.Api.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CreatedAt");
+
                     b.HasIndex("FileNumber")
                         .IsUnique();
+
+                    b.HasIndex("LastName");
 
                     b.HasIndex("Phone");
 

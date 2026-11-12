@@ -165,7 +165,8 @@ public static class ReportDocuments
             .GroupBy(v => v.VisitDate).Select(g => new { Day = g.Key, Count = g.Count() }).ToListAsync(ct);
 
         // One person counts once, however many times they came in the period.
-        var people = await attended.Select(v => v.Patient!).Distinct()
+        // Distinct ids in a semi-join: distinct whole patient rows made MySQL copy every column into a temporary table.
+        var people = await db.Patients.AsNoTracking().Where(x => attended.Select(v => v.PatientId).Contains(x.Id))
             .Select(x => new { x.Gender, x.BirthDate, x.EstimatedBirthYear }).ToListAsync(ct);
         var male = people.Count(x => x.Gender == Gender.Male);
         var female = people.Count(x => x.Gender == Gender.Female);

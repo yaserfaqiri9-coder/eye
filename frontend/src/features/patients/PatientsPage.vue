@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { api, errorMessage } from '@/api/http'
 import UiCard from '@/components/UiCard.vue'
 import UiPager from '@/components/UiPager.vue'
+import UiListSkeleton from '@/components/UiListSkeleton.vue'
 import { useAuthStore } from '@/stores/auth'
 import { quantity } from '@/utils/money'
 import PatientCell from './PatientCell.vue'
@@ -85,7 +86,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
-    <div v-if="loading && rows.length === 0" class="xr-state" role="status">در حال بارگذاری...</div>
+    <UiListSkeleton v-if="loading && rows.length === 0" />
     <div v-else-if="rows.length === 0" class="xr-state">مریضی پیدا نشد.</div>
     <div v-else class="xr-table-wrap">
       <table class="xr-table patients-table">

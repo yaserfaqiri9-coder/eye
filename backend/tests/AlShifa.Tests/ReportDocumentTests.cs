@@ -110,8 +110,20 @@ public sealed class ReportDocumentTests(ApiFixture api)
             Assert.Equal(HttpStatusCode.OK, (await accountant.GetAsync($"/api/reports/{key}")).StatusCode);
         }
 
+        var triage = await UserAsync(Roles.Triage);
+        foreach (var key in Everyday.Concat(Finance).Concat(["sales", "stock"]))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, (await triage.GetAsync($"/api/reports/{key}")).StatusCode);
+        }
+
+        // The Super Admin holds every role's permissions: every report opens, money included.
         var admin = await UserAsync(Roles.SuperAdmin);
-        Assert.Equal(HttpStatusCode.Forbidden, (await admin.GetAsync("/api/reports/overview")).StatusCode);
+        foreach (var key in Everyday.Concat(Finance).Concat(["sales", "stock"]))
+        {
+            Assert.Equal(HttpStatusCode.OK, (await admin.GetAsync($"/api/reports/{key}")).StatusCode);
+        }
+
+        Assert.Contains((await ReportAsync(admin, "overview")).GetProperty("tiles").EnumerateArray(), t => t.GetProperty("kind").GetString() == "money");
 
         // The money on the overview is only for those who may read the books.
         Assert.DoesNotContain((await ReportAsync(doctor, "overview")).GetProperty("tiles").EnumerateArray(), t => t.GetProperty("kind").GetString() == "money");

@@ -13,7 +13,28 @@ public static class FrontendHosting
             c.Context.Request.Path.StartsWithSegments("/assets") ? "public, max-age=31536000, immutable" : "no-cache",
     };
 
-    public static void UseFrontendFiles(this WebApplication app) => app.UseStaticFiles(Files);
+    /// <summary>
+    /// Compresses the web app's own text files (scripts, styles, the page, icons). API answers are left out on purpose:
+    /// compressing secrets next to text a page can influence over HTTPS invites BREACH-style guessing, and on the
+    /// hospital network they are small enough already.
+    /// </summary>
+    public static void AddFrontendCompression(this IServiceCollection services)
+    {
+        services.AddResponseCompression(o =>
+        {
+            o.EnableForHttps = true;
+            o.MimeTypes = ["text/html", "text/css", "text/javascript", "application/javascript", "image/svg+xml", "font/ttf", "application/vnd.ms-fontobject"];
+            o.Providers.Add<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProvider>();
+            o.Providers.Add<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProvider>();
+        });
+    }
+
+    public static void UseFrontendFiles(this WebApplication app)
+    {
+        // Only files served from wwwroot pass through compression; /api and /hubs never reach it.
+        app.UseWhen(c => !c.Request.Path.StartsWithSegments("/api") && !c.Request.Path.StartsWithSegments("/hubs"), b => b.UseResponseCompression());
+        app.UseStaticFiles(Files);
+    }
 
     public static void MapFrontendFallback(this WebApplication app)
     {

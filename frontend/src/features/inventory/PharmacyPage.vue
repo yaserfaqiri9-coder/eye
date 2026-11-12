@@ -4,6 +4,7 @@ import { api, errorMessage } from '@/api/http'
 import { useLiveRefresh } from '@/api/realtime'
 import UiCard from '@/components/UiCard.vue'
 import UiModal from '@/components/UiModal.vue'
+import UiListSkeleton from '@/components/UiListSkeleton.vue'
 import CallControls from '@/features/calls/CallControls.vue'
 import CallNotice from '@/features/calls/CallNotice.vue'
 import { useCallDesk } from '@/features/calls/useCallDesk'
@@ -38,29 +39,40 @@ const searching = ref(false)
 const hits = ref<PharmacyPatientHit[] | null>(null)
 const chosen = ref<{ patient: PharmacyPatient; prescriptions: PharmacyRxRow[] } | null>(null)
 
+// A newer search cancels the older one, so a slow answer for an earlier term never replaces the current list.
+let searchController: AbortController | null = null
+
 async function search() {
   const term = q.value.trim()
+  searchController?.abort()
   chosen.value = null
   if (term.length < 2) {
     hits.value = null
+    searching.value = false
     return
   }
 
+  const controller = new AbortController()
+  searchController = controller
   searching.value = true
   try {
-    hits.value = await api<PharmacyPatientHit[]>(`/pharmacy/search?q=${encodeURIComponent(term)}`)
-    if (hits.value.length === 1) await choose(hits.value[0].id)
+    const found = await api<PharmacyPatientHit[]>(`/pharmacy/search?q=${encodeURIComponent(term)}`, { signal: controller.signal })
+    hits.value = found
+    if (found.length === 1) await choose(found[0].id, controller.signal)
   } catch (cause) {
+    if (controller.signal.aborted) return
     error.value = errorMessage(cause)
   } finally {
-    searching.value = false
+    if (searchController === controller) searching.value = false
   }
 }
 
-async function choose(id: number) {
+async function choose(id: number, signal?: AbortSignal) {
   try {
-    chosen.value = await api<{ patient: PharmacyPatient; prescriptions: PharmacyRxRow[] }>(`/pharmacy/patients/${id}/prescriptions`)
+    const result = await api<{ patient: PharmacyPatient; prescriptions: PharmacyRxRow[] }>(`/pharmacy/patients/${id}/prescriptions`, { signal })
+    if (!signal?.aborted) chosen.value = result
   } catch (cause) {
+    if (signal?.aborted) return
     error.value = errorMessage(cause)
   }
 }
@@ -137,7 +149,10 @@ async function submitReturn() {
 
 useLiveRefresh(['PrescriptionCreated', 'InventoryChanged', 'PaymentReceived'], load)
 onMounted(load)
-onBeforeUnmount(() => clearTimeout(debounce))
+onBeforeUnmount(() => {
+  clearTimeout(debounce)
+  searchController?.abort()
+})
 </script>
 
 <template>
@@ -209,7 +224,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
         </nav>
       </div>
       <div class="xr-card__body">
-        <p v-if="loading" class="xr-state" role="status">در حال بارگذاری...</p>
+        <UiListSkeleton v-if="loading" />
 
         <template v-else-if="tab === 'new' || tab === 'partial' || tab === 'needsDoctor'">
           <p v-if="rxRows.length === 0" class="xr-state">{{ tab === 'new' ? 'نسخه تازه‌ای در هفت روز گذشته نیست. نسخه‌های قدیمی را جستجو کنید.' : 'موردی نیست.' }}</p>

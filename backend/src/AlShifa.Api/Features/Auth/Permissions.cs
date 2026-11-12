@@ -120,6 +120,10 @@ public static class RolePermissions
 
     public static IReadOnlyCollection<string> RoleNames => Matrix.Keys;
 
+    /// <summary>The owner asked for the Super Admin to hold every permission any role has.</summary>
     public static IEnumerable<string> For(string role) =>
+        role == Roles.SuperAdmin ? Matrix.Keys.SelectMany(Own).Distinct() : Own(role);
+
+    private static IEnumerable<string> Own(string role) =>
         Matrix[role].SelectMany(m => m.Value.Select(a => $"{m.Key}.{Actions[a]}"));
 }

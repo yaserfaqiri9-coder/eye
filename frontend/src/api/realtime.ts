@@ -63,22 +63,54 @@ export function disconnectRealtime() {
 export function useLiveRefresh(eventTypes: string[], load: () => unknown, refreshMs = SAFETY_REFRESH_MS) {
   let debounce: ReturnType<typeof setTimeout> | undefined
   let timer: ReturnType<typeof setInterval> | undefined
+  let running = false
+  let again = false
+
+  // One load at a time: a burst of events during a load causes one more load after it, never an overlapping one
+  // whose older answer could land last and show stale rows.
+  async function run() {
+    if (running) {
+      again = true
+      return
+    }
+    running = true
+    try {
+      await load()
+    } catch {
+      // The page shows its own error.
+    } finally {
+      running = false
+    }
+    if (again) {
+      again = false
+      run()
+    }
+  }
 
   const listener: Listener = (type) => {
     if (type !== RECONNECTED && !eventTypes.includes(type)) return
     clearTimeout(debounce)
-    debounce = setTimeout(load, 200)
+    debounce = setTimeout(run, 200)
+  }
+
+  // A hidden tab skips the safety refresh and catches up as soon as it is shown again.
+  const onVisible = () => {
+    if (!document.hidden) run()
   }
 
   onMounted(() => {
     listeners.add(listener)
     // Safety net: a lost event can delay a screen but never leave it stale for long.
-    timer = setInterval(load, refreshMs)
+    timer = setInterval(() => {
+      if (!document.hidden) run()
+    }, refreshMs)
+    document.addEventListener('visibilitychange', onVisible)
   })
 
   onBeforeUnmount(() => {
     listeners.delete(listener)
     clearTimeout(debounce)
     clearInterval(timer)
+    document.removeEventListener('visibilitychange', onVisible)
   })
 }

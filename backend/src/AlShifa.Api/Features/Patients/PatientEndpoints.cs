@@ -41,12 +41,14 @@ public static class PatientEndpoints
             var query = db.Patients.AsNoTracking();
             if (!string.IsNullOrWhiteSpace(q))
             {
-                var term = q.Trim();
+                // A plain LIKE prefix lets MySQL merge the four column indexes; StartsWith's translation (CONCAT and LEFT) read every patient.
+                // LIKE also follows the columns' case-insensitive collation, so "p-0001" finds "P-0001".
+                var prefix = q.Trim().Replace("|", "||").Replace("%", "|%").Replace("_", "|_") + "%";
                 query = query.Where(p =>
-                    p.FileNumber.StartsWith(term) ||
-                    p.FirstName.StartsWith(term) ||
-                    (p.LastName != null && p.LastName.StartsWith(term)) ||
-                    (p.Phone != null && p.Phone.StartsWith(term)));
+                    EF.Functions.Like(p.FileNumber, prefix, "|") ||
+                    EF.Functions.Like(p.FirstName, prefix, "|") ||
+                    (p.LastName != null && EF.Functions.Like(p.LastName, prefix, "|")) ||
+                    (p.Phone != null && EF.Functions.Like(p.Phone, prefix, "|")));
             }
 
             var total = await query.CountAsync(ct);

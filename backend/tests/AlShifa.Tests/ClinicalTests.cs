@@ -341,7 +341,7 @@ public sealed class ClinicalTests(ApiFixture api)
     {
         var (patient, visit) = await NewVisitAsync();
 
-        foreach (var role in new[] { Roles.Receptionist, Roles.Cashier, Roles.SuperAdmin, Roles.Manager })
+        foreach (var role in new[] { Roles.Receptionist, Roles.Cashier, Roles.Manager })
         {
             var client = await UserAsync(role);
             Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync($"/api/consultations/{visit.Id}/chart")).StatusCode);

@@ -37,13 +37,13 @@ public static class PrescriptionEndpoints
             }
 
             // Persian and Arabic keyboards type these letters differently, and either form may be stored.
-            var escaped = term.Replace("|", "||").Replace("%", "|%").Replace("_", "|_");
+            var escaped = term.ToLowerInvariant().Replace("|", "||").Replace("%", "|%").Replace("_", "|_");
             var persian = escaped.Replace('ي', 'ی').Replace('ك', 'ک') + "%";
             var arabic = escaped.Replace('ی', 'ي').Replace('ک', 'ك') + "%";
 
-            // LIKE follows the column's case-insensitive collation, so "t" finds "Timolol"; StartsWith here would not.
+            // Both sides lower-cased, so "t" finds "Timolol" whatever the column collation is; StartsWith would not.
             var names = await db.Products.AsNoTracking()
-                .Where(p => p.IsActive && p.Kind == ProductKind.Drug && (EF.Functions.Like(p.Name, persian, "|") || EF.Functions.Like(p.Name, arabic, "|")))
+                .Where(p => p.IsActive && p.Kind == ProductKind.Drug && (EF.Functions.Like(p.Name.ToLower(), persian, "|") || EF.Functions.Like(p.Name.ToLower(), arabic, "|")))
                 .Select(p => p.Name)
                 .Distinct()
                 .OrderBy(name => name)

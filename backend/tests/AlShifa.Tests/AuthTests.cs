@@ -54,7 +54,7 @@ public sealed class AuthTests(ApiFixture api)
     }
 
     [Fact]
-    public async Task Super_admin_can_manage_users_but_holds_no_clinical_permissions()
+    public async Task Super_admin_holds_every_permission_of_every_role()
     {
         var name = Name("admin");
         await api.CreateUserAsync(name, Roles.SuperAdmin);
@@ -63,8 +63,8 @@ public sealed class AuthTests(ApiFixture api)
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/users")).StatusCode);
 
         var me = await client.GetFromJsonAsync<CurrentUserDto>("/api/auth/me");
-        Assert.DoesNotContain(me!.Permissions, p =>
-            p.StartsWith("consultation.") || p.StartsWith("clinicalrecord.") || p.StartsWith("preexam.") || p.StartsWith("prescriptions."));
+        var every = RolePermissions.RoleNames.SelectMany(RolePermissions.For).Distinct();
+        Assert.Empty(every.Except(me!.Permissions));
     }
 
     [Fact]

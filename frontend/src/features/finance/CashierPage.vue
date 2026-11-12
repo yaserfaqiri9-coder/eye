@@ -5,6 +5,7 @@ import { useLiveRefresh } from '@/api/realtime'
 import StatCard from '@/components/StatCard.vue'
 import UiCard from '@/components/UiCard.vue'
 import UiModal from '@/components/UiModal.vue'
+import UiListSkeleton from '@/components/UiListSkeleton.vue'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/date'
 import { money, quantity } from '@/utils/money'
@@ -193,7 +194,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
           <RouterLink v-if="auth.can('invoices.create')" :to="{ name: 'invoice-new' }" class="btn btn-soft text-nowrap">فاکتور مستقل</RouterLink>
         </div>
       </template>
-      <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
+      <UiListSkeleton v-if="loading" />
       <div v-else-if="invoices.length === 0" class="xr-state">فاکتور قابل دریافتی نیست.</div>
       <div v-else class="xr-table-wrap">
         <table class="xr-table">

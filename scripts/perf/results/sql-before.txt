@@ -1,0 +1,31 @@
+total_ms	n	avg_ms	examined	no_index	q
+9765.9	18	542.55	417528	18	SELECT `s` . `Gender` , `s` . `BirthDate` , `s` . `EstimatedBirthYear` FROM ( SELECT DISTINCTROW `p` . `Id` , `p` . `Address` , `p` . `BirthDate` , `p` . `CreatedAt` , `p` . `CreatedByUserId` , `p` . `EstimatedBirthYear`
+1898.3	37	51.31	1860508	37	SELECT COUNT ( * ) FROM `Patients` AS `p` WHERE ( ( ( ( `p` . `FileNumber` LIKE `CONCAT` (...) ) AND ( LEFT ( `p` . `FileNumber` , `CHAR_LENGTH` ( CONVERT ( ? USING `utf8mb4` ) COLLATE `utf8mb4_bin` ) ) = CONVERT ( ? USI
+1400	27	51.85	1906065	9	SELECT `d` . `Name` , COUNT ( * ) FROM `Visits` AS `v` INNER JOIN `Departments` AS `d` ON `v` . `DepartmentId` = `d` . `Id` WHERE ( ( ( `v` . `VisitDate` >= TIMESTAMP (?) ) AND ( `v` . `VisitDate` <= TIMESTAMP (?) ) ) AN
+1136.8	37	30.72	762904	0	SELECT `p` . `Id` , `p` . `FileNumber` , `p` . `FirstName` , `p` . `LastName` , `p` . `FatherName` , `p` . `Gender` , `p` . `BirthDate` , `p` . `EstimatedBirthYear` , `p` . `Phone` FROM `Patients` AS `p` WHERE ( ( ( ( `p
+631.2	9	70.13	336015	0	SELECT `p` . `Id` FROM `Patients` AS `p` WHERE ( ( ( `p` . `FirstName` LIKE ? ESCAPE ? ) OR ( `p` . `FirstName` LIKE ? ESCAPE ? ) ) OR ( `p` . `LastName` IS NOT NULL AND ( ( `p` . `LastName` LIKE ? ESCAPE ? ) OR ( `p` .
+610.3	27	22.6	1357668	27	SELECT COUNT ( * ) FROM `Patients` AS `p` WHERE ( `p` . `CreatedAt` >= TIMESTAMP (?) ) AND ( `p` . `CreatedAt` < TIMESTAMP (?) )
+564.7	18	31.37	551583	0	SELECT `v` . `VisitDate` AS `Day` , COUNT ( * ) AS `Count` , COUNT ( CASE WHEN `v` . `Status` = ? THEN ? END ) AS `Completed` FROM `Visits` AS `v` WHERE ( ( ( `v` . `VisitDate` >= TIMESTAMP (?) ) AND ( `v` . `VisitDate`
+268.5	18	14.92	548595	0	SELECT `v` . `VisitDate` AS `Day` , COUNT ( * ) AS `Count` FROM `Visits` AS `v` WHERE ( ( `v` . `VisitDate` >= TIMESTAMP (?) ) AND ( `v` . `VisitDate` <= TIMESTAMP (?) ) ) AND ( `v` . `Status` = ? ) GROUP BY `v` . `Visit
+208.7	18	11.59	0	0	SELECT COUNT ( * ) FROM `Patients` AS `p`
+205.3	18	11.4	225225	0	SELECT `p` . `Id` , `p` . `FileNumber` , `p` . `FirstName` , `p` . `LastName` , `p` . `FatherName` , `p` . `Gender` , `p` . `BirthDate` , `p` . `EstimatedBirthYear` , `p` . `Phone` FROM `Patients` AS `p` ORDER BY `p` . `
+198.1	432	0.46	44928	0	SELECT `a` . `ClaimType` , `a` . `ClaimValue` FROM `AspNetRoleClaims` AS `a` WHERE `a` . `RoleId` = ?
+168	9	18.67	45081	0	SELECT `v` . `DepartmentId` , COUNT ( * ) AS `Count` FROM `Visits` AS `v` WHERE ( ( ( `v` . `VisitDate` >= TIMESTAMP (?) ) AND ( `v` . `VisitDate` <= TIMESTAMP (?) ) ) AND ( `v` . `Status` != ? ) ) AND ( `v` . `Status` !
+152.8	426	0.36	426	0	SELECT `a` . `Id` , `a` . `AccessFailedCount` , `a` . `ConcurrencyStamp` , `a` . `CreatedAt` , `a` . `Email` , `a` . `EmailConfirmed` , `a` . `FullName` , `a` . `IsActive` , `a` . `LockoutEnabled` , `a` . `LockoutEnd` ,
+114.4	432	0.26	864	0	SELECT `a0` . `Name` FROM `AspNetUserRoles` AS `a` INNER JOIN `AspNetRoles` AS `a0` ON `a` . `RoleId` = `a0` . `Id` WHERE `a` . `UserId` = ?
+111	444	0.25	0	0	SELECT `a` . `Id` , `a` . `ClaimType` , `a` . `ClaimValue` , `a` . `UserId` FROM `AspNetUserClaims` AS `a` WHERE `a` . `UserId` = ?
+101.6	9	11.29	132750	9	SELECT `i0` . `Id` , `i0` . `InvoiceNumber` , `i0` . `PatientId` , `p` . `FileNumber` , CASE WHEN `p` . `Id` IS NOT NULL THEN TRIM ( `CONCAT` ( `CONCAT` ( COALESCE ( `p` . `FirstName` , ? ) , ? ) , COALESCE ( `p` . `Last
+95.6	9	10.62	18018	0	SELECT `v` . `VisitDate` , `v` . `Status` , `p` . `Gender` , COUNT ( * ) AS `Count` FROM `Visits` AS `v` INNER JOIN `Patients` AS `p` ON `v` . `PatientId` = `p` . `Id` WHERE ( ( `v` . `VisitDate` >= TIMESTAMP (?) ) AND (
+91	432	0.21	432	0	SELECT `a` . `Id` , `a` . `ConcurrencyStamp` , `a` . `Name` , `a` . `NormalizedName` FROM `AspNetRoles` AS `a` WHERE `a` . `NormalizedName` = ? LIMIT ?
+87.7	27	3.25	41688	27	SELECT `l` . `AccountCode` AS `Code` , COALESCE ( SUM ( `l` . `Debit` ) , ? ) AS `Debit` , COALESCE ( SUM ( `l` . `Credit` ) , ? ) AS `Credit` FROM `LedgerEntries` AS `l` INNER JOIN `LedgerTransactions` AS `l0` ON `l` .
+36	9	4	14013	0	SELECT `l` . `Code` , `l` . `Name` , COALESCE ( ( SELECT COALESCE ( SUM ( `l0` . `Debit` ) , ? ) FROM `LedgerEntries` AS `l0` WHERE `l0` . `AccountCode` = `l` . `Code` ) , ? ) , COALESCE ( ( SELECT COALESCE ( SUM ( `l1`
+34.5	27	1.28	10260	27	SELECT `a` . `FullName` , COALESCE ( SUM ( `p` . `Amount` ) , ? ) FROM `Payments` AS `p` INNER JOIN `AspNetUsers` AS `a` ON `p` . `ReceivedByUserId` = `a` . `Id` WHERE ( `p` . `CreatedAt` >= TIMESTAMP (?) ) AND ( `p` . `
+32.1	9	3.57	8712	9	SELECT `l` . `AccountCode` , `i` . `Description` , COALESCE ( SUM ( `l` . `Credit` - `l` . `Debit` ) , ? ) AS `Amount` FROM `LedgerEntries` AS `l` INNER JOIN `LedgerTransactions` AS `l0` ON `l` . `TransactionId` = `l0` .
+30.4	10	3.04	3602	9	SELECT `v0` . `Id` , `v0` . `VisitNumber` , `v0` . `QueueNumber` , `v0` . `PatientId` , `p` . `FileNumber` , `p` . `FirstName` , `p` . `LastName` , `v0` . `DepartmentId` , `d` . `Name` , `s` . `FullName` , `v0` . `Status
+29.8	9	3.31	26757	0	SELECT `p` . `Id` FROM `Patients` AS `p` WHERE ( ( `p` . `FileNumber` = ? ) OR ( `p` . `FileNumber` LIKE ? ) ) OR ( `p` . `Phone` IS NOT NULL AND ( `p` . `Phone` LIKE ? ) ) ORDER BY `p` . `Id` DESC LIMIT ?
+23.5	9	2.62	5238	9	SELECT `s0` . `Id` , `s0` . `SaleNumber` , `s0` . `PrescriptionId` , `m` . `RxNumber` , `s0` . `PatientId` , CASE WHEN `p` . `Id` IS NOT NULL THEN TRIM ( `CONCAT` ( `CONCAT` ( COALESCE ( `p` . `FirstName` , ? ) , ? ) , C
+20.8	9	2.31	1080	0	SELECT `p` . `Id` , `p` . `FileNumber` , `p` . `FirstName` , `p` . `LastName` , `p` . `FatherName` , `p` . `Phone` , `p` . `Gender` , `p` . `BirthDate` , `p` . `EstimatedBirthYear` , ( SELECT COUNT ( * ) FROM `MedicalPre
+18.1	3	6.03	0	0	COMMIT
+16	18	0.89	0	18	SELECT `m0` . `Id` , `m0` . `RxNumber` , `m0` . `PatientId` , `p` . `FirstName` , `p` . `LastName` , `p` . `FatherName` , `p` . `FileNumber` , `m0` . `VisitId` , `m0` . `CreatedAt` , `m0` . `ValidUntil` , `m0` . `Status`
+15.9	9	1.77	17901	0	SELECT `v` . `PatientId` FROM `Visits` AS `v` WHERE ( `v` . `VisitNumber` = ? ) OR ( `v` . `VisitNumber` LIKE ? ) ORDER BY `v` . `Id` DESC LIMIT ?
+15.8	18	0.88	5166	0	SELECT COALESCE ( SUM ( `l` . `Credit` ) , ? ) FROM `LedgerEntries` AS `l` WHERE `l` . `AccountCode` = ?

@@ -123,7 +123,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, SyncSwitch? sy
             e.Property(x => x.Version).IsConcurrencyToken();
             e.HasIndex(x => x.FileNumber).IsUnique();
             e.HasIndex(x => new { x.FirstName, x.LastName });
+            // Search matches a surname prefix on its own, and reports count new files by date.
+            e.HasIndex(x => x.LastName);
             e.HasIndex(x => x.Phone);
+            e.HasIndex(x => x.CreatedAt);
         });
 
         b.Entity<PatientChangeLog>().HasIndex(x => new { x.PatientId, x.ChangedAt });

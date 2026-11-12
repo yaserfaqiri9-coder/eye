@@ -118,6 +118,7 @@ builder.Services.AddValidation();
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddOpenApi();
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database");
+builder.Services.AddFrontendCompression();
 
 builder.Services.AddScoped<CurrentUser>();
 builder.Services.AddScoped<AuditService>();

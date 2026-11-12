@@ -4,10 +4,12 @@ import { api, ApiError, errorMessage, newIdempotencyKey } from '@/api/http'
 import { useLiveRefresh } from '@/api/realtime'
 import UiCard from '@/components/UiCard.vue'
 import UiModal from '@/components/UiModal.vue'
+import UiListSkeleton from '@/components/UiListSkeleton.vue'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime } from '@/utils/date'
 import { money, quantity } from '@/utils/money'
 import { removeRecord } from '@/utils/removeRecord'
+import { drugFormChoices, drugFormOf, loadStoredDrugForms, productGroupLabels, stockUnits } from './drugForms'
 import { movementLabels } from './labels'
 
 interface LocationRow {
@@ -70,8 +72,20 @@ interface PurchaseRow {
   version: number
 }
 
-const kindLabels: Record<string, string> = { Drug: 'دوا', Frame: 'فریم', Lens: 'عدسی', General: 'عمومی' }
+// The product group (دوا، عمومی …). The drug form is a separate field, kept in the product's category.
+const kindLabels = productGroupLabels
+const storedDrugForms = ref<string[]>([])
 const locationLabels: Record<string, string> = { central: 'گدام مرکزی', pharmacy: 'دواخانه', optical: 'بخش عینک' }
+
+const locationVisuals: Record<string, { tone: string; icon: string; eyebrow: string }> = {
+  central: { tone: 'central', icon: 'ri-archive-stack-line', eyebrow: 'مرکز توزیع' },
+  pharmacy: { tone: 'pharmacy', icon: 'ri-capsule-line', eyebrow: 'دوا و تجهیزات' },
+  optical: { tone: 'optical', icon: 'ri-glasses-2-line', eyebrow: 'عینک و عدسی' },
+}
+
+function locationVisual(code: string) {
+  return locationVisuals[code.toLowerCase()] ?? { tone: 'default', icon: 'ri-store-2-line', eyebrow: 'محل نگهداری' }
+}
 
 const auth = useAuthStore()
 const tab = ref('locations')
@@ -95,18 +109,46 @@ const tabs = computed(() => [
   { key: 'movements', label: 'گردش موجودی' },
 ])
 
+// Typing in the search box reloads only the product list; a newer search cancels the older one.
+let productsController: AbortController | null = null
+
+async function loadProducts() {
+  productsController?.abort()
+  const controller = new AbortController()
+  productsController = controller
+  const params = new URLSearchParams({ pageSize: '100' })
+  if (q.value.trim()) params.set('q', q.value.trim())
+  try {
+    const rows = (await api<{ items: ProductRow[] }>(`/inventory/products?${params}`, { signal: controller.signal })).items
+    if (!controller.signal.aborted) products.value = rows
+  } catch (cause) {
+    if (!controller.signal.aborted) throw cause
+  }
+}
+
+async function searchProducts() {
+  error.value = ''
+  try {
+    await loadProducts()
+  } catch (cause) {
+    error.value = errorMessage(cause)
+  }
+}
+
 async function load() {
   error.value = ''
   try {
-    const params = new URLSearchParams({ pageSize: '100' })
-    if (q.value.trim()) params.set('q', q.value.trim())
-    products.value = (await api<{ items: ProductRow[] }>(`/inventory/products?${params}`)).items
-    ;[locations.value, batches.value, alerts.value, movements.value, purchases.value] = await Promise.all([
-      api<LocationRow[]>('/inventory/locations'),
-      api<BatchRow[]>('/inventory/batches'),
-      api<typeof alerts.value>('/inventory/alerts'),
-      api<{ items: MovementRow[] }>('/inventory/movements?pageSize=100').then((r) => r.items),
-      api<{ items: PurchaseRow[] }>('/inventory/purchases?pageSize=100').then((r) => r.items),
+    await Promise.all([
+      loadProducts(),
+      Promise.all([
+        api<LocationRow[]>('/inventory/locations'),
+        api<BatchRow[]>('/inventory/batches'),
+        api<typeof alerts.value>('/inventory/alerts'),
+        api<{ items: MovementRow[] }>('/inventory/movements?pageSize=100').then((r) => r.items),
+        api<{ items: PurchaseRow[] }>('/inventory/purchases?pageSize=100').then((r) => r.items),
+      ]).then((rows) => {
+        ;[locations.value, batches.value, alerts.value, movements.value, purchases.value] = rows
+      }),
     ])
   } catch (cause) {
     error.value = errorMessage(cause)
@@ -122,11 +164,19 @@ function openProduct(row?: ProductRow) {
     open: true, id: row?.id ?? null, version: row?.version ?? null, code: row?.code ?? '', name: row?.name ?? '', kind: row?.kind ?? 'Drug',
     category: row?.category ?? '', unit: row?.unit ?? 'عدد', reorderLevel: row?.reorderLevel ?? 0, salePrice: row?.salePrice ?? 0, isActive: row?.isActive ?? true, saving: false, error: '',
   })
+  loadStoredDrugForms().then((forms) => (storedDrugForms.value = forms)).catch(() => {})
 }
 
+const drugFormOptions = computed(() => drugFormChoices(storedDrugForms.value, product.category))
+
 async function saveProduct() {
-  product.saving = true
   product.error = ''
+  // A drug always carries its form, so the pharmacy can tell a tablet from an eye drop of the same name.
+  if (product.kind === 'Drug' && !product.category.trim()) {
+    product.error = 'نوعیت دوا را انتخاب کنید.'
+    return
+  }
+  product.saving = true
   const body = { code: product.code, name: product.name, kind: product.kind, category: product.category, unit: product.unit, reorderLevel: product.reorderLevel, salePrice: product.salePrice, isActive: product.isActive, version: product.version }
   try {
     if (product.id) await api(`/inventory/products/${product.id}`, { method: 'PUT', body })
@@ -232,7 +282,7 @@ async function saveTransfer() {
 let debounce: ReturnType<typeof setTimeout> | undefined
 watch(q, () => {
   clearTimeout(debounce)
-  debounce = setTimeout(load, 300)
+  debounce = setTimeout(searchProducts, 300)
 })
 
 useLiveRefresh(['InventoryChanged'], load)
@@ -253,15 +303,51 @@ onMounted(load)
       </div>
     </div>
     <div class="xr-card__body">
-      <p v-if="loading" class="xr-state" role="status">در حال بارگذاری...</p>
+      <UiListSkeleton v-if="loading" />
       <template v-else-if="tab === 'locations'">
         <p v-if="locations.length === 0" class="xr-state">گدامی ثبت نشده است.</p>
         <div v-else class="xr-location-grid">
-          <RouterLink v-for="row in locations" :key="row.code" :to="{ name: 'inventory-location', params: { code: row.code } }" class="xr-card xr-location-card">
-            <strong class="xr-location-card__name">{{ row.name }}</strong>
-            <span>{{ quantity(row.productCount) }} جنس موجود</span>
-            <span>ارزش موجودی: {{ money(row.stockValue) }}</span>
-            <span class="small xr-location-card__meta">آخرین گردش: {{ row.lastMovementAt ? formatDateTime(row.lastMovementAt) : '—' }}</span>
+          <RouterLink
+            v-for="row in locations"
+            :key="row.code"
+            :to="{ name: 'inventory-location', params: { code: row.code } }"
+            class="xr-card xr-location-card"
+            :class="`xr-location-card--${locationVisual(row.code).tone}`"
+          >
+            <span class="xr-location-card__accent" aria-hidden="true"></span>
+            <span class="xr-location-card__header">
+              <span class="xr-location-card__avatar" aria-hidden="true">
+                <i :class="locationVisual(row.code).icon"></i>
+              </span>
+              <span class="xr-location-card__identity">
+                <span class="xr-location-card__eyebrow">{{ locationVisual(row.code).eyebrow }}</span>
+                <strong class="xr-location-card__name">{{ row.name }}</strong>
+              </span>
+              <i class="ri-arrow-left-line xr-location-card__arrow" aria-hidden="true"></i>
+            </span>
+
+            <span class="xr-location-card__metrics">
+              <span class="xr-location-card__metric xr-location-card__metric--primary">
+                <span class="xr-location-card__label">جنس موجود</span>
+                <strong class="xr-location-card__number ltr-num">{{ quantity(row.productCount) }}</strong>
+              </span>
+              <span class="xr-location-card__metric">
+                <span class="xr-location-card__label">بچ فعال</span>
+                <strong class="xr-location-card__number ltr-num">{{ quantity(row.batchCount) }}</strong>
+              </span>
+            </span>
+
+            <span class="xr-location-card__value">
+              <span class="xr-location-card__label">ارزش موجودی</span>
+              <strong>{{ money(row.stockValue) }}</strong>
+            </span>
+
+            <span class="xr-location-card__footer">
+              <i class="ri-history-line" aria-hidden="true"></i>
+              <span>آخرین گردش</span>
+              <time v-if="row.lastMovementAt" :datetime="row.lastMovementAt">{{ formatDateTime(row.lastMovementAt) }}</time>
+              <span v-else>هنوز گردشی ثبت نشده</span>
+            </span>
           </RouterLink>
         </div>
       </template>
@@ -271,12 +357,13 @@ onMounted(load)
         <p v-if="products.length === 0" class="xr-state">جنسی ثبت نشده است.</p>
         <div v-else class="xr-table-wrap">
           <table class="xr-table">
-            <thead><tr><th>کد</th><th>نام</th><th>نوع</th><th>موجودی</th><th>حد کمبود</th><th>قیمت فروش</th><th>وضعیت</th><th v-if="auth.can('inventory.edit')">عملیات</th></tr></thead>
+            <thead><tr><th>کد</th><th>نام</th><th>گروه جنس</th><th>نوعیت دوا</th><th>موجودی</th><th>حد کمبود</th><th>قیمت فروش</th><th>وضعیت</th><th v-if="auth.can('inventory.edit')">عملیات</th></tr></thead>
             <tbody>
               <tr v-for="row in products" :key="row.id">
                 <td><span class="ltr-num">{{ row.code }}</span></td>
                 <td>{{ row.name }}</td>
                 <td>{{ kindLabels[row.kind] }}</td>
+                <td>{{ drugFormOf(row) ?? '—' }}</td>
                 <td>{{ quantity(row.onHand) }} {{ row.unit }}</td>
                 <td>{{ quantity(row.reorderLevel) }}</td>
                 <td>{{ money(row.salePrice) }}</td>
@@ -381,10 +468,21 @@ onMounted(load)
     <form @submit.prevent="saveProduct">
       <div class="row g-3 mb-3">
         <div class="col-6"><label class="form-label" for="pr-code">کد</label><input id="pr-code" v-model="product.code" class="form-control" dir="ltr" maxlength="40" required /></div>
-        <div class="col-6"><label class="form-label" for="pr-kind">نوع</label><select id="pr-kind" v-model="product.kind" class="form-select"><option v-for="(label, value) in kindLabels" :key="value" :value="value">{{ label }}</option></select></div>
+        <div class="col-6"><label class="form-label" for="pr-kind">گروه جنس</label><select id="pr-kind" v-model="product.kind" class="form-select"><option v-for="(label, value) in kindLabels" :key="value" :value="value">{{ label }}</option></select></div>
         <div class="col-12"><label class="form-label" for="pr-name">نام جنس</label><input id="pr-name" v-model="product.name" class="form-control" maxlength="200" required /></div>
-        <div class="col-6"><label class="form-label" for="pr-cat">دسته</label><input id="pr-cat" v-model="product.category" class="form-control" maxlength="80" /></div>
-        <div class="col-6"><label class="form-label" for="pr-unit">واحد</label><input id="pr-unit" v-model="product.unit" class="form-control" maxlength="30" required /></div>
+        <div v-if="product.kind === 'Drug'" class="col-6">
+          <label class="form-label" for="pr-form">نوعیت دوا</label>
+          <select id="pr-form" v-model="product.category" class="form-select" required>
+            <option value="" disabled>انتخاب کنید</option>
+            <option v-for="form in drugFormOptions" :key="form" :value="form">{{ form }}</option>
+          </select>
+        </div>
+        <div v-else class="col-6"><label class="form-label" for="pr-cat">دسته</label><input id="pr-cat" v-model="product.category" class="form-control" maxlength="80" /></div>
+        <div class="col-6">
+          <label class="form-label" for="pr-unit">واحد موجودی</label>
+          <input id="pr-unit" v-model="product.unit" class="form-control" maxlength="30" list="pr-unit-options" required />
+          <datalist id="pr-unit-options"><option v-for="unit in stockUnits" :key="unit" :value="unit" /></datalist>
+        </div>
         <div class="col-6"><label class="form-label" for="pr-reorder">حد کمبود</label><input id="pr-reorder" v-model.number="product.reorderLevel" class="form-control" type="number" min="0" step="any" /></div>
         <div class="col-6"><label class="form-label" for="pr-price">قیمت فروش</label><input id="pr-price" v-model.number="product.salePrice" class="form-control" type="number" min="0" step="0.01" /></div>
       </div>
@@ -454,30 +552,233 @@ onMounted(load)
 <style scoped>
 .xr-location-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+  gap: 1.1rem;
 }
 
 .xr-location-card {
+  --location-accent: var(--xr-primary);
+  --location-accent-strong: var(--xr-tone-primary-text);
+  --location-tint: var(--xr-tone-primary-bg);
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
-  padding: 1rem 1.25rem;
+  gap: 1rem;
+  min-width: 0;
+  overflow: hidden;
+  padding: 1.25rem;
+  border: 1px solid var(--xr-row-border);
   color: var(--xr-text);
   text-decoration: none;
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.xr-location-card--pharmacy {
+  --location-accent: var(--xr-status-green);
+  --location-accent-strong: var(--xr-tone-green-text);
+  --location-tint: var(--xr-tone-green-bg);
+}
+
+.xr-location-card--optical {
+  --location-accent: #6574cf;
+  --location-accent-strong: #4f5eaf;
+  --location-tint: #eef0ff;
+}
+
+.xr-location-card--default {
+  --location-accent: #77828d;
+  --location-accent-strong: #59636d;
+  --location-tint: #f0f3f5;
+}
+
+.xr-location-card__accent {
+  position: absolute;
+  inset-block: 1.25rem;
+  inset-inline-start: 0;
+  width: 4px;
+  border-radius: 0 999px 999px 0;
+  background: var(--location-accent);
+}
+
+.xr-location-card__header {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.xr-location-card__avatar {
+  display: grid;
+  flex: 0 0 3.75rem;
+  width: 3.75rem;
+  height: 3.75rem;
+  place-items: center;
+  border-radius: 1.15rem;
+  background: var(--location-tint);
+  color: var(--location-accent-strong);
+  font-size: 1.65rem;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.72);
+}
+
+.xr-location-card__identity {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.xr-location-card__eyebrow {
+  color: var(--location-accent-strong);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.xr-location-card__arrow {
+  flex: 0 0 auto;
+  color: var(--location-accent-strong);
+  font-size: 1.2rem;
+  transition: transform 180ms ease;
 }
 
 .xr-location-card:hover,
 .xr-location-card:focus-visible {
-  outline: 2px solid var(--xr-tone-primary-text);
-  outline-offset: -2px;
+  border-color: var(--location-accent);
+  box-shadow: 0 14px 32px rgba(45, 69, 95, 0.12);
+  transform: translateY(-2px);
+}
+
+.xr-location-card:focus-visible {
+  outline: 3px solid var(--location-accent);
+  outline-offset: 3px;
+}
+
+.xr-location-card:hover .xr-location-card__arrow,
+.xr-location-card:focus-visible .xr-location-card__arrow {
+  transform: translateX(-3px);
 }
 
 .xr-location-card__name {
-  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+  color: var(--xr-text);
+  font-size: 1.08rem;
+  font-weight: 650;
+  line-height: 1.55;
 }
 
-.xr-location-card__meta {
+.xr-location-card__metrics {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 0.65rem;
+}
+
+.xr-location-card__metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  padding: 0.7rem 0.8rem;
+  border-radius: 0.9rem;
+  background: #f7fafb;
+}
+
+.xr-location-card__metric--primary {
+  background: var(--location-tint);
+}
+
+.xr-location-card__label {
   color: var(--xr-text-soft);
+  font-size: 0.76rem;
+}
+
+.xr-location-card__number {
+  color: var(--xr-text);
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.xr-location-card__metric--primary .xr-location-card__number {
+  color: var(--location-accent-strong);
+  font-size: 1.65rem;
+}
+
+.xr-location-card__value {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+  padding-block: 0.75rem;
+  border-block: 1px solid var(--xr-row-border);
+}
+
+.xr-location-card__value strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--xr-text);
+  font-size: 1rem;
+  font-weight: 650;
+  text-align: end;
+}
+
+.xr-location-card__footer {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  color: var(--xr-text-soft);
+  font-size: 0.75rem;
+}
+
+.xr-location-card__footer i {
+  color: var(--location-accent-strong);
+  font-size: 1rem;
+}
+
+.xr-location-card__footer time,
+.xr-location-card__footer span:last-child {
+  margin-inline-start: auto;
+  color: var(--xr-text);
+  text-align: end;
+}
+
+@media (max-width: 420px) {
+  .xr-location-card {
+    gap: 0.85rem;
+    padding: 1rem;
+  }
+
+  .xr-location-card__accent {
+    inset-block: 1rem;
+  }
+
+  .xr-location-card__avatar {
+    flex-basis: 3.25rem;
+    width: 3.25rem;
+    height: 3.25rem;
+    border-radius: 1rem;
+    font-size: 1.4rem;
+  }
+
+  .xr-location-card__metric {
+    padding: 0.6rem 0.65rem;
+  }
+
+  .xr-location-card__metric--primary .xr-location-card__number {
+    font-size: 1.45rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xr-location-card,
+  .xr-location-card__arrow {
+    transition: none;
+  }
+
+  .xr-location-card:hover,
+  .xr-location-card:focus-visible {
+    transform: none;
+  }
 }
 </style>

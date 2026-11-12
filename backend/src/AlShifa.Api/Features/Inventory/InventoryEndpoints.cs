@@ -32,7 +32,7 @@ public sealed record TransferStockRequest(long BatchId, [Required, MaxLength(30)
 
 public sealed record LocationSummary(string Code, string Name, int ProductCount, int BatchCount, decimal StockValue, DateTime? LastMovementAt);
 
-public sealed record LocationStockRow(int ProductId, string ProductCode, string ProductName, string Unit, decimal Quantity, decimal Value, DateOnly? NearestExpiry, int BatchCount);
+public sealed record LocationStockRow(int ProductId, string ProductCode, string ProductName, string Unit, decimal Quantity, decimal Value, DateOnly? NearestExpiry, int BatchCount, string Kind, string? Category);
 
 public sealed record LocationDetail(LocationSummary Location, List<LocationStockRow> Stock);
 
@@ -102,13 +102,23 @@ public static class InventoryEndpoints
 
             if (!string.IsNullOrWhiteSpace(q))
             {
-                query = query.Where(p => p.Code.StartsWith(q) || p.Name.StartsWith(q));
+                // vigamox, Vigamox and VIGAMOX find the same drug whatever the column collation is: both sides are lower-cased.
+                // Stored names are never changed. Wildcards in the text are matched as plain characters.
+                var prefix = q.Trim().ToLowerInvariant().Replace("|", "||").Replace("%", "|%").Replace("_", "|_") + "%";
+                query = query.Where(p => EF.Functions.Like(p.Code.ToLower(), prefix, "|") || EF.Functions.Like(p.Name.ToLower(), prefix, "|"));
             }
 
             var total = await query.CountAsync(ct);
             var rows = await ProjectProducts(db, query.OrderBy(p => p.Name).Skip((page - 1) * pageSize).Take(pageSize)).ToListAsync(ct);
             return Results.Ok(new PagedResult<ProductRow>(rows, total, page, pageSize));
         }).RequirePermission("inventory.view");
+
+        // Drug forms already in use (Category of drugs), so the form offers the values imported from the stock sheet too.
+        inventory.MapGet("/drug-forms", async (AppDbContext db, CancellationToken ct) =>
+            Results.Ok(await db.Products.AsNoTracking()
+                .Where(p => p.Kind == ProductKind.Drug && p.Category != null && p.Category != "")
+                .Select(p => p.Category!).Distinct().OrderBy(c => c).ToListAsync(ct)))
+            .RequirePermission("inventory.view");
 
         inventory.MapPost("/products", async (SaveProductRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
         {
@@ -169,9 +179,9 @@ public static class InventoryEndpoints
                 ?? throw AppException.NotFound();
             var stock = await db.StockBatches.AsNoTracking()
                 .Where(b => b.Location!.Code == code && b.Quantity > 0)
-                .GroupBy(b => new { b.ProductId, b.Product!.Code, b.Product.Name, b.Product.Unit })
+                .GroupBy(b => new { b.ProductId, b.Product!.Code, b.Product.Name, b.Product.Unit, b.Product.Kind, b.Product.Category })
                 .OrderBy(g => g.Key.Name)
-                .Select(g => new LocationStockRow(g.Key.ProductId, g.Key.Code, g.Key.Name, g.Key.Unit, g.Sum(b => b.Quantity), g.Sum(b => b.Quantity * b.UnitCost), g.Min(b => b.ExpiryDate), g.Count()))
+                .Select(g => new LocationStockRow(g.Key.ProductId, g.Key.Code, g.Key.Name, g.Key.Unit, g.Sum(b => b.Quantity), g.Sum(b => b.Quantity * b.UnitCost), g.Min(b => b.ExpiryDate), g.Count(), g.Key.Kind.ToString(), g.Key.Category))
                 .ToListAsync(ct);
             return Results.Ok(new LocationDetail(location, stock));
         }).RequirePermission("inventory.view");

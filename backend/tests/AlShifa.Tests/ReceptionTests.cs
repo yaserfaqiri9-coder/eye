@@ -48,6 +48,42 @@ public sealed class ReceptionTests(ApiFixture api)
     }
 
     [Fact]
+    public async Task Patient_search_matches_prefixes_of_each_field_ignoring_case_and_treats_wildcards_as_text()
+    {
+        var reception = await UserAsync(Roles.Receptionist);
+        var tag = Guid.NewGuid().ToString("N")[..10];
+        var surname = "Qz" + tag;
+        var patient = await CreatePatientAsync(reception, NewPatient() with { LastName = surname });
+        var lower = await CreatePatientAsync(reception, NewPatient() with { LastName = "wq" + tag });
+        var persian = await CreatePatientAsync(reception, NewPatient("زهرا" + tag) with { LastName = "رحیمی" + tag });
+
+        async Task<PagedResult<PatientListItem>> PageAsync(string q) =>
+            (await reception.GetFromJsonAsync<PagedResult<PatientListItem>>($"/api/patients?pageSize=100&q={Uri.EscapeDataString(q)}"))!;
+        async Task<List<long>> FindAsync(string q) => (await PageAsync(q)).Items.Select(p => p.Id).ToList();
+
+        // English letters in either case, both ways round.
+        Assert.Contains(patient.Id, await FindAsync(surname[..8].ToLowerInvariant()));
+        Assert.Contains(lower.Id, await FindAsync(("wq" + tag).ToUpperInvariant()));
+        Assert.Contains(patient.Id, await FindAsync(patient.FileNumber.ToLowerInvariant()));
+        Assert.Contains(patient.Id, await FindAsync(patient.Phone!));
+
+        // Persian text by first name and by surname prefix.
+        Assert.Contains(persian.Id, await FindAsync("زهرا" + tag));
+        Assert.Contains(persian.Id, await FindAsync("رحیمی" + tag[..4]));
+
+        // A first name holding "_" is found by its exact text.
+        Assert.Contains(patient.Id, await FindAsync(patient.FirstName));
+
+        // % and _ are plain characters: they never widen the search.
+        Assert.Equal(0, (await PageAsync("%")).Total);
+        Assert.Equal(0, (await PageAsync("_")).Total);
+        Assert.DoesNotContain(patient.Id, await FindAsync("%" + surname[2..]));
+        Assert.DoesNotContain(patient.Id, await FindAsync("_" + surname[1..]));
+        Assert.DoesNotContain(patient.Id, await FindAsync("Q_" + tag));
+        Assert.DoesNotContain(persian.Id, await FindAsync("رح%" + tag));
+    }
+
+    [Fact]
     public async Task Registered_patient_is_visible_to_triage_and_gets_a_file_number()
     {
         var reception = await UserAsync(Roles.Receptionist);

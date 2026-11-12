@@ -261,6 +261,16 @@ public sealed class PilotReadinessTests(ApiFixture api)
             var asset = await client.GetAsync("/assets/a-123.js");
             Assert.True(asset.Headers.CacheControl!.Public);
 
+            // The web app's files go out compressed; API answers never do.
+            await File.WriteAllTextAsync(Path.Combine(webRoot.FullName, "assets", "b-456.js"), string.Concat(Enumerable.Repeat("const value = 1;\n", 400)));
+            using var compressedAsset = new HttpRequestMessage(HttpMethod.Get, "/assets/b-456.js");
+            compressedAsset.Headers.AcceptEncoding.ParseAdd("gzip");
+            var compressed = await client.SendAsync(compressedAsset);
+            Assert.Equal("gzip", Assert.Single(compressed.Content.Headers.ContentEncoding));
+            using var apiRequest = new HttpRequestMessage(HttpMethod.Get, "/api/auth/csrf");
+            apiRequest.Headers.AcceptEncoding.ParseAdd("gzip");
+            Assert.Empty((await client.SendAsync(apiRequest)).Content.Headers.ContentEncoding);
+
             Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/not-a-real-endpoint")).StatusCode);
             Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/assets/gone-456.js")).StatusCode);
             Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/patients")).StatusCode);

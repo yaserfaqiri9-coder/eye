@@ -180,12 +180,18 @@ public static class FinanceEndpoints
     {
         var group = app.MapGroup("/api/invoices").WithTags("Finance");
 
-        group.MapGet("/", async (AppDbContext db, string? q, bool? unpaid, int page = 1, int pageSize = 50, CancellationToken ct = default) =>
+        group.MapGet("/", async (AppDbContext db, string? q, bool? unpaid, long? patientId, int page = 1, int pageSize = 50, CancellationToken ct = default) =>
         {
             pageSize = Math.Clamp(pageSize, 1, 100);
             page = Math.Max(page, 1);
 
             var query = db.Invoices.AsNoTracking();
+            if (patientId is { } pid)
+            {
+                // The patient file asks by id: a file-number prefix would also match longer file numbers of other patients.
+                query = query.Where(i => i.PatientId == pid);
+            }
+
             if (unpaid == true)
             {
                 // A discount can cover a whole invoice with nothing paid, and nothing is left to collect on it.

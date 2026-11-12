@@ -110,6 +110,21 @@ public sealed class FinanceTests(ApiFixture api)
     }
 
     [Fact]
+    public async Task Patient_file_lists_only_that_patients_invoices()
+    {
+        var serviceId = await NewServiceAsync(100);
+        var first = await NewPatientAsync();
+        var second = await NewPatientAsync();
+        var own = await NewInvoiceAsync(first.Id, serviceId);
+        await NewInvoiceAsync(second.Id, serviceId);
+
+        var cashier = await UserAsync(Roles.Cashier);
+        var page = await cashier.GetFromJsonAsync<PagedResult<InvoiceRow>>($"/api/invoices?patientId={first.Id}&pageSize=100", JsonOptions);
+        Assert.Equal(own.Id, Assert.Single(page!.Items).Id);
+        Assert.Equal(1, page.Total);
+    }
+
+    [Fact]
     public async Task Visit_service_charge_appears_at_the_cashier_with_a_price_snapshot()
     {
         var serviceId = await NewServiceAsync(500);

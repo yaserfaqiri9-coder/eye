@@ -8,6 +8,7 @@ import UiCard from '@/components/UiCard.vue'
 import UiComboBox, { type ComboOption } from '@/components/UiComboBox.vue'
 import UiModal from '@/components/UiModal.vue'
 import UiRowMenu from '@/components/UiRowMenu.vue'
+import UiListSkeleton from '@/components/UiListSkeleton.vue'
 import CallControls from '@/features/calls/CallControls.vue'
 import CallNotice from '@/features/calls/CallNotice.vue'
 import { useCallDesk } from '@/features/calls/useCallDesk'
@@ -428,7 +429,7 @@ watch(departmentId, refresh)
           </button>
         </nav>
 
-        <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
+        <UiListSkeleton v-if="loading" />
 
         <!-- Sent to the cashier: the fee is paid there, then the number comes by itself. -->
         <template v-else-if="tab === 'pay'">

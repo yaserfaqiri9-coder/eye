@@ -69,6 +69,60 @@ public sealed class PharmacyFlowTests(ApiFixture api)
     private Task<int> SaleVersion(long saleId) => api.InDbAsync(db => db.Sales.Where(s => s.Id == saleId).Select(s => s.Version).SingleAsync());
 
     [Fact]
+    public async Task Drug_search_ignores_letter_case_and_outer_spaces_and_keeps_the_stored_name()
+    {
+        var inventory = await UserAsync(Roles.Inventory);
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var stored = $"Vigamox{tag} Eye Drops";
+        var code = $"VgX{tag}";
+        var created = await Created<JsonElement>(await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest(code, stored, ProductKind.Drug, "قطره چشمی", "قطی", 0, 100)));
+        var id = created.GetProperty("id").GetInt32();
+
+        async Task<PagedResult<ProductRow>> FindAsync(string q) =>
+            (await inventory.GetFromJsonAsync<PagedResult<ProductRow>>($"/api/inventory/products?pageSize=50&q={Uri.EscapeDataString(q)}", JsonOptions))!;
+
+        foreach (var q in new[] { $"vigamox{tag}", $"Vigamox{tag}", $"VIGAMOX{tag}", $"  vIgAmOx{tag}  ", code.ToLowerInvariant(), code.ToUpperInvariant() })
+        {
+            var page = await FindAsync(q);
+            var row = Assert.Single(page.Items);
+            Assert.Equal(id, row.Id);
+            Assert.Equal(1, page.Total);
+            Assert.Equal(stored, row.Name); // the stored spelling is untouched
+        }
+
+        // Wildcards are plain text and never widen the search.
+        Assert.Empty((await FindAsync($"%amox{tag}")).Items);
+        Assert.Empty((await FindAsync($"_igamox{tag}")).Items);
+        Assert.Equal(stored, await api.InDbAsync(db => db.Products.Where(p => p.Id == id).Select(p => p.Name).SingleAsync()));
+
+        // Doctors pick drug names for a prescription the same way.
+        var doctor = await UserAsync(Roles.Doctor);
+        var names = await doctor.GetFromJsonAsync<List<string>>($"/api/prescriptions/drugs?q={Uri.EscapeDataString($"VIGAMOX{tag}")}");
+        Assert.Equal([stored], names);
+    }
+
+    [Fact]
+    public async Task Drug_form_is_kept_apart_from_the_stock_unit_and_shown_in_pharmacy_stock()
+    {
+        var inventory = await UserAsync(Roles.Inventory);
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var form = $"قطره چشمی {tag}";
+        var created = await Created<JsonElement>(await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest($"F{tag}", $"دوای {tag}", ProductKind.Drug, form, "قطی", 0, 50)));
+        var id = created.GetProperty("id").GetInt32();
+        Assert.Equal(HttpStatusCode.Created, (await inventory.SendAsync(ApiFixture.Keyed("/api/inventory/purchases", new CreatePurchaseRequest("تأمین", "pharmacy",
+            [new PurchaseLineInput(id, $"L{tag}", DateOnly.FromDateTime(DateTime.UtcNow.AddYears(1)), 12, 20)])))).StatusCode);
+
+        var row = Assert.Single((await inventory.GetFromJsonAsync<PagedResult<ProductRow>>($"/api/inventory/products?q=F{tag}", JsonOptions))!.Items);
+        Assert.Equal(("Drug", form, "قطی", 12m), (row.Kind, row.Category, row.Unit, row.OnHand));
+
+        var pharmacy = await inventory.GetFromJsonAsync<LocationDetail>("/api/inventory/locations/pharmacy", JsonOptions);
+        var stock = Assert.Single(pharmacy!.Stock, s => s.ProductId == id);
+        Assert.Equal(("Drug", form, "قطی", 12m), (stock.Kind, stock.Category, stock.Unit, stock.Quantity));
+
+        Assert.Contains(form, (await inventory.GetFromJsonAsync<List<string>>("/api/inventory/drug-forms"))!);
+    }
+
+    [Fact]
     public async Task A_prescription_alone_creates_no_bill_or_debt_and_stays_in_the_patients_history()
     {
         var s = await PrescriptionAsync(2, 10);

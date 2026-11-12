@@ -118,8 +118,15 @@ public sealed class ReportTests(ApiFixture api)
     [Fact]
     public async Task Dashboard_needs_the_reports_permission()
     {
+        foreach (var role in new[] { Roles.Triage, Roles.AudioStation })
+        {
+            var client = await UserAsync(role);
+            Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/reports/dashboard")).StatusCode);
+        }
+
+        // The Super Admin holds every role's permissions, so the dashboard opens.
         var admin = await UserAsync(Roles.SuperAdmin);
-        Assert.Equal(HttpStatusCode.Forbidden, (await admin.GetAsync("/api/reports/dashboard")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await admin.GetAsync("/api/reports/dashboard")).StatusCode);
     }
 
     [Fact]

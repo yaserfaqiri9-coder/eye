@@ -5,6 +5,7 @@ import { useLiveRefresh } from '@/api/realtime'
 import UiPager from '@/components/UiPager.vue'
 import { formatDate, formatDateTime } from '@/utils/date'
 import { money, quantity } from '@/utils/money'
+import { drugFormOf } from './drugForms'
 import { movementLabels } from './labels'
 
 interface LocationSummary {
@@ -25,6 +26,8 @@ interface StockRow {
   value: number
   nearestExpiry: string | null
   batchCount: number
+  kind: string
+  category: string | null
 }
 
 interface MovementRow {
@@ -140,11 +143,12 @@ onMounted(load)
       <p v-else-if="visibleStock.length === 0" class="xr-state">جنسی با این نام پیدا نشد.</p>
       <div v-else class="xr-table-wrap">
         <table class="xr-table">
-          <thead><tr><th>کد</th><th>جنس</th><th>موجودی</th><th>بچ‌ها</th><th>نزدیک‌ترین انقضا</th><th>ارزش</th></tr></thead>
+          <thead><tr><th>کد</th><th>جنس</th><th>نوعیت دوا</th><th>موجودی</th><th>بچ‌ها</th><th>نزدیک‌ترین انقضا</th><th>ارزش</th></tr></thead>
           <tbody>
             <tr v-for="row in visibleStock" :key="row.productId">
               <td><span class="ltr-num">{{ row.productCode }}</span></td>
               <td>{{ row.productName }}</td>
+              <td>{{ drugFormOf(row) ?? '—' }}</td>
               <td>{{ quantity(row.quantity) }} {{ row.unit }}</td>
               <td>{{ quantity(row.batchCount) }}</td>
               <td>{{ row.nearestExpiry ? formatDate(row.nearestExpiry) : '—' }}</td>
