@@ -51,7 +51,7 @@ public sealed class PilotReadinessTests(ApiFixture api)
     private async Task<int> NewServiceAsync(decimal price)
     {
         var admin = await UserAsync(Roles.SuperAdmin);
-        var response = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(Name("S"), "خدمت " + Name("n"), null, true, price));
+        var response = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest("خدمت " + Name("n"), null, true, price));
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
     }
@@ -131,7 +131,7 @@ public sealed class PilotReadinessTests(ApiFixture api)
         var manager = await UserAsync(Roles.Inventory);
         async Task<int> ProductAsync(decimal quantity)
         {
-            var response = await manager.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest(Name("D"), "جنس " + Name("n"), ProductKind.Drug, null, "عدد", 0, 100));
+            var response = await manager.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest("جنس " + Name("n"), ProductKind.Drug, null, "عدد", 0, 100));
             var id = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
             Assert.Equal(HttpStatusCode.Created, (await manager.SendAsync(Post("/api/inventory/purchases", new CreatePurchaseRequest("تأمین‌کننده", "pharmacy",
                 [new PurchaseLineInput(id, Name("L"), DateOnly.FromDateTime(DateTime.UtcNow.AddYears(1)), quantity, 40)])))).StatusCode);

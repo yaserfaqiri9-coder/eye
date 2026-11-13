@@ -286,7 +286,7 @@ public sealed class FinalReadinessTests(ApiFixture api)
         var (admin, _) = await UserAsync(Roles.SuperAdmin);
         var (cashier, _) = await UserAsync(Roles.Cashier);
         var (accountant, _) = await UserAsync(Roles.Accountant);
-        var service = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(Name("S"), Name("خدمت"), null, true, 30));
+        var service = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(Name("خدمت"), null, true, 30));
         var serviceId = JsonDocument.Parse(await service.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
         var invoice = await Read<InvoiceRow>(await cashier.SendAsync(ApiFixture.Keyed("/api/invoices", new CreateInvoiceRequest(null, null, [new InvoiceLineInput(serviceId, 1)]))), HttpStatusCode.Created);
 

@@ -62,7 +62,7 @@ public sealed class ClinicalTests(ApiFixture api)
     private async Task<int> NewSurgeryServiceAsync()
     {
         var admin = await UserAsync(Roles.SuperAdmin);
-        var response = await admin.PostAsJsonAsync("/api/services", new AlShifa.Api.Features.Finance.SaveServiceRequest(Name("S"), Name("عملیات"), null, true, 1000));
+        var response = await admin.PostAsJsonAsync("/api/services", new AlShifa.Api.Features.Finance.SaveServiceRequest(Name("عملیات"), null, true, 1000));
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
     }

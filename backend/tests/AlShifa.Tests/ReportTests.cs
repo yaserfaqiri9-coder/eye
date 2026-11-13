@@ -47,7 +47,7 @@ public sealed class ReportTests(ApiFixture api)
     private async Task<(HttpClient Cashier, InvoiceRow Invoice)> ChargedInvoiceAsync(decimal price)
     {
         var admin = await UserAsync(Roles.SuperAdmin);
-        var service = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(Name("S"), "خدمت " + Name("n"), null, true, price));
+        var service = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest("خدمت " + Name("n"), null, true, price));
         var serviceId = JsonDocument.Parse(await service.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
 
         var register = await admin.PostAsJsonAsync("/api/cash/registers", new SaveRegisterRequest(Name("صندوق")));

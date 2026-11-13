@@ -249,7 +249,7 @@ watch(
   flex-direction: column;
   width: var(--xr-sidebar-width);
   overflow: hidden;
-  /* Fixed so it lines up with the layout's gradient; the page's rounded corners pass under the menu as both animate. */
+  /* Fixed so the sidebar gradient stays aligned while its width animates. */
   background: var(--xr-gradient-shell) fixed;
   color: #fff;
   box-shadow: var(--xr-shadow-bar);

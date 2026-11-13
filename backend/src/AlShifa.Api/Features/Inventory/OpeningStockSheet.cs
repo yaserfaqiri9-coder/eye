@@ -298,8 +298,8 @@ public static class OpeningStockSheet
         return $"[sheet:{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..16]}]";
     }
 
-    /// <summary>One product per name and unit, so the same item in several locations or batches shares it.</summary>
-    public static string ProductCode(Parsed item) =>
+    /// <summary>One product per name and unit, so the same item in several locations or batches shares it. Older imports stored it as the product code.</summary>
+    public static string ProductKey(Parsed item) =>
         $"OS-{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"{Normalize(item.ProductName)}|{Normalize(item.Unit)}")))[..12]}";
 
     private static string Clean(string text) =>
@@ -470,10 +470,10 @@ public static class OpeningStockSheet
         Hold(d => repeated.ContainsKey(d.Key!), d => $"ردیف تکراری در فایل (ردیف‌های {repeated[d.Key!]})");
 
         // One item, one sale price and one kind across the file.
-        var conflicting = decisions.Where(d => d.Item is not null).GroupBy(d => ProductCode(d.Item!))
+        var conflicting = decisions.Where(d => d.Item is not null).GroupBy(d => ProductKey(d.Item!))
             .Where(g => g.Select(d => d.Item!.SalePrice).Distinct().Count() > 1 || g.Select(d => d.Item!.Kind).Distinct().Count() > 1 || g.Select(d => d.Item!.Form).Distinct().Count() > 1)
             .Select(g => g.Key).ToHashSet();
-        Hold(d => conflicting.Contains(ProductCode(d.Item!)), _ => "قیمت فروش، نوع یا شکل این جنس در ردیف‌های فایل یکسان نیست");
+        Hold(d => conflicting.Contains(ProductKey(d.Item!)), _ => "قیمت فروش، نوع یا شکل این جنس در ردیف‌های فایل یکسان نیست");
 
         // Recorded by an earlier run: the same quantity is done, another quantity needs a person.
         var recorded = (await db.StockMovements.AsNoTracking()
@@ -497,7 +497,7 @@ public static class OpeningStockSheet
         foreach (var d in decisions.Where(d => d.Outcome == Outcome.Import).ToList())
         {
             var item = d.Item!;
-            var code = ProductCode(item);
+            var code = ProductKey(item);
             var same = products.Where(p => p.Code == code || (Normalize(p.Name) == Normalize(item.ProductName) && Normalize(p.Unit) == Normalize(item.Unit))).ToList();
             var similar = products.Where(p => !p.Code.StartsWith("OS-") && !same.Contains(p) && Normalize(p.Name).Contains(Normalize(d.Row.Name))).ToList();
             var reason = same.Count > 1 ? $"چند جنس هم‌نام در سیستم: {string.Join("، ", same.Select(p => p.Code))}"
@@ -531,6 +531,7 @@ public static class OpeningStockSheet
         var ledger = services.GetRequiredService<LedgerService>();
         var audit = services.GetRequiredService<AuditService>();
         var outbox = services.GetRequiredService<Outbox>();
+        var numbers = services.GetRequiredService<NumberService>();
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
@@ -550,7 +551,7 @@ public static class OpeningStockSheet
         foreach (var d in toImport)
         {
             var item = d.Item!;
-            var code = ProductCode(item);
+            var code = ProductKey(item);
             if (!productIds.TryGetValue(code, out var productId))
             {
                 // Matched exactly as the preview matched it; the preview already stopped any row with more than one match.
@@ -559,7 +560,7 @@ public static class OpeningStockSheet
                 {
                     var product = new Product
                     {
-                        Code = code,
+                        Code = await InventoryEndpoints.NextProductCodeAsync(db, numbers, ct),
                         Name = item.ProductName,
                         Kind = item.Kind,
                         Category = item.Form,

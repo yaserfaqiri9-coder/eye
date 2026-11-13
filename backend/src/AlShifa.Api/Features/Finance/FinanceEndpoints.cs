@@ -6,9 +6,10 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AlShifa.Api.Features.Finance;
 
-public sealed record SaveServiceRequest([Required, MaxLength(30)] string Code, [Required, MaxLength(150)] string Name, int? DepartmentId, bool IsActive, [Range(0, 100000000)] decimal? Price);
+/// <summary>The code is not sent: the system gives a new service the next short code, and it never changes.</summary>
+public sealed record SaveServiceRequest([Required, MaxLength(150)] string Name, int? DepartmentId, bool IsActive, [Range(0, 100000000)] decimal? Price);
 
-public sealed record EditServiceRequest([Required, MaxLength(30)] string Code, [Required, MaxLength(150)] string Name, bool IsActive);
+public sealed record EditServiceRequest([Required, MaxLength(150)] string Name, bool IsActive);
 
 public sealed record ServiceRow(int Id, string Code, string Name, string? DepartmentName, bool IsActive, decimal? CurrentPrice);
 
@@ -85,7 +86,7 @@ public static class FinanceEndpoints
             return Results.Ok(rows);
         }).RequireAuthorization();
 
-        group.MapPost("/", async (SaveServiceRequest request, AppDbContext db, CurrentUser user, AuditService audit, CancellationToken ct) =>
+        group.MapPost("/", async (SaveServiceRequest request, AppDbContext db, NumberService numbers, CurrentUser user, AuditService audit, CancellationToken ct) =>
         {
             if (request.Price is { } requested)
             {
@@ -93,7 +94,8 @@ public static class FinanceEndpoints
             }
 
             await using var tx = await db.Database.BeginTransactionAsync(ct);
-            var service = new Service { Code = request.Code.Trim(), Name = request.Name.Trim(), DepartmentId = request.DepartmentId, IsActive = request.IsActive };
+            var code = await ShortCodes.NextAsync(numbers, "service", c => db.Services.AnyAsync(s => s.Code == c, ct), ct);
+            var service = new Service { Code = code, Name = request.Name.Trim(), DepartmentId = request.DepartmentId, IsActive = request.IsActive };
             db.Services.Add(service);
             await db.SaveChangesAsync(ct);
             if (request.Price is { } price)
@@ -104,7 +106,7 @@ public static class FinanceEndpoints
             audit.Add("ServiceCreated", "Service", service.Id.ToString());
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
-            return Results.Created($"/api/services/{service.Id}", new { service.Id });
+            return Results.Created($"/api/services/{service.Id}", new { service.Id, service.Code });
         }).RequirePermission("settings.edit");
 
         group.MapPost("/{id:int}/price", async (int id, SetPriceRequest request, AppDbContext db, CurrentUser user, AuditService audit, CancellationToken ct) =>
@@ -128,16 +130,12 @@ public static class FinanceEndpoints
         group.MapPut("/{id:int}", async (int id, EditServiceRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
         {
             var service = await db.Services.SingleOrDefaultAsync(s => s.Id == id, ct) ?? throw AppException.NotFound();
-            var code = request.Code.Trim();
-            var system = ServiceCodes.PaidFlow.Contains(service.Code);
-
             // Reception and the paid departments find these by code, and need them active to charge at all.
-            if ((system && (code != service.Code || !request.IsActive)) || (!system && ServiceCodes.PaidFlow.Contains(code)))
+            if (ServiceCodes.PaidFlow.Contains(service.Code) && !request.IsActive)
             {
-                throw new AppException(StatusCodes.Status409Conflict, "system_service", "کد این خدمت سیستمی است و خدمت باید فعال بماند. فقط نام آن قابل تغییر است.");
+                throw new AppException(StatusCodes.Status409Conflict, "system_service", "این خدمت سیستمی است و باید فعال بماند. فقط نام آن قابل تغییر است.");
             }
 
-            service.Code = code;
             service.Name = request.Name.Trim();
             service.IsActive = request.IsActive;
             audit.Add("ServiceEdited", "Service", id.ToString());

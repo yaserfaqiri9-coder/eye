@@ -42,7 +42,22 @@ const tabs = computed(() =>
   ].filter((t) => t.visible),
 )
 
+const groups = computed(() => {
+  const available = new Map(tabs.value.map((item) => [item.key, item]))
+  return [
+    { key: 'visits', label: 'مراجعات', itemKeys: ['visits'] },
+    { key: 'exams', label: 'معاینات', itemKeys: ['preexam', 'consult', 'refraction'] },
+    { key: 'treatment', label: 'درمان و نتایج', itemKeys: ['diagnoses', 'rx', 'lab', 'surgery'] },
+    { key: 'money', label: 'مالی', itemKeys: ['money'] },
+  ].map((group) => ({ ...group, items: group.itemKeys.flatMap((key) => available.get(key) ?? []) })).filter((group) => group.items.length)
+})
+
 const tab = ref(tabs.value[0]?.key ?? '')
+const activeGroup = computed(() => groups.value.find((group) => group.items.some((item) => item.key === tab.value)) ?? groups.value[0])
+
+function selectGroup(group: (typeof groups.value)[number]) {
+  if (!group.items.some((item) => item.key === tab.value)) tab.value = group.items[0]?.key ?? ''
+}
 const charts = ref<Chart[]>([])
 const chartsLoaded = ref(false)
 const refractions = ref<Refraction[]>([])
@@ -115,13 +130,16 @@ const latestVisit = computed(() => openVisits.value[0] ?? null)
 <template>
   <section v-if="tabs.length" class="xr-card">
     <div class="xr-card__header">
-      <nav class="xr-tabs" role="tablist" aria-label="بخش‌های دوسیه">
-        <button v-for="t in tabs" :key="t.key" type="button" role="tab" class="xr-tab" :class="{ 'xr-tab--active': tab === t.key }" :aria-selected="tab === t.key" @click="tab = t.key">{{ t.label }}</button>
+      <nav class="xr-tabs" role="tablist" aria-label="بخش‌های پرونده مریض">
+        <button v-for="group in groups" :key="group.key" type="button" role="tab" class="xr-tab" :class="{ 'xr-tab--active': activeGroup?.key === group.key }" :aria-selected="activeGroup?.key === group.key" @click="selectGroup(group)">{{ group.label }}</button>
       </nav>
       <RouterLink v-if="canPrint && latestVisit" :to="`/print/dossier/${latestVisit.id}`" target="_blank" class="btn btn-soft">چاپ دوسیه آخرین مراجعه</RouterLink>
     </div>
 
     <div class="xr-card__body">
+      <nav v-if="activeGroup && activeGroup.items.length > 1" class="record-subtabs" role="tablist" :aria-label="`زیربخش‌های ${activeGroup.label}`">
+        <button v-for="item in activeGroup.items" :key="item.key" type="button" role="tab" :class="{ 'record-subtabs__active': tab === item.key }" :aria-selected="tab === item.key" @click="tab = item.key">{{ item.label }}</button>
+      </nav>
       <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
       <p v-if="skippedCharts && ['preexam', 'consult', 'diagnoses', 'lab', 'rx'].includes(tab)" class="form-hint">{{ chartLimit }} مراجعه آخر نمایش داده می‌شود. مراجعات قدیمی‌تر از تب مراجعات باز می‌شوند.</p>
       <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
@@ -346,5 +364,41 @@ const latestVisit = computed(() => openVisits.value[0] ?? null)
 
 .xr-section p {
   color: var(--xr-text);
+}
+
+.record-subtabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 4px;
+  border: 1px solid var(--xr-row-border);
+  border-radius: var(--xr-radius-control);
+  background: #f7faf9;
+}
+
+.xr-card__header,
+.xr-tabs { flex-wrap: wrap; }
+
+.record-subtabs button {
+  min-height: 34px;
+  padding: 5px 13px;
+  border: 0;
+  border-radius: calc(var(--xr-radius-control) - 3px);
+  background: transparent;
+  color: var(--xr-text-soft);
+  font: inherit;
+  font-size: .82rem;
+  cursor: pointer;
+}
+
+.record-subtabs button:hover,
+.record-subtabs button:focus-visible { color: var(--xr-primary); }
+.record-subtabs button:focus-visible { outline: 2px solid var(--xr-primary); outline-offset: 1px; }
+.record-subtabs .record-subtabs__active {
+  background: var(--xr-surface);
+  box-shadow: 0 1px 4px rgba(0, 65, 64, .12);
+  color: var(--xr-primary);
+  font-weight: 700;
 }
 </style>

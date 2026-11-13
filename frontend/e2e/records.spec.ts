@@ -125,9 +125,13 @@ test('a purchase is corrected and cancelled from the inventory list, and a trans
   const stamp = Date.now()
   await login(page, adminUser, adminPassword)
   const inventory = await staffPage(page, browser, 'Inventory', errors)
+  const openHistory = async (view: 'خریدها' | 'گردش موجودی') => {
+    await inventory.getByRole('tab', { name: 'سوابق', exact: true }).click()
+    await inventory.getByRole('tab', { name: view, exact: true }).click()
+  }
 
   const name = `جنس${stamp}`
-  const product = await call<{ id: number }>(inventory, 'POST', '/inventory/products', { code: `P${stamp}`, name, kind: 'General', unit: 'عدد', reorderLevel: 0, salePrice: 10, isActive: true })
+  const product = await call<{ id: number }>(inventory, 'POST', '/inventory/products', { name, kind: 'General', unit: 'عدد', reorderLevel: 0, salePrice: 10, isActive: true })
   const supplier = await call<{ id: number }>(inventory, 'POST', '/suppliers', { name: `شرکت ${stamp}`, isActive: true })
   const onHand = async () => (await call<{ items: { id: number; onHand: number }[] }>(inventory, 'GET', `/inventory/products?q=${encodeURIComponent(name)}`)).items[0].onHand
   const buy = (quantity: number) => call<{ purchaseNumber: string }>(inventory, 'POST', '/inventory/purchases', { supplierId: supplier.id, locationCode: 'central', items: [{ productId: product.id, quantity, unitCost: 5 }] })
@@ -139,7 +143,7 @@ test('a purchase is corrected and cancelled from the inventory list, and a trans
   await expect(inventory.getByRole('region', { name: 'موجودی فعلی' }).getByRole('row', { name: new RegExp(name) })).toContainText('۱۰')
   await expect(inventory.getByRole('region', { name: 'تاریخچه ورود و خروج' }).getByRole('row', { name: new RegExp(name) }).first()).toContainText('ورود')
   await inventory.getByRole('link', { name: 'بازگشت به گدام' }).click()
-  await inventory.getByRole('tab', { name: 'خریدها' }).click()
+  await openHistory('خریدها')
   const row = inventory.getByRole('row', { name: new RegExp(first.purchaseNumber) })
   await row.getByRole('link', { name: 'اصلاح' }).click()
 
@@ -152,14 +156,14 @@ test('a purchase is corrected and cancelled from the inventory list, and a trans
   await expect(inventory).toHaveURL(/\/inventory$/)
   expect(await onHand()).toBe(7)
 
-  await inventory.getByRole('tab', { name: 'خریدها' }).click()
+  await openHistory('خریدها')
   await expect(inventory.getByRole('row', { name: new RegExp(first.purchaseNumber) })).toContainText('لغو شده')
 
   // Moved to the wrong place, then moved back from the movements list.
   const batch = (await call<{ id: number }[]>(inventory, 'GET', `/inventory/batches?productId=${product.id}`))[0]
   await call(inventory, 'POST', '/inventory/transfers', { batchId: batch.id, toLocationCode: 'pharmacy', quantity: 2 })
   await inventory.reload()
-  await inventory.getByRole('tab', { name: 'گردش موجودی' }).click()
+  await openHistory('گردش موجودی')
   await inventory.getByRole('row', { name: new RegExp(`${name}.*انتقال خروجی`) }).getByRole('button', { name: 'برگشت' }).click()
   let dialog = inventory.getByRole('dialog')
   await dialog.getByLabel('دلیل').fill('مقصد اشتباه بود')
@@ -172,7 +176,7 @@ test('a purchase is corrected and cancelled from the inventory list, and a trans
   // Cancelled outright: the stock leaves again.
   const second = await buy(3)
   await inventory.reload()
-  await inventory.getByRole('tab', { name: 'خریدها' }).click()
+  await openHistory('خریدها')
   await inventory.getByRole('row', { name: new RegExp(second.purchaseNumber) }).getByRole('button', { name: 'لغو' }).click()
   dialog = inventory.getByRole('dialog')
   await dialog.getByLabel('دلیل').fill('خرید ثبت نشده بود')
@@ -182,9 +186,9 @@ test('a purchase is corrected and cancelled from the inventory list, and a trans
 
   // A deleted product with this history is only deactivated, and leaves the pickers.
   await inventory.getByRole('tab', { name: 'اجناس' }).click()
-  await inventory.getByRole('row', { name: new RegExp(`P${stamp}`) }).getByRole('button', { name: 'حذف' }).click()
+  await inventory.getByRole('row', { name: new RegExp(name) }).getByRole('button', { name: 'حذف' }).click()
   await expect(inventory.getByRole('status').filter({ hasText: 'غیرفعال شد' })).toBeVisible()
-  await expect(inventory.getByRole('row', { name: new RegExp(`P${stamp}`) })).toContainText('غیرفعال')
+  await expect(inventory.getByRole('row', { name: new RegExp(name) })).toContainText('غیرفعال')
 
   expect(errors).toEqual([])
 })
@@ -221,7 +225,7 @@ test('an expense, a sale and an invoice are corrected in place, and the books st
 
   // Pharmacy sale.
   const drug = `دوا${stamp}`
-  const product = await call<{ id: number }>(inventory, 'POST', '/inventory/products', { code: `D${stamp}`, name: drug, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10, isActive: true })
+  const product = await call<{ id: number }>(inventory, 'POST', '/inventory/products', { name: drug, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10, isActive: true })
   await call(inventory, 'POST', '/inventory/purchases', { supplierName: 'تأمین', locationCode: 'pharmacy', items: [{ productId: product.id, quantity: 10, unitCost: 5 }] })
   const sale = await call<{ saleNumber: string }>(pharmacist, 'POST', '/pharmacy/sales', { items: [{ productId: product.id, quantity: 4 }] })
   await pharmacist.goto('/pharmacy')

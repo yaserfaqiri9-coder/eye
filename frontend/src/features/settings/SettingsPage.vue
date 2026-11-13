@@ -143,8 +143,8 @@ async function saveService() {
   service.saving = true
   service.error = ''
   try {
-    if (service.id) await api(`/services/${service.id}`, { method: 'PUT', body: { code: service.code, name: service.name, isActive: service.isActive } })
-    else await api('/services', { method: 'POST', body: { code: service.code, name: service.name, isActive: true, price: service.price } })
+    if (service.id) await api(`/services/${service.id}`, { method: 'PUT', body: { name: service.name, isActive: service.isActive } })
+    else await api('/services', { method: 'POST', body: { name: service.name, isActive: true, price: service.price } })
     service.open = false
     services.value = await api<ServiceRow[]>('/services')
   } catch (cause) {
@@ -349,7 +349,7 @@ onMounted(load)
 
   <UiModal v-if="service.open" :title="service.id ? 'ویرایش خدمت' : 'خدمت جدید'" @close="service.open = false">
     <form @submit.prevent="saveService">
-      <div class="mb-3"><label class="form-label" for="sv-code">کد</label><input id="sv-code" v-model="service.code" class="form-control" dir="ltr" maxlength="30" required :disabled="!!service.id && paidFlowCodes.includes(service.code)" /></div>
+      <div class="mb-3"><label class="form-label" for="sv-code">کد</label><input id="sv-code" :value="service.id ? service.code : 'خودکار'" class="form-control" dir="ltr" readonly tabindex="-1" /></div>
       <div class="mb-3"><label class="form-label" for="sv-name">نام خدمت</label><input id="sv-name" v-model="service.name" class="form-control" maxlength="150" required /></div>
       <div v-if="!service.id" class="mb-3"><label class="form-label" for="sv-price">قیمت</label><input id="sv-price" v-model.number="service.price" class="form-control" type="number" min="0" step="0.01" required /></div>
       <label v-else-if="!paidFlowCodes.includes(service.code)" class="form-check-label mb-3"><input v-model="service.isActive" type="checkbox" class="form-check-input ms-2" />فعال</label>

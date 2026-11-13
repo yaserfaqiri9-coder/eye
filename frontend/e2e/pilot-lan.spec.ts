@@ -56,7 +56,7 @@ async function cashierWithInvoice(browser: Browser) {
   const stamp = Date.now()
   const admin = await adminPage(browser)
   await newUsers(admin, stamp, { cashier: 'Cashier' })
-  const service = await call(admin, 'POST', '/services', { code: `S${stamp}`, name: `خدمت ${stamp}`, isActive: true, price: 500 })
+  const service = await call(admin, 'POST', '/services', { name: `خدمت ${stamp}`, isActive: true, price: 500 })
   const register = await call(admin, 'POST', '/cash/registers', { name: `صندوق ${stamp}` })
 
   const cashier = await staffPage(browser, `cashier_${stamp}`)

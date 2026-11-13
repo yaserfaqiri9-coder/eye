@@ -25,17 +25,18 @@ public sealed class DirectoryTests(ApiFixture api)
     {
         var admin = await User(Roles.SuperAdmin);
         var desk = await User(Roles.Receptionist);
-        var code = "eye_" + Guid.NewGuid().ToString("N");
-        var response = await admin.PostAsJsonAsync("/api/departments", new SaveDepartmentRequest(code, "کلینیک چشم"));
+        var response = await admin.PostAsJsonAsync("/api/departments", new SaveDepartmentRequest("کلینیک چشم"));
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var row = (await response.Content.ReadFromJsonAsync<Department>())!;
+        Assert.Matches("^[0-9]{1,4}$", row.Code); // the system gives a short code; nobody types it
         Assert.Contains((await desk.GetFromJsonAsync<LookupItem[]>("/api/lookups/departments"))!, d => d.Id == row.Id);
-        Assert.Equal(HttpStatusCode.Forbidden, (await desk.PostAsJsonAsync("/api/departments", new SaveDepartmentRequest("forbidden", "ممنوع"))).StatusCode);
-        var edit = new SaveDepartmentRequest(code, "چشم", false, row.Version);
+        Assert.Equal(HttpStatusCode.Forbidden, (await desk.PostAsJsonAsync("/api/departments", new SaveDepartmentRequest("ممنوع"))).StatusCode);
+        var edit = new SaveDepartmentRequest("چشم", false, row.Version);
         Assert.Equal(HttpStatusCode.NoContent, (await admin.PutAsJsonAsync($"/api/departments/{row.Id}", edit)).StatusCode);
         Assert.DoesNotContain((await desk.GetFromJsonAsync<LookupItem[]>("/api/lookups/departments"))!, d => d.Id == row.Id);
         Assert.Equal(HttpStatusCode.Conflict, (await admin.PutAsJsonAsync($"/api/departments/{row.Id}", edit)).StatusCode);
-        Assert.Equal(HttpStatusCode.Conflict, (await admin.PostAsJsonAsync("/api/departments", new SaveDepartmentRequest(code, "تکراری"))).StatusCode);
+        var second = (await (await admin.PostAsJsonAsync("/api/departments", new SaveDepartmentRequest("کلینیک دوم"))).Content.ReadFromJsonAsync<Department>())!;
+        Assert.NotEqual(row.Code, second.Code);
     }
 
     [Fact]

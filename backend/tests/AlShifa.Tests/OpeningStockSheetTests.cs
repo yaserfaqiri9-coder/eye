@@ -174,6 +174,52 @@ public sealed class OpeningStockSheetTests(ApiFixture api)
     }
 
     [Fact]
+    public async Task Opening_stock_typed_in_the_form_needs_no_supplier_and_owes_nothing()
+    {
+        var name = $"Os{Unique()}";
+        var user = await ImportUser();
+        var (priced, unpriced) = await InDb(async db =>
+        {
+            var a = new Product { Code = $"OS-{Unique()}", Name = $"{name} A", Kind = ProductKind.Drug, Unit = "دانه", SalePrice = 100 };
+            var b = new Product { Code = $"OS-{Unique()}", Name = $"{name} B", Kind = ProductKind.Drug, Unit = "دانه", SalePrice = 100 };
+            db.Products.AddRange(a, b);
+            await db.SaveChangesAsync();
+            return (a.Id, b.Id);
+        });
+
+        var inventory = await api.LoginAsync(user);
+        var purchasesBefore = await InDb(db => db.Purchases.CountAsync());
+        var request = new OpeningStockRequest("central", [new PurchaseLineInput(priced, "O1", new DateOnly(2028, 5, 1), 4, 25), new PurchaseLineInput(unpriced, "", null, 7, 0)], "شمارش قوس");
+        Assert.Equal(HttpStatusCode.Created, (await inventory.SendAsync(ApiFixture.Keyed("/api/inventory/opening-stock", request))).StatusCode);
+
+        Assert.Equal(purchasesBefore, await InDb(db => db.Purchases.CountAsync()));
+        var movements = await InDb(db => db.StockMovements.Where(m => m.Batch!.Product!.Name.StartsWith(name))
+            .Select(m => new { m.Id, m.Kind, m.Quantity, m.SourceType, m.Batch!.ProductId }).ToListAsync());
+        Assert.Equal(2, movements.Count);
+        Assert.All(movements, m => Assert.Equal((MovementKind.Adjustment, OpeningStockImport.SourceType), (m.Kind, m.SourceType)));
+        Assert.Equal(4m, movements.Single(m => m.ProductId == priced).Quantity);
+        Assert.Equal(7m, movements.Single(m => m.ProductId == unpriced).Quantity);
+
+        var pricedMovement = movements.Single(m => m.ProductId == priced).Id;
+        var ids = movements.Select(m => m.Id).ToList();
+        var entries = await InDb(db => (from t in db.LedgerTransactions join e in db.LedgerEntries on t.Id equals e.TransactionId
+                                        where t.SourceType == "StockMovement" && ids.Contains(t.SourceId)
+                                        select new { t.Kind, t.SourceId, e.AccountCode, e.Debit, e.Credit }).ToListAsync());
+        Assert.All(entries, e => Assert.Equal((LedgerKind, pricedMovement), (e.Kind, e.SourceId)));
+        Assert.Equal(100m, entries.Single(e => e.AccountCode == Accounts.Inventory).Debit);
+        Assert.Equal(100m, entries.Single(e => e.AccountCode == Accounts.OpeningBalance).Credit);
+        Assert.DoesNotContain(entries, e => e.AccountCode == Accounts.Payable);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await inventory.PostAsJsonAsync($"/api/inventory/movements/{pricedMovement}/reverse", new ReverseMovementRequest("شمارش اشتباه"))).StatusCode);
+        var net = await InDb(db => (from t in db.LedgerTransactions join e in db.LedgerEntries on t.Id equals e.TransactionId
+                                    where t.SourceType == "StockMovement" && t.SourceId == pricedMovement && e.AccountCode == Accounts.Inventory
+                                    select e.Debit - e.Credit).SumAsync());
+        Assert.Equal(0m, net);
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await inventory.SendAsync(ApiFixture.Keyed("/api/inventory/opening-stock", request with { LocationCode = "nowhere" }))).StatusCode);
+    }
+
+    [Fact]
     public void An_excel_sheet_reads_text_numbers_and_date_cells()
     {
         var path = Path.Combine(Path.GetTempPath(), $"stock-{Unique()}.xlsx");

@@ -7,8 +7,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AlShifa.Api.Features.Inventory;
 
+/// <summary>The code is not sent: the system gives a new product the next short code, and it never changes.</summary>
 public sealed record SaveProductRequest(
-    [Required, MaxLength(40)] string Code,
     [Required, MaxLength(200)] string Name,
     ProductKind Kind,
     [MaxLength(80)] string? Category,
@@ -25,6 +25,8 @@ public sealed record BatchRow(long Id, int ProductId, string ProductName, string
 public sealed record PurchaseLineInput(int ProductId, [MaxLength(50)] string? LotNumber, DateOnly? ExpiryDate, [Range(0.001, 100000000)] decimal Quantity, [Range(0, 100000000)] decimal UnitCost);
 
 public sealed record CreatePurchaseRequest([MaxLength(150)] string? SupplierName, [Required, MaxLength(30)] string LocationCode, [Required, MinLength(1)] PurchaseLineInput[] Items, int? SupplierId = null);
+
+public sealed record OpeningStockRequest([Required, MaxLength(30)] string LocationCode, [Required, MinLength(1)] PurchaseLineInput[] Items, [MaxLength(200)] string? Note = null);
 
 public sealed record AdjustStockRequest(long BatchId, decimal Quantity, MovementKind Kind, [Required, MinLength(3), MaxLength(300)] string Reason);
 
@@ -120,15 +122,17 @@ public static class InventoryEndpoints
                 .Select(p => p.Category!).Distinct().OrderBy(c => c).ToListAsync(ct)))
             .RequirePermission("inventory.view");
 
-        inventory.MapPost("/products", async (SaveProductRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        inventory.MapPost("/products", async (SaveProductRequest request, AppDbContext db, NumberService numbers, AuditService audit, CancellationToken ct) =>
         {
-            var product = new Product();
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var product = new Product { Code = await NextProductCodeAsync(db, numbers, ct) };
             Apply(product, request);
             db.Products.Add(product);
             await db.SaveChangesAsync(ct);
             audit.Add("ProductCreated", nameof(Product), product.Id.ToString());
             await db.SaveChangesAsync(ct);
-            return Results.Created($"/api/inventory/products/{product.Id}", new { product.Id });
+            await tx.CommitAsync(ct);
+            return Results.Created($"/api/inventory/products/{product.Id}", new { product.Id, product.Code });
         }).RequirePermission("inventory.create");
 
         inventory.MapPut("/products/{id:int}", async (int id, SaveProductRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
@@ -330,6 +334,45 @@ public static class InventoryEndpoints
             {
                 var purchase = await RecordPurchaseAsync(request, null, db, numbers, stock, ledger, user, audit, outbox, ct);
                 return (StatusCodes.Status201Created, new { purchase.Id, purchase.PurchaseNumber, purchase.Total });
+            }, ct)).RequirePermission("inventory.create");
+
+        // Stock already on the shelf when the system starts: no supplier and nothing owed, so it is booked against the opening balance.
+        // A mistaken line is undone from the movement history like any other adjustment.
+        inventory.MapPost("/opening-stock", async (OpeningStockRequest request, AppDbContext db, Idempotency idempotency, StockService stock, LedgerService ledger, AuditService audit, Outbox outbox, CancellationToken ct) =>
+            await idempotency.RunAsync(request, async () =>
+            {
+                var locationId = await db.StockLocations.Where(l => l.Code == request.LocationCode).Select(l => (int?)l.Id).SingleOrDefaultAsync(ct)
+                    ?? throw new AppException(StatusCodes.Status400BadRequest, "unknown_location", "محل نگهداری معتبر نیست.");
+                var note = Text.Clean(request.Note);
+                var reason = note is null ? "موجودی اول دوره" : $"موجودی اول دوره؛ {note}";
+                var total = 0m;
+
+                foreach (var line in request.Items.OrderBy(l => l.ProductId))
+                {
+                    if (!await db.Products.AnyAsync(p => p.Id == line.ProductId, ct))
+                    {
+                        throw new AppException(StatusCodes.Status400BadRequest, "unknown_product", "جنس انتخاب‌شده معتبر نیست.");
+                    }
+
+                    var batch = await FindOrCreateBatchAsync(db, line.ProductId, locationId, line.LotNumber ?? "", line.ExpiryDate, line.UnitCost, ct);
+                    batch.Quantity += line.Quantity;
+                    stock.AddMovement(batch, MovementKind.Adjustment, line.Quantity, OpeningStockImport.SourceType, batch.Id, reason);
+                    await db.SaveChangesAsync(ct);
+
+                    var value = decimal.Round(line.Quantity * line.UnitCost, 2, MidpointRounding.AwayFromZero);
+                    if (value > 0)
+                    {
+                        var movementId = await db.StockMovements.Where(m => m.BatchId == batch.Id).MaxAsync(m => m.Id, ct);
+                        ledger.Post(OpeningStockSheet.LedgerKind, nameof(StockMovement), movementId, reason, (Accounts.Inventory, value, 0), (Accounts.OpeningBalance, 0, value));
+                        total += value;
+                    }
+
+                    audit.Add("OpeningStockEntered", nameof(StockBatch), batch.Id.ToString(), reason);
+                }
+
+                outbox.Add("InventoryChanged", new { source = "opening-stock" }, Groups.Pharmacy, Groups.Optical, Groups.Inventory);
+                await db.SaveChangesAsync(ct);
+                return (StatusCodes.Status201Created, new { Lines = request.Items.Length, Total = total });
             }, ct)).RequirePermission("inventory.create");
 
         inventory.MapPost("/purchases/{id:long}/cancel", async (long id, CancelPurchaseRequest request, AppDbContext db, StockService stock, LedgerService ledger, AuditService audit, Outbox outbox, CancellationToken ct) =>
@@ -719,9 +762,12 @@ public static class InventoryEndpoints
         return batch;
     }
 
+    /// <summary>Must run inside the caller's transaction.</summary>
+    public static Task<string> NextProductCodeAsync(AppDbContext db, NumberService numbers, CancellationToken ct) =>
+        ShortCodes.NextAsync(numbers, "product", code => db.Products.AnyAsync(p => p.Code == code, ct), ct);
+
     private static void Apply(Product p, SaveProductRequest r)
     {
-        p.Code = r.Code.Trim();
         p.Name = r.Name.Trim();
         p.Kind = r.Kind;
         p.Category = Text.Clean(r.Category);

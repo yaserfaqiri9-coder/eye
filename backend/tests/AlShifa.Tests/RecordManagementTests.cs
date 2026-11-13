@@ -47,12 +47,12 @@ public sealed class RecordManagementTests(ApiFixture api)
     {
         var admin = await User(Roles.SuperAdmin);
 
-        var unused = (await (await admin.PostAsJsonAsync("/api/departments", new SaveDepartmentRequest("d_" + Unique, "بدون استفاده"))).Content.ReadFromJsonAsync<Department>())!;
+        var unused = (await (await admin.PostAsJsonAsync("/api/departments", new SaveDepartmentRequest("بدون استفاده"))).Content.ReadFromJsonAsync<Department>())!;
         Assert.Equal(HttpStatusCode.Conflict, (await admin.DeleteAsync($"/api/departments/{unused.Id}?version={unused.Version + 1}")).StatusCode);
         Assert.True(await Delete(admin, $"/api/departments/{unused.Id}?version={unused.Version}"));
         Assert.False(await InDb(db => db.Departments.AnyAsync(d => d.Id == unused.Id)));
 
-        var used = (await (await admin.PostAsJsonAsync("/api/departments", new SaveDepartmentRequest("d_" + Unique, "با کارمند"))).Content.ReadFromJsonAsync<Department>())!;
+        var used = (await (await admin.PostAsJsonAsync("/api/departments", new SaveDepartmentRequest("با کارمند"))).Content.ReadFromJsonAsync<Department>())!;
         Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync("/api/staff", new SaveStaffRequest("کارمند " + Unique, null, false, true, used.Id, null))).StatusCode);
         Assert.False(await Delete(admin, $"/api/departments/{used.Id}?version={used.Version}"));
         Assert.False((await InDb(db => db.Departments.SingleAsync(d => d.Id == used.Id))).IsActive);
@@ -90,20 +90,17 @@ public sealed class RecordManagementTests(ApiFixture api)
     public async Task Service_can_be_edited_and_goes_with_its_prices_unless_invoiced()
     {
         var admin = await User(Roles.SuperAdmin);
-        var code = "S-" + Unique;
-        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(code, "خدمت", null, true, 100))).StatusCode);
-        var id = await InDb(db => db.Services.Where(s => s.Code == code).Select(s => s.Id).SingleAsync());
+        var id = await CreateServiceAsync(admin, "خدمت");
+        Assert.Matches("^[0-9]{1,4}$", await InDb(db => db.Services.Where(s => s.Id == id).Select(s => s.Code).SingleAsync()));
 
-        Assert.Equal(HttpStatusCode.NoContent, (await admin.PutAsJsonAsync($"/api/services/{id}", new EditServiceRequest(code + "X", "خدمت تازه", true))).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PutAsJsonAsync($"/api/services/{id}", new EditServiceRequest("خدمت تازه", true))).StatusCode);
         Assert.Equal("خدمت تازه", await InDb(db => db.Services.Where(s => s.Id == id).Select(s => s.Name).SingleAsync()));
 
         Assert.True(await Delete(admin, $"/api/services/{id}"));
         Assert.False(await InDb(db => db.ServicePrices.AnyAsync(p => p.ServiceId == id)));
 
         // Invoice lines hold the service id without a foreign key, so only the endpoint's own check protects them.
-        var billedCode = "S-" + Unique;
-        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(billedCode, "خدمت فاکتور", null, true, 100))).StatusCode);
-        var billed = await InDb(db => db.Services.Where(s => s.Code == billedCode).Select(s => s.Id).SingleAsync());
+        var billed = await CreateServiceAsync(admin, "خدمت فاکتور");
         var cashier = await User(Roles.Cashier);
         Assert.Equal(HttpStatusCode.Created, (await cashier.SendAsync(ApiFixture.Keyed("/api/invoices", new CreateInvoiceRequest(null, null, [new InvoiceLineInput(billed, 1)])))).StatusCode);
         Assert.False(await Delete(admin, $"/api/services/{billed}"));
@@ -112,8 +109,8 @@ public sealed class RecordManagementTests(ApiFixture api)
 
         var fee = await InDb(db => db.Services.SingleAsync(s => s.Code == ServiceCodes.VisitFee));
         Assert.Equal(HttpStatusCode.Conflict, (await admin.DeleteAsync($"/api/services/{fee.Id}")).StatusCode);
-        Assert.Equal(HttpStatusCode.Conflict, (await admin.PutAsJsonAsync($"/api/services/{fee.Id}", new EditServiceRequest(fee.Code, fee.Name, false))).StatusCode);
-        Assert.Equal(HttpStatusCode.NoContent, (await admin.PutAsJsonAsync($"/api/services/{fee.Id}", new EditServiceRequest(fee.Code, fee.Name, true))).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await admin.PutAsJsonAsync($"/api/services/{fee.Id}", new EditServiceRequest(fee.Name, false))).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PutAsJsonAsync($"/api/services/{fee.Id}", new EditServiceRequest(fee.Name, true))).StatusCode);
     }
 
     [Fact]
@@ -141,7 +138,7 @@ public sealed class RecordManagementTests(ApiFixture api)
     {
         var inventory = await User(Roles.Inventory);
         var pharmacist = await User(Roles.Pharmacist);
-        var save = new SaveProductRequest("P" + Unique, "جنس " + Unique, ProductKind.General, null, "عدد", 0, 10);
+        var save = new SaveProductRequest("جنس " + Unique, ProductKind.General, null, "عدد", 0, 10);
         var id = (await (await inventory.PostAsJsonAsync("/api/inventory/products", save)).Content.ReadFromJsonAsync<IdOnly>())!.Id;
         Assert.Equal(HttpStatusCode.Forbidden, (await pharmacist.DeleteAsync($"/api/inventory/products/{id}?version=0")).StatusCode);
 
@@ -149,16 +146,23 @@ public sealed class RecordManagementTests(ApiFixture api)
         Assert.False(await Delete(inventory, $"/api/inventory/products/{id}?version=0"));
         Assert.False((await InDb(db => db.Products.SingleAsync(p => p.Id == id))).IsActive);
 
-        var unused = (await (await inventory.PostAsJsonAsync("/api/inventory/products", save with { Code = "P" + Unique })).Content.ReadFromJsonAsync<IdOnly>())!.Id;
+        var unused = (await (await inventory.PostAsJsonAsync("/api/inventory/products", save with { Name = "جنس " + Unique })).Content.ReadFromJsonAsync<IdOnly>())!.Id;
         Assert.True(await Delete(inventory, $"/api/inventory/products/{unused}?version=0"));
     }
 
     private sealed record IdOnly(int Id);
 
+    private static async Task<int> CreateServiceAsync(HttpClient admin, string name)
+    {
+        var response = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(name, null, true, 100));
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        return (await response.Content.ReadFromJsonAsync<IdOnly>())!.Id;
+    }
+
     private sealed record Created(long Id);
 
     private async Task<int> NewProduct(HttpClient inventory, decimal price = 10, ProductKind kind = ProductKind.General) =>
-        (await (await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest("P" + Unique, "جنس " + Unique, kind, null, "عدد", 0, price))).Content.ReadFromJsonAsync<IdOnly>())!.Id;
+        (await (await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest("جنس " + Unique, kind, null, "عدد", 0, price))).Content.ReadFromJsonAsync<IdOnly>())!.Id;
 
     private async Task<long> Buy(HttpClient inventory, int product, decimal quantity, decimal cost = 5, string location = "central")
     {
@@ -200,9 +204,7 @@ public sealed class RecordManagementTests(ApiFixture api)
         var admin = await User(Roles.SuperAdmin);
         var cashier = await User(Roles.Cashier);
         var accountant = await User(Roles.Accountant);
-        var code = "S-" + Unique;
-        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(code, "خدمت", null, true, 100))).StatusCode);
-        var service = await InDb(db => db.Services.Where(s => s.Code == code).Select(s => s.Id).SingleAsync());
+        var service = await CreateServiceAsync(admin, "خدمت");
 
         var first = (await (await cashier.SendAsync(ApiFixture.Keyed("/api/invoices", new CreateInvoiceRequest(null, null, [new InvoiceLineInput(service, 1)])))).Content.ReadFromJsonAsync<InvoiceRow>())!;
         var detail = (await cashier.GetFromJsonAsync<InvoiceDetail>($"/api/invoices/{first.Id}"))!;
@@ -234,9 +236,7 @@ public sealed class RecordManagementTests(ApiFixture api)
         var admin = await User(Roles.SuperAdmin);
         var cashier = await User(Roles.Cashier);
         var accountant = await User(Roles.Accountant);
-        var code = "S-" + Unique;
-        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(code, "خدمت", null, true, 100))).StatusCode);
-        var service = await InDb(db => db.Services.Where(s => s.Code == code).Select(s => s.Id).SingleAsync());
+        var service = await CreateServiceAsync(admin, "خدمت");
         var invoice = (await (await cashier.SendAsync(ApiFixture.Keyed("/api/invoices", new CreateInvoiceRequest(null, null, [new InvoiceLineInput(service, 1)])))).Content.ReadFromJsonAsync<InvoiceRow>())!;
 
         Assert.Equal(HttpStatusCode.NoContent, (await accountant.PostAsJsonAsync($"/api/invoices/{invoice.Id}/discount", new DiscountRequest(20, "تخفیف آزمایشی", invoice.Version))).StatusCode);
@@ -575,9 +575,7 @@ public sealed class RecordManagementTests(ApiFixture api)
     {
         var (doctor, visit) = await ReadyVisit();
         var admin = await User(Roles.SuperAdmin);
-        var code = "S-" + Unique;
-        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(code, "خدمت عملیات", null, true, 100))).StatusCode);
-        var service = await InDb(db => db.Services.Where(s => s.Code == code).Select(s => s.Id).SingleAsync());
+        var service = await CreateServiceAsync(admin, "خدمت عملیات");
         var surgery = await Read<SurgeryRow>(await doctor.SendAsync(ApiFixture.Keyed("/api/surgeries", new CreateSurgeryRequest(visit.Id, "کتاراکت", EyeSide.OD, service))));
 
         var edit = new SaveSurgeryRequest(null, null, false, null, null, surgery.Version, "پیوند قرنیه", EyeSide.OS);

@@ -87,7 +87,7 @@ public sealed class CriticalRulesTests(ApiFixture api)
     private async Task<int> NewServiceAsync(decimal price)
     {
         var (admin, _) = await UserAsync(Roles.SuperAdmin);
-        var response = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(Name("S"), Name("خدمت"), null, true, price));
+        var response = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(Name("خدمت"), null, true, price));
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
     }
 
@@ -196,7 +196,7 @@ public sealed class CriticalRulesTests(ApiFixture api)
 
         async Task<int> SupplyAsync(decimal stock, decimal cost)
         {
-            var response = await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest(Name("D"), "جنس " + Name("n"), ProductKind.General, null, "عدد", 0, 0));
+            var response = await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest("جنس " + Name("n"), ProductKind.General, null, "عدد", 0, 0));
             var id = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
             await AssertStatus(await inventory.SendAsync(ApiFixture.Keyed("/api/inventory/purchases", new CreatePurchaseRequest(null, "surgery",
                 [new PurchaseLineInput(id, Name("L"), DateOnly.FromDateTime(DateTime.UtcNow.AddYears(1)), stock, cost)]))), HttpStatusCode.Created);

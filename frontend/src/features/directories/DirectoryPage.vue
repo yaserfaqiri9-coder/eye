@@ -37,7 +37,7 @@ function open(row?: Row) {
 async function save() {
   form.saving = true; form.error = ''
   try {
-    await api(`/${props.kind}${form.id ? `/${form.id}` : ''}`, { method: form.id ? 'PUT' : 'POST', body: { name: form.name, code: form.code, phone: form.phone, address: form.address, isActive: form.isActive, version: form.version } })
+    await api(`/${props.kind}${form.id ? `/${form.id}` : ''}`, { method: form.id ? 'PUT' : 'POST', body: { name: form.name, phone: form.phone, address: form.address, isActive: form.isActive, version: form.version } })
     clearLookups(); form.open = false; await load()
   } catch (e) { form.error = errorMessage(e) } finally { form.saving = false }
 }
@@ -67,7 +67,7 @@ onMounted(load)
   <UiModal v-if="form.open" :title="form.id ? 'ویرایش' : department ? 'بخش جدید' : 'تأمین‌کننده جدید'" @close="form.open = false">
     <form @submit.prevent="save">
       <div class="mb-3"><label for="directory-name" class="form-label">نام</label><input id="directory-name" v-model="form.name" class="form-control" :maxlength="department ? 100 : 150" required /></div>
-      <div v-if="department" class="mb-3"><label for="directory-code" class="form-label">کد بخش</label><input id="directory-code" v-model="form.code" class="form-control" dir="ltr" maxlength="50" required :disabled="!!form.id" /><small class="text-muted">کد یکتا، مانند eye-clinic؛ پس از ساخت قابل تغییر نیست.</small></div>
+      <div v-if="department" class="mb-3"><label for="directory-code" class="form-label">کد بخش</label><input id="directory-code" :value="form.id ? form.code : 'خودکار'" class="form-control" dir="ltr" readonly tabindex="-1" /><small class="text-muted">کد را سیستم می‌دهد و تغییر نمی‌کند.</small></div>
       <template v-else>
         <div class="mb-3"><label for="directory-phone" class="form-label">تماس</label><input id="directory-phone" v-model="form.phone" class="form-control" dir="ltr" maxlength="30" /></div>
         <div class="mb-3"><label for="directory-address" class="form-label">آدرس</label><textarea id="directory-address" v-model="form.address" class="form-control" maxlength="300"></textarea></div>

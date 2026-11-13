@@ -47,7 +47,7 @@ test('drug name field suggests by first letters, without replacing what the doct
   }
   const inventory = await staffPage(browser, `drg_i${stamp}`, errors)
   for (const [index, name] of [first, second].entries()) {
-    await call(inventory, 'POST', '/inventory/products', { code: `DRG${stamp}${index}`, name, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10, isActive: true })
+    await call(inventory, 'POST', '/inventory/products', { name, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10, isActive: true })
   }
 
   const reception = await staffPage(browser, `drg_r${stamp}`, errors)

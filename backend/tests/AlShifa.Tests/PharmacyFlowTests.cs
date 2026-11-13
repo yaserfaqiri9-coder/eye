@@ -43,7 +43,7 @@ public sealed class PharmacyFlowTests(ApiFixture api)
     {
         var inventory = await UserAsync(Roles.Inventory);
         var drug = "قطره " + Name("d");
-        var product = await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest(Name("C"), drug, ProductKind.Drug, null, "عدد", 0, 100));
+        var product = await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest(drug, ProductKind.Drug, null, "عدد", 0, 100));
         var productId = JsonDocument.Parse(await product.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
         Assert.Equal(HttpStatusCode.Created, (await inventory.SendAsync(ApiFixture.Keyed("/api/inventory/purchases", new CreatePurchaseRequest("تأمین", "pharmacy",
             [new PurchaseLineInput(productId, Name("L"), DateOnly.FromDateTime(DateTime.UtcNow.AddYears(1)), stock, 40)])))).StatusCode);
@@ -74,14 +74,15 @@ public sealed class PharmacyFlowTests(ApiFixture api)
         var inventory = await UserAsync(Roles.Inventory);
         var tag = Guid.NewGuid().ToString("N")[..8];
         var stored = $"Vigamox{tag} Eye Drops";
-        var code = $"VgX{tag}";
-        var created = await Created<JsonElement>(await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest(code, stored, ProductKind.Drug, "قطره چشمی", "قطی", 0, 100)));
+        var created = await Created<JsonElement>(await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest(stored, ProductKind.Drug, "قطره چشمی", "قطی", 0, 100)));
         var id = created.GetProperty("id").GetInt32();
+        var code = created.GetProperty("code").GetString()!;
+        Assert.Matches("^[0-9]{1,4}$", code);
 
         async Task<PagedResult<ProductRow>> FindAsync(string q) =>
             (await inventory.GetFromJsonAsync<PagedResult<ProductRow>>($"/api/inventory/products?pageSize=50&q={Uri.EscapeDataString(q)}", JsonOptions))!;
 
-        foreach (var q in new[] { $"vigamox{tag}", $"Vigamox{tag}", $"VIGAMOX{tag}", $"  vIgAmOx{tag}  ", code.ToLowerInvariant(), code.ToUpperInvariant() })
+        foreach (var q in new[] { $"vigamox{tag}", $"Vigamox{tag}", $"VIGAMOX{tag}", $"  vIgAmOx{tag}  " })
         {
             var page = await FindAsync(q);
             var row = Assert.Single(page.Items);
@@ -89,6 +90,9 @@ public sealed class PharmacyFlowTests(ApiFixture api)
             Assert.Equal(1, page.Total);
             Assert.Equal(stored, row.Name); // the stored spelling is untouched
         }
+
+        // The short code finds it too; other codes may start with the same digits.
+        Assert.Contains((await FindAsync(code)).Items, r => r.Id == id);
 
         // Wildcards are plain text and never widen the search.
         Assert.Empty((await FindAsync($"%amox{tag}")).Items);
@@ -107,12 +111,12 @@ public sealed class PharmacyFlowTests(ApiFixture api)
         var inventory = await UserAsync(Roles.Inventory);
         var tag = Guid.NewGuid().ToString("N")[..8];
         var form = $"قطره چشمی {tag}";
-        var created = await Created<JsonElement>(await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest($"F{tag}", $"دوای {tag}", ProductKind.Drug, form, "قطی", 0, 50)));
+        var created = await Created<JsonElement>(await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest($"دوای {tag}", ProductKind.Drug, form, "قطی", 0, 50)));
         var id = created.GetProperty("id").GetInt32();
         Assert.Equal(HttpStatusCode.Created, (await inventory.SendAsync(ApiFixture.Keyed("/api/inventory/purchases", new CreatePurchaseRequest("تأمین", "pharmacy",
             [new PurchaseLineInput(id, $"L{tag}", DateOnly.FromDateTime(DateTime.UtcNow.AddYears(1)), 12, 20)])))).StatusCode);
 
-        var row = Assert.Single((await inventory.GetFromJsonAsync<PagedResult<ProductRow>>($"/api/inventory/products?q=F{tag}", JsonOptions))!.Items);
+        var row = Assert.Single((await inventory.GetFromJsonAsync<PagedResult<ProductRow>>($"/api/inventory/products?q={Uri.EscapeDataString($"دوای {tag}")}", JsonOptions))!.Items);
         Assert.Equal(("Drug", form, "قطی", 12m), (row.Kind, row.Category, row.Unit, row.OnHand));
 
         var pharmacy = await inventory.GetFromJsonAsync<LocationDetail>("/api/inventory/locations/pharmacy", JsonOptions);
@@ -244,7 +248,7 @@ public sealed class PharmacyFlowTests(ApiFixture api)
     {
         var s = await PrescriptionAsync(2, 10);
         var inventory = await UserAsync(Roles.Inventory);
-        var other = await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest(Name("C"), "دیگر " + Name("x"), ProductKind.Drug, null, "عدد", 0, 50));
+        var other = await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest("دیگر " + Name("x"), ProductKind.Drug, null, "عدد", 0, 50));
         var otherId = JsonDocument.Parse(await other.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
         await inventory.SendAsync(ApiFixture.Keyed("/api/inventory/purchases", new CreatePurchaseRequest(null, "pharmacy", [new PurchaseLineInput(otherId, "L", null, 5, 10)])));
 

@@ -82,6 +82,14 @@ const timeline = computed(() => [...visits.value].sort((a, b) => b.createdAt.loc
 <template>
   <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
 
+  <!-- Today's money and stock figures first, always on one row however narrow the screen. -->
+  <div v-if="dashboard" class="home-stats">
+    <StatCard label="اجناس کم‌موجود" :value="dashboard.lowStockProducts" icon="ri-archive-fill" tone="orange" />
+    <StatCard v-if="financial" label="دریافت امروز" :value="money(financial.receipts)" icon="ri-money-dollar-circle-fill" />
+    <StatCard v-if="financial" label="مصارف امروز" :value="money(financial.expenses)" icon="ri-wallet-3-fill" tone="red" />
+    <StatCard v-if="financial" label="باقی حساب‌ها" :value="money(financial.outstandingNow)" icon="ri-receipt-fill" tone="orange" />
+  </div>
+
   <div class="dash">
     <UiCard v-if="dashboard" title="آمار مراجعات" class="dash__activity">
       <ActivityChart :days="dashboard.days" />
@@ -161,14 +169,6 @@ const timeline = computed(() => [...visits.value].sort((a, b) => b.createdAt.loc
         </li>
       </ol>
     </UiCard>
-  </div>
-
-  <!-- Below the fold of the reference layout: today's money and stock figures for the roles that may see them. -->
-  <div v-if="dashboard" class="home-stats">
-    <StatCard label="اجناس کم‌موجود" :value="dashboard.lowStockProducts" icon="ri-archive-fill" tone="orange" />
-    <StatCard v-if="financial" label="دریافت امروز" :value="money(financial.receipts)" icon="ri-money-dollar-circle-fill" />
-    <StatCard v-if="financial" label="مصارف امروز" :value="money(financial.expenses)" icon="ri-wallet-3-fill" tone="red" />
-    <StatCard v-if="financial" label="باقی حساب‌ها" :value="money(financial.outstandingNow)" icon="ri-receipt-fill" tone="orange" />
   </div>
 </template>
 
@@ -364,11 +364,45 @@ const timeline = computed(() => [...visits.value].sort((a, b) => b.createdAt.loc
   font-size: 13px;
 }
 
+/* One column per card that is shown (one to four), never wrapping; each card shrinks its own content instead. */
 .home-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: var(--xr-gap);
-  margin-top: var(--xr-gap-y);
+  margin-bottom: var(--xr-gap-y);
+}
+
+.home-stats :deep(.stat) {
+  min-width: 0;
+  container-type: inline-size;
+}
+
+@container (max-width: 260px) {
+  .home-stats :deep(.stat__tile) { min-height: 96px; padding: 14px; gap: 10px; }
+  .home-stats :deep(.stat__icon) { width: 44px; height: 44px; font-size: 18px; }
+  .home-stats :deep(.stat__value) { font-size: 22px; line-height: 1.35; }
+  .home-stats :deep(.stat__label) { font-size: 14px; line-height: 1.5; }
+}
+
+/* Too narrow for icon beside text: stack them and centre. */
+@container (max-width: 180px) {
+  .home-stats :deep(.stat__tile) { flex-direction: column; justify-content: center; min-height: 0; padding: 10px 8px; gap: 6px; }
+  .home-stats :deep(.stat__icon) { width: 34px; height: 34px; font-size: 15px; }
+  .home-stats :deep(.stat__text) { text-align: center; }
+  .home-stats :deep(.stat__value) { font-size: 16px; }
+  .home-stats :deep(.stat__label) { font-size: 12px; }
+}
+
+@container (max-width: 100px) {
+  .home-stats :deep(.stat__icon) { display: none; }
+  .home-stats :deep(.stat__tile) { padding: 8px 4px; }
+  .home-stats :deep(.stat__value) { font-size: 13px; }
+  .home-stats :deep(.stat__label) { font-size: 11px; }
+}
+
+@media (max-width: 575.98px) {
+  .home-stats { gap: 8px; }
 }
 
 /* Between phone and the 1600px reference the three-up row wraps before the charts get cramped. */

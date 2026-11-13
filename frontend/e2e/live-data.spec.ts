@@ -46,7 +46,7 @@ async function staff(browser: Browser, role: string) {
 }
 
 async function newService() {
-  const service = await admin.api<{ id: number }>('POST', '/services', { code: `LV${stamp}${Math.floor(Math.random() * 1e4)}`, name: `خدمت زنده ${stamp}${Math.random()}`, isActive: true, price: 300 })
+  const service = await admin.api<{ id: number }>('POST', '/services', { name: `خدمت زنده ${stamp}${Math.random()}`, isActive: true, price: 300 })
   return service.id
 }
 
@@ -103,7 +103,7 @@ test('pharmacy search: a slow answer for an older term never replaces the newer 
 test('inventory search: typing reloads only products and the older answer is dropped', async ({ browser }) => {
   const { page, context, api } = await staff(browser, 'Inventory')
   for (const prefix of ['PFA', 'PFB']) {
-    await api('POST', '/inventory/products', { code: `${prefix}${stamp}`, name: `جنس ${prefix} ${stamp}`, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10 })
+    await api('POST', '/inventory/products', { name: `جنس ${prefix} ${stamp}`, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10 })
   }
   await page.goto('/inventory')
   await page.getByRole('tab', { name: 'اجناس' }).click()
@@ -144,7 +144,7 @@ test('patient file shows only the bills of that patient id', async () => {
   const url = new URL((await asked).url())
   expect(url.searchParams.get('patientId')).toBe(String(own.id))
   expect(url.searchParams.has('q')).toBe(false)
-  await page.getByRole('tab', { name: 'وضعیت مالی' }).click()
+  await page.getByRole('tab', { name: 'مالی', exact: true }).click()
 
   await expect(page.getByText(ownInvoice.invoiceNumber, { exact: true })).toBeVisible()
   await expect(page.getByText(otherInvoice.invoiceNumber, { exact: true })).toHaveCount(0)
@@ -200,12 +200,12 @@ test('a payment by one cashier reaches another, even when it lands during a relo
 
 test('stock received by one user shows on another user\'s inventory list', async ({ browser }) => {
   const keeper = await staff(browser, 'Inventory')
-  const product = await keeper.api<{ id: number }>('POST', '/inventory/products', { code: `PFS${stamp}`, name: `جنس زنده ${stamp}`, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10 })
+  const product = await keeper.api<{ id: number }>('POST', '/inventory/products', { name: `جنس زنده ${stamp}`, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10 })
   const watcher = await staff(browser, 'Inventory')
   await watcher.page.goto('/inventory')
   await watcher.page.getByRole('tab', { name: 'اجناس' }).click()
   // Columns: code, name, group, drug form, on hand …
-  const onHand = watcher.page.locator('tr', { hasText: `PFS${stamp}` }).locator('td').nth(4)
+  const onHand = watcher.page.locator('tr', { hasText: `جنس زنده ${stamp}` }).locator('td').nth(4)
   await expect(onHand).toHaveText(/^(۰|0)\s/)
 
   await keeper.api('POST', '/inventory/purchases', { locationCode: 'pharmacy', items: [{ productId: product.id, lotNumber: 'LV1', quantity: 37, unitCost: 4 }] })
@@ -217,10 +217,11 @@ test('stock received by one user shows on another user\'s inventory list', async
 test('stock received while another user’s list is reloading is not lost', async ({ browser }) => {
   const keeper = await staff(browser, 'Inventory')
   const name = `جنس بچ ${stamp}`
-  const product = await keeper.api<{ id: number }>('POST', '/inventory/products', { code: `PFL${stamp}`, name, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10 })
+  const product = await keeper.api<{ id: number }>('POST', '/inventory/products', { name, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10 })
   const watcher = await staff(browser, 'Inventory')
   await watcher.page.goto('/inventory')
-  await watcher.page.getByRole('tab', { name: 'موجودی بچ‌ها' }).click()
+  await watcher.page.getByRole('tab', { name: 'موجودی', exact: true }).click()
+  await watcher.page.getByRole('tab', { name: 'بچ‌ها', exact: true }).click()
   await watcher.page.waitForLoadState('networkidle')
   await sleep(2000)
 
@@ -304,7 +305,7 @@ test('the loading placeholder closes after success and after an error', async ({
 test('inventory shows the drug form apart from group and unit, finds drugs in any letter case, and requires the form', async ({ browser }) => {
   const { page, context, api } = await staff(browser, 'Inventory')
   const tag = String(stamp).slice(-6)
-  await api('POST', '/inventory/products', { code: `VGX${tag}`, name: `Vigamox${tag} Eye Drops`, kind: 'Drug', category: 'قطره چشمی', unit: 'قطی', reorderLevel: 0, salePrice: 10 })
+  await api('POST', '/inventory/products', { name: `Vigamox${tag} Eye Drops`, kind: 'Drug', category: 'قطره چشمی', unit: 'قطی', reorderLevel: 0, salePrice: 10 })
   await page.goto('/inventory')
   await page.getByRole('tab', { name: 'اجناس' }).click()
   await expect(page.getByRole('columnheader', { name: 'گروه جنس' })).toBeVisible()

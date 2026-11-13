@@ -23,7 +23,9 @@ const blankLine = () => ({ productId: null as number | null, productName: null a
 
 const suppliers = ref<{ value: number; label: string }[]>([])
 const suppliersLoading = ref(true)
-const form = reactive({ supplierId: null as number | null, location: 'central', lines: [blankLine()], reason: '' })
+const form = reactive({ supplierId: null as number | null, location: 'central', lines: [blankLine()], reason: '', note: '' })
+/** Opening stock is what is already on the shelf when the system starts: no supplier, nothing owed. */
+const opening = ref(route.query.opening === '1')
 const { dirty, markSaved, applying } = useUnsavedGuard(form)
 /** Set when this form replaces a mistaken purchase instead of recording a new one. */
 const correcting = ref<PurchaseDetail | null>(null)
@@ -36,16 +38,16 @@ const search = productSearch([], () => {}, false)
 const total = computed(() => form.lines.reduce((sum, line) => sum + (line.quantity || 0) * (line.unitCost || 0), 0))
 
 async function submit() {
-  if (!form.supplierId) { error.value = 'تأمین‌کننده را از فهرست انتخاب کنید.'; return }
+  const isOpening = opening.value && !correctId
+  if (!isOpening && !form.supplierId) { error.value = 'تأمین‌کننده را از فهرست انتخاب کنید.'; return }
   saving.value = true
   error.value = ''
-  const body = {
-    supplierId: form.supplierId,
-    locationCode: form.location,
-    items: form.lines.map((l) => ({ productId: l.productId, lotNumber: l.lot, expiryDate: l.expiry, quantity: l.quantity, unitCost: l.unitCost })),
-  }
+  const items = form.lines.map((l) => ({ productId: l.productId, lotNumber: l.lot, expiryDate: l.expiry, quantity: l.quantity, unitCost: l.unitCost || 0 }))
+  const body = { supplierId: form.supplierId, locationCode: form.location, items }
   try {
-    if (correcting.value) {
+    if (isOpening) {
+      await api('/inventory/opening-stock', { method: 'POST', idempotencyKey: key, body: { locationCode: form.location, items, note: form.note || null } })
+    } else if (correcting.value) {
       await api(`/inventory/purchases/${correcting.value.purchase.id}/correct`, { method: 'POST', body: { ...body, reason: form.reason, version: correcting.value.purchase.version } })
     } else {
       await api('/inventory/purchases', { method: 'POST', idempotencyKey: key, body })
@@ -77,10 +79,19 @@ onMounted(async () => {
 </script>
 
 <template>
-  <UiFormPage :title="correctId ? `اصلاح خرید ${correcting?.purchase.purchaseNumber ?? ''}` : 'ثبت خرید'" :back-to="{ name: 'inventory' }" back-label="بازگشت به گدام" :dirty="dirty" :saving="saving" :error="error" @submit="submit">
+  <UiFormPage :title="correctId ? `اصلاح خرید ${correcting?.purchase.purchaseNumber ?? ''}` : opening ? 'ثبت موجودی اول دوره' : 'ثبت خرید'" :back-to="{ name: 'inventory' }" back-label="بازگشت به گدام" :dirty="dirty" :saving="saving" :error="error" @submit="submit">
     <div v-if="correcting" class="alert alert-warning" role="status">خرید فعلی با این دلیل لغو می‌شود و خرید تازه ثبت می‌شود. اگر بخشی از آن فروخته یا منتقل شده باشد، اصلاح انجام نمی‌شود.</div>
+    <div v-if="!correctId" class="xr-tabs mb-3" role="radiogroup" aria-label="نوع ورود موجودی">
+      <button type="button" role="radio" class="xr-tab" :class="{ 'xr-tab--active': !opening }" :aria-checked="!opening" @click="opening = false">خرید از تأمین‌کننده</button>
+      <button type="button" role="radio" class="xr-tab" :class="{ 'xr-tab--active': opening }" :aria-checked="opening" @click="opening = true">موجودی اول دوره</button>
+    </div>
+    <p v-if="opening && !correctId" class="text-muted small">موجودی که پیش از شروع سیستم در گدام بوده است. تأمین‌کننده لازم نیست و بدهی ثبت نمی‌شود. قیمت خرید اختیاری است؛ اگر بدانید، ارزش موجودی درست حساب می‌شود.</p>
     <div class="row g-3 mb-4">
-      <div class="col-md-6">
+      <div v-if="opening && !correctId" class="col-md-6">
+        <label class="form-label" for="pu-note">یادداشت (اختیاری)</label>
+        <input id="pu-note" v-model="form.note" class="form-control" maxlength="200" placeholder="مثلاً شمارش ۱ قوس" />
+      </div>
+      <div v-else class="col-md-6">
         <UiComboBox v-model="form.supplierId" label="تأمین‌کننده" :options="suppliers" :selected-label="correcting?.purchase.supplierName" :loading="suppliersLoading" required empty-text="تأمین‌کننده فعالی ثبت نشده است." />
         <RouterLink :to="{ name: 'suppliers' }" class="d-inline-block mt-2">مدیریت تأمین‌کنندگان</RouterLink>
       </div>
@@ -111,11 +122,11 @@ onMounted(async () => {
       </table>
     </div>
     <button type="button" class="btn btn-soft btn-sm mt-2" @click="form.lines.push(blankLine())">افزودن قلم</button>
-    <p class="xr-lines__total mb-0">مجموع خرید: <strong>{{ money(total) }}</strong></p>
+    <p class="xr-lines__total mb-0">{{ opening && !correctId ? 'ارزش موجودی' : 'مجموع خرید' }}: <strong>{{ money(total) }}</strong></p>
     <div v-if="correcting" class="mt-3"><label class="form-label" for="pu-reason">دلیل اصلاح</label><input id="pu-reason" v-model="form.reason" class="form-control" minlength="3" maxlength="300" required /></div>
 
     <template #actions>
-      <button type="submit" class="btn btn-primary" :disabled="saving || (!!correctId && !correcting)">{{ correctId ? 'لغو و ثبت خرید تازه' : 'ثبت خرید' }}</button>
+      <button type="submit" class="btn btn-primary" :disabled="saving || (!!correctId && !correcting)">{{ correctId ? 'لغو و ثبت خرید تازه' : opening ? 'ثبت موجودی اول دوره' : 'ثبت خرید' }}</button>
       <RouterLink :to="{ name: 'inventory' }" class="btn btn-soft-danger">انصراف</RouterLink>
     </template>
   </UiFormPage>

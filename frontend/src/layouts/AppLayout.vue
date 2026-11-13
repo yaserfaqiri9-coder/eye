@@ -154,8 +154,6 @@ onBeforeUnmount(() => {
   margin-inline-start: var(--xr-sidebar-current);
   padding: 120px 27px 0;
   background: var(--xr-page-bg);
-  border-start-start-radius: var(--xr-radius-card);
-  border-end-start-radius: var(--xr-radius-card);
   transition: margin 0.3s ease-in-out;
 }
 

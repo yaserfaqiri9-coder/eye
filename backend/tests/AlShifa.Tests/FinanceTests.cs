@@ -45,7 +45,7 @@ public sealed class FinanceTests(ApiFixture api)
     private async Task<int> NewServiceAsync(decimal price)
     {
         var admin = await UserAsync(Roles.SuperAdmin);
-        var response = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(Name("S"), "خدمت " + Name("n"), null, true, price));
+        var response = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest("خدمت " + Name("n"), null, true, price));
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
     }
@@ -89,7 +89,7 @@ public sealed class FinanceTests(ApiFixture api)
     private async Task<int> NewProductAsync(decimal salePrice = 100, ProductKind kind = ProductKind.Drug)
     {
         var manager = await UserAsync(Roles.Inventory);
-        var response = await manager.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest(Name("D"), "جنس " + Name("n"), kind, null, "عدد", 0, salePrice));
+        var response = await manager.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest("جنس " + Name("n"), kind, null, "عدد", 0, salePrice));
         Assert.True(response.StatusCode == HttpStatusCode.Created, await response.Content.ReadAsStringAsync());
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
     }

@@ -50,7 +50,7 @@ public sealed class HospitalReadinessTests(ApiFixture api)
     private async Task<int> NewServiceAsync(decimal price)
     {
         var admin = await UserAsync(Roles.SuperAdmin);
-        var response = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest(Name("S"), "خدمت " + Name("n"), null, true, price));
+        var response = await admin.PostAsJsonAsync("/api/services", new SaveServiceRequest("خدمت " + Name("n"), null, true, price));
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
     }
@@ -58,7 +58,7 @@ public sealed class HospitalReadinessTests(ApiFixture api)
     private async Task<int> NewProductAsync(decimal quantity)
     {
         var inventory = await UserAsync(Roles.Inventory);
-        var created = await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest(Name("D"), "جنس " + Name("n"), ProductKind.Drug, null, "عدد", 0, 100));
+        var created = await inventory.PostAsJsonAsync("/api/inventory/products", new SaveProductRequest("جنس " + Name("n"), ProductKind.Drug, null, "عدد", 0, 100));
         Assert.True(created.StatusCode == HttpStatusCode.Created, await created.Content.ReadAsStringAsync());
         var productId = JsonDocument.Parse(await created.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetInt32();
 

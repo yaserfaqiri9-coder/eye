@@ -22,6 +22,14 @@ async function openPatients(page: Page, mini: boolean) {
 const sidebarWidth = (page: Page, width: number) =>
   expect.poll(() => page.locator('.sidebar').evaluate((el) => el.getBoundingClientRect().width)).toBe(width)
 
+test('the main surface meets the sidebar with square top and bottom edges', async ({ page }) => {
+  await openPatients(page, false)
+
+  const main = page.locator('.layout__main')
+  await expect(main).toHaveCSS('border-top-right-radius', '0px')
+  await expect(main).toHaveCSS('border-bottom-right-radius', '0px')
+})
+
 test('collapsing closes the menu at once, with the pointer still on the button', async ({ page }) => {
   await openPatients(page, false)
   await sidebarWidth(page, 260)

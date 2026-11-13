@@ -6,7 +6,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AlShifa.Api.Features.Users;
 
-public sealed record SaveDepartmentRequest([Required, MaxLength(50)] string Code, [Required, MaxLength(100)] string Name, bool IsActive = true, int? Version = null);
+/// <summary>The code is not sent: the system gives a new department the next short code, and it never changes.</summary>
+public sealed record SaveDepartmentRequest([Required, MaxLength(100)] string Name, bool IsActive = true, int? Version = null);
 public sealed record SaveSupplierRequest([Required, MaxLength(150)] string Name, [MaxLength(30)] string? Phone, [MaxLength(300)] string? Address, bool IsActive = true, int? Version = null);
 
 public static class DirectoryEndpoints
@@ -16,23 +17,24 @@ public static class DirectoryEndpoints
         var departments = app.MapGroup("/api/departments").WithTags("Departments");
         departments.MapGet("/", async (AppDbContext db, CancellationToken ct) =>
             Results.Ok(await db.Departments.AsNoTracking().OrderBy(d => d.Id).ToListAsync(ct))).RequirePermission("settings.view");
-        departments.MapPost("/", async (SaveDepartmentRequest r, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        departments.MapPost("/", async (SaveDepartmentRequest r, AppDbContext db, NumberService numbers, AuditService audit, CancellationToken ct) =>
         {
-            await ValidateDepartment(r, db, null, ct);
-            var row = new Department { Code = r.Code.Trim(), Name = r.Name.Trim(), IsActive = r.IsActive };
+            ValidateDepartment(r);
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var code = await ShortCodes.NextAsync(numbers, "department", c => db.Departments.AnyAsync(d => d.Code == c, ct), ct);
+            var row = new Department { Code = code, Name = r.Name.Trim(), IsActive = r.IsActive };
             db.Departments.Add(row);
             audit.Add("DepartmentCreated", "Department", null, row.Name);
             await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
             return Results.Created($"/api/departments/{row.Id}", row);
         }).RequirePermission("settings.edit");
         departments.MapPut("/{id:int}", async (int id, SaveDepartmentRequest r, AppDbContext db, AuditService audit, CancellationToken ct) =>
         {
             RequireVersion(r.Version);
-            await ValidateDepartment(r, db, id, ct);
+            ValidateDepartment(r);
             var row = await db.Departments.SingleOrDefaultAsync(d => d.Id == id, ct) ?? throw AppException.NotFound();
             db.Entry(row).Property(d => d.Version).OriginalValue = r.Version!.Value;
-            // Codes are used by clinical workflows; renaming a code would silently break those workflows.
-            if (row.Code != r.Code.Trim()) throw new AppException(400, "immutable_code", "کد بخش پس از ساخت قابل تغییر نیست.");
             row.Name = r.Name.Trim(); row.IsActive = r.IsActive;
             audit.Add("DepartmentEdited", "Department", id.ToString());
             await db.SaveChangesAsync(ct);
@@ -81,10 +83,9 @@ public static class DirectoryEndpoints
     {
         if (version is null) throw new AppException(400, "version_required", "نسخه رکورد ارسال نشده است.");
     }
-    private static async Task ValidateDepartment(SaveDepartmentRequest r, AppDbContext db, int? id, CancellationToken ct)
+    private static void ValidateDepartment(SaveDepartmentRequest r)
     {
-        if (string.IsNullOrWhiteSpace(r.Code) || string.IsNullOrWhiteSpace(r.Name)) throw new AppException(400, "required", "نام و کد بخش ضروری است.");
-        if (await db.Departments.AnyAsync(d => d.Id != id && d.Code == r.Code.Trim(), ct)) throw new AppException(409, "duplicate_code", "این کد بخش قبلاً ثبت شده است.");
+        if (string.IsNullOrWhiteSpace(r.Name)) throw new AppException(400, "required", "نام بخش ضروری است.");
     }
     private static async Task ValidateSupplier(SaveSupplierRequest r, AppDbContext db, int? id, CancellationToken ct)
     {
