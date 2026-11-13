@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
+test.use({ channel: 'chromium' })
+
 // Layout only, so the API is answered here: the /api/ pattern must not also catch the /src/api/ modules.
 
 const permissions = ['visits.view', 'patients.view', 'surgery.view', 'reports.view', 'users.view', 'audit.view']
@@ -13,7 +15,7 @@ async function openPatients(page: Page, mini: boolean) {
   )
   await page.route(/^https?:\/\/[^/]+\/hubs\//, (route) => route.abort())
   await page.setViewportSize({ width: 1600, height: 900 })
-  await page.goto('/patients')
+  await page.goto('/patients', { waitUntil: 'domcontentloaded' })
   await page.locator('.sidebar__link').first().waitFor()
   await page.mouse.move(600, 500)
 }
@@ -99,8 +101,9 @@ test('the keyboard opens the collapsed menu and can reach the button', async ({ 
   await page.keyboard.press('Tab')
   await sidebarWidth(page, 260)
 
-  await page.keyboard.press('Shift+Tab')
-  await expect(page.getByRole('button', { name: 'باز نگه داشتن منو' })).toBeFocused()
+  const pin = page.getByRole('button', { name: 'باز نگه داشتن منو' })
+  for (let i = 0; i < 20 && !(await pin.evaluate(el => el === document.activeElement)); i++) await page.keyboard.press('Tab')
+  await expect(pin).toBeFocused()
   await sidebarWidth(page, 260)
 })
 
@@ -130,7 +133,7 @@ async function openAs(page: Page, path: string, granted: string[], mini = false)
   )
   await page.route(/^https?:\/\/[^/]+\/hubs\//, (route) => route.abort())
   await page.setViewportSize({ width: 1600, height: 900 })
-  await page.goto(path)
+  await page.goto(path, { waitUntil: 'domcontentloaded' })
   await page.locator('.sidebar__link').first().waitFor()
   await page.mouse.move(900, 500)
 }
@@ -142,15 +145,8 @@ const parentItem = (page: Page, label: string) => parentButton(page, label).loca
 test('management is reduced to three task-oriented top-level entries', async ({ page }) => {
   await openAs(page, '/staff', allPermissions)
 
-  const managementTitle = page.locator('.sidebar__title', { hasText: 'مدیریت' })
-  const managementItems = managementTitle.locator(':scope ~ .sidebar__item')
-  await expect(managementItems).toHaveCount(3)
-  await expect(managementItems.locator(':scope > .sidebar__link > span')).toHaveText([
-    'گزارش‌ها',
-    'مدیریت سازمان',
-    'مدیریت سیستم',
-  ])
-
+  await expect(page.locator('.sidebar__brand')).toHaveCount(0)
+  await expect(page.locator('.sidebar__title')).toHaveCount(0)
   await expect(page.locator('.sidebar__link[href="/reports"]')).toHaveText('گزارش‌ها')
   await expect(parentButton(page, 'مدیریت سازمان')).toHaveAttribute('aria-expanded', 'true')
   await expect(parentItem(page, 'مدیریت سازمان').locator('.sidebar__submenu .sidebar__link')).toHaveText([
@@ -194,36 +190,40 @@ test('management parents still filter permissions and flatten one authorized chi
   await expect(page.locator('.sidebar__link[href="/users"]')).toHaveCount(0)
 })
 
-test('section titles are plain labels, and the rows match the template measurements', async ({ page }) => {
+test('rows start without a brand header, use filled icons and more readable labels', async ({ page }) => {
   await openAs(page, '/patients', allPermissions)
-
-  const title = page.locator('.sidebar__title', { hasText: 'مدیریت' })
-  await expect(title).toBeVisible()
-  await expect(title.getByRole('button')).toHaveCount(0)
-  await expect(title).toHaveCSS('font-size', '15px')
-  await expect(title).toHaveCSS('font-weight', '500')
-  await expect(title).toHaveCSS('color', 'rgb(255, 255, 255)')
-
+  await expect(page.locator('.sidebar__brand')).toHaveCount(0)
+  await expect(page.locator('.sidebar__title')).toHaveCount(0)
   const link = page.getByRole('link', { name: 'گزارش‌ها' })
-  await expect(link).toHaveCSS('height', '47px')
-  await expect(link).toHaveCSS('font-size', '14px')
+  await expect(link).toHaveCSS('height', '60px')
+  await expect(link).toHaveCSS('font-size', '17px')
+  await expect(link).toHaveCSS('font-weight', '500')
   await expect(link).toHaveCSS('color', 'rgb(255, 255, 255)')
+  await expect(link.locator('i')).toHaveClass(/-fill/)
+  await expect(link.locator('i')).toHaveCSS('font-size', '24px')
+  const first = await page.locator('.sidebar__link').first().boundingBox()
+  expect(first!.y).toBe(24)
+  await page.screenshot({ path: '../docs/sidebar-reference/desktop.png', fullPage: true })
+  await page.locator('.sidebar').screenshot({ path: '../docs/sidebar-reference/sidebar.png' })
   await link.hover()
-  await expect(link).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+  await expect(link).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.12)')
 })
 
-test('the active row is a white card with teal text', async ({ page }) => {
+test('active row and its hover restore the white card on the teal sidebar', async ({ page }) => {
   await openAs(page, '/patients', allPermissions)
-
   const active = item(page, 'مریضان').last()
   await expect(active).toHaveCSS('background-color', 'rgb(255, 255, 255)')
   await expect(active).toHaveCSS('border-radius', '25px')
-  await expect(active).toHaveCSS('margin-bottom', '10px')
-  await expect(page.getByRole('link', { name: 'مریضان' })).toHaveCSS('color', 'rgb(8, 155, 171)')
-  await expect(page.getByRole('link', { name: 'مریضان' })).toHaveAttribute('aria-current', 'page')
+  await expect(active).toHaveCSS('margin-bottom', '12px')
+  const link = page.getByRole('link', { name: 'مریضان', exact: true })
+  await expect(link).toHaveCSS('color', 'rgb(8, 155, 171)')
+  await expect(link).toHaveCSS('background-color', 'rgb(255, 255, 255)')
+  await link.hover()
+  await expect(link).toHaveCSS('background-color', 'rgb(255, 255, 255)')
+  await expect(link).toHaveAttribute('aria-current', 'page')
 })
 
-test('an active child sits on a light band inside its parent card', async ({ page }) => {
+test('open submenus restore their white container and teal selected child', async ({ page }) => {
   await openAs(page, '/lab', allPermissions)
 
   await expect(parentButton(page, 'بخش‌های طبی')).toHaveAttribute('aria-expanded', 'true')
@@ -231,13 +231,16 @@ test('an active child sits on a light band inside its parent card', async ({ pag
   await expect(item(page, 'بخش‌های طبی')).toHaveCSS('background-color', 'rgb(255, 255, 255)')
 
   const activeChild = page.getByRole('link', { name: 'آزمایشگاه' })
-  await expect(activeChild).toHaveCSS('height', '41px')
+  await expect(activeChild).toHaveCSS('height', '52px')
+  await expect(activeChild).toHaveCSS('font-size', '15px')
+  await expect(activeChild.locator('i')).toHaveClass(/-fill/)
   await expect(activeChild).toHaveCSS('background-color', 'rgb(206, 235, 238)')
   await expect(activeChild).toHaveCSS('color', 'rgb(8, 155, 171)')
   await expect(activeChild).toHaveCSS('border-radius', '0px')
+  await page.locator('.sidebar').screenshot({ path: '../docs/sidebar-reference/submenu.png' })
 
   await expect(page.getByRole('link', { name: 'عملیات' })).toHaveCSS('color', 'rgb(119, 125, 116)')
-  await expect(page.getByRole('link', { name: 'عملیات' }).locator('i')).toHaveCSS('font-size', '16px')
+  await expect(page.getByRole('link', { name: 'عملیات' }).locator('i')).toHaveCSS('font-size', '22px')
 })
 
 test('submenus open independently, and the active one can still be closed', async ({ page }) => {
@@ -280,19 +283,17 @@ test('a role with one page in a submenu gets a direct link', async ({ page }) =>
   await expect(page.locator('.sidebar__title', { hasText: 'مدیریت' })).toHaveCount(0)
 })
 
-test('collapsed, titles become dashes and the open submenu shows icons only', async ({ page }) => {
+test('collapsed sidebar keeps accessible route icons without a logo or section labels', async ({ page }) => {
   await openAs(page, '/lab', allPermissions, true)
   await sidebarWidth(page, 80)
 
-  const title = page.locator('.sidebar__title').first()
-  await expect(title.locator('i')).toBeVisible()
-  await expect(title.locator('span')).toBeHidden()
+  await expect(page.locator('.sidebar__brand, .sidebar__title')).toHaveCount(0)
 
   const activeChild = page.getByRole('link', { name: 'آزمایشگاه' })
   await expect(activeChild.locator('i')).toBeVisible()
   await expect(activeChild.locator('span')).toBeHidden()
   await expect(activeChild).toHaveCSS('background-color', 'rgb(206, 235, 238)')
-  await expect(item(page, 'بخش‌های طبی')).toHaveCSS('width', '50px')
+  await expect(item(page, 'بخش‌های طبی')).toHaveCSS('width', '56px')
 })
 
 test('touch screens keep the full menu even when collapsing was saved earlier', async ({ browser }) => {
@@ -317,11 +318,25 @@ test('pages an administrator hid for the user stay out of the menu', async ({ pa
   )
   await page.route(/^https?:\/\/[^/]+\/hubs\//, (route) => route.abort())
   await page.setViewportSize({ width: 1600, height: 900 })
-  await page.goto('/patients')
+  await page.goto('/patients', { waitUntil: 'domcontentloaded' })
   await page.locator('.sidebar__link').first().waitFor()
 
   const sidebar = page.locator('.sidebar')
   await expect(sidebar.getByRole('link', { name: 'مریضان' })).toBeVisible()
   await expect(sidebar.getByRole('link', { name: 'پذیرش و صف' })).toHaveCount(0)
   await expect(sidebar.getByRole('link', { name: 'گزارش‌ها' })).toHaveCount(0)
+})
+
+
+test('mobile sidebar opens and closes without a logo and keeps all authorized navigation', async ({ page }) => {
+  await openAs(page, '/patients', allPermissions)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole('button', { name: 'باز کردن منو', exact: true }).click()
+  await expect(page.locator('.sidebar')).toHaveClass(/sidebar--open/)
+  await expect.poll(() => page.locator('.sidebar').evaluate(el => Math.round(el.getBoundingClientRect().right))).toBe(390)
+  await expect(page.locator('.sidebar__brand')).toHaveCount(0)
+  await expect(page.locator('.sidebar').getByRole('link', { name: 'مریضان', exact: true })).toBeVisible()
+  await page.screenshot({ path: '../docs/sidebar-reference/mobile.png', fullPage: true })
+  await page.getByRole('button', { name: 'بستن منو', exact: true }).click()
+  await expect(page.locator('.sidebar')).not.toHaveClass(/sidebar--open/)
 })

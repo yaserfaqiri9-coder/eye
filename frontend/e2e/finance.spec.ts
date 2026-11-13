@@ -47,7 +47,7 @@ test('stock is bought, sold at the pharmacy, paid at the cashier and reconciled 
   const drug = `قطره${stamp}`
   const inventory = await staffPage(browser, `inv_${stamp}`, errors)
   await expect(inventory).toHaveURL(/\/inventory$/)
-  await inventory.getByRole('button', { name: 'جنس جدید' }).click()
+  await inventory.getByRole('button', { name: 'ثبت محصول' }).click()
   const pd = inventory.getByRole('dialog')
   await pd.getByLabel('کد').fill(`D${stamp}`)
   await pd.getByLabel('نام جنس').fill(drug)

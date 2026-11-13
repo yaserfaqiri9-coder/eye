@@ -3,9 +3,10 @@ import { computed, onMounted, ref } from 'vue'
 import { api, errorMessage } from '@/api/http'
 import { useLiveRefresh } from '@/api/realtime'
 import UiPager from '@/components/UiPager.vue'
+import InventoryStockList from './InventoryStockList.vue'
+import type { InventoryListRow } from './stockPresentation'
 import { formatDate, formatDateTime } from '@/utils/date'
 import { money, quantity } from '@/utils/money'
-import { drugFormOf } from './drugForms'
 import { movementLabels } from './labels'
 
 interface LocationSummary {
@@ -55,17 +56,16 @@ const movements = ref<MovementRow[]>([])
 const total = ref(0)
 const page = ref(1)
 const direction = ref('')
-const search = ref('')
 const loading = ref(true)
 const loadingMovements = ref(true)
 const error = ref('')
 
 const pageCount = computed(() => Math.ceil(total.value / pageSize))
-const visibleStock = computed(() => {
-  const term = search.value.trim().toLowerCase()
-  if (!term) return stock.value
-  return stock.value.filter((row) => row.productName.toLowerCase().includes(term) || row.productCode.toLowerCase().includes(term))
-})
+const listRows = computed<InventoryListRow[]>(() => stock.value.map(row => ({
+  id: row.productId, name: row.productName, code: row.productCode, kind: row.kind, category: row.category,
+  quantity: row.quantity, unit: row.unit,
+  locations: [{ code: props.code, name: location.value?.name ?? props.code }],
+})))
 
 let movementRequest = 0
 
@@ -132,33 +132,11 @@ onMounted(load)
     <div><dt>آخرین گردش</dt><dd>{{ location.lastMovementAt ? formatDateTime(location.lastMovementAt) : '—' }}</dd></div>
   </dl>
 
-  <section class="xr-card mb-3" aria-labelledby="location-stock">
-    <div class="xr-card__header flex-wrap">
-      <h2 id="location-stock" class="h6 mb-0">موجودی فعلی</h2>
-      <input v-model="search" type="search" class="form-control xr-location-search" placeholder="جستجوی نام یا کد جنس" aria-label="جستجوی جنس در این گدام" />
-    </div>
-    <div class="xr-card__body">
-      <p v-if="loading" class="xr-state" role="status">در حال بارگذاری...</p>
-      <p v-else-if="stock.length === 0" class="xr-state">این گدام موجودی ندارد.</p>
-      <p v-else-if="visibleStock.length === 0" class="xr-state">جنسی با این نام پیدا نشد.</p>
-      <div v-else class="xr-table-wrap">
-        <table class="xr-table">
-          <thead><tr><th>کد</th><th>جنس</th><th>نوعیت دوا</th><th>موجودی</th><th>بچ‌ها</th><th>نزدیک‌ترین انقضا</th><th>ارزش</th></tr></thead>
-          <tbody>
-            <tr v-for="row in visibleStock" :key="row.productId">
-              <td><span class="ltr-num">{{ row.productCode }}</span></td>
-              <td>{{ row.productName }}</td>
-              <td>{{ drugFormOf(row) ?? '—' }}</td>
-              <td>{{ quantity(row.quantity) }} {{ row.unit }}</td>
-              <td>{{ quantity(row.batchCount) }}</td>
-              <td>{{ row.nearestExpiry ? formatDate(row.nearestExpiry) : '—' }}</td>
-              <td>{{ money(row.value) }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </section>
+  <InventoryStockList :title="`موجودی ${location?.name ?? 'گدام'}`" :rows="listRows" :loading="loading" :location="code" />
+  <details class="location-stock-details">
+    <summary>جزئیات بچ‌ها، انقضا و ارزش موجودی</summary>
+    <div class="xr-table-wrap"><table class="xr-table"><thead><tr><th>جنس</th><th>بچ‌ها</th><th>نزدیک‌ترین انقضا</th><th>ارزش</th></tr></thead><tbody><tr v-for="row in stock" :key="row.productId"><td>{{ row.productName }}</td><td>{{ quantity(row.batchCount) }}</td><td>{{ row.nearestExpiry ? formatDate(row.nearestExpiry) : '—' }}</td><td>{{ money(row.value) }}</td></tr></tbody></table></div>
+  </details>
 
   <section class="xr-card" aria-labelledby="location-history">
     <div class="xr-card__header flex-wrap">
@@ -192,6 +170,8 @@ onMounted(load)
 </template>
 
 <style scoped>
+.location-stock-details { margin-block: 20px; padding: 16px; border: 1px solid #eef0f4; border-radius: 5px; background: #fff; }
+.location-stock-details summary { cursor: pointer; font-size: 12px; color: #5a6476; }
 .xr-location-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
@@ -212,7 +192,4 @@ onMounted(load)
   color: var(--xr-text);
 }
 
-.xr-location-search {
-  max-width: 18rem;
-}
 </style>

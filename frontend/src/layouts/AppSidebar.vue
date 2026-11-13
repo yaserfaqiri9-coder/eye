@@ -142,33 +142,16 @@ watch(
   <div v-if="open" class="sidebar-backdrop" @click="$emit('close')"></div>
   <aside
     class="sidebar"
-    :class="{ 'sidebar--open': open, 'sidebar--mini': collapsed, 'sidebar--dash-titles': mini }"
+    :class="{ 'sidebar--open': open, 'sidebar--mini': collapsed }"
     @pointerenter="onPointerEnter"
     @pointerleave="hovered = false"
     @focusin="onFocusIn"
     @focusout="onFocusOut"
   >
-    <div class="sidebar__brand">
-      <i class="ri-eye-fill sidebar__logo" aria-hidden="true"></i>
-      <span class="sidebar__name">الشفا</span>
-      <button
-        type="button"
-        class="sidebar__toggle"
-        :aria-label="mini ? 'باز نگه داشتن منو' : 'جمع کردن منو'"
-        :title="mini ? 'باز نگه داشتن منو' : 'جمع کردن منو'"
-        @click="toggleMini"
-      >
-        <i :class="mini ? 'ri-more-2-fill' : 'ri-more-fill'" aria-hidden="true"></i>
-      </button>
-    </div>
     <div ref="scroller" class="sidebar__scroll" @scroll.passive="measure">
       <nav ref="list" aria-label="منوی اصلی">
         <ul class="sidebar__menu">
           <template v-for="section in sections" :key="section.title">
-            <li class="sidebar__title" :title="mini ? section.title : undefined">
-              <i class="ri-subtract-line" aria-hidden="true"></i>
-              <span>{{ section.title }}</span>
-            </li>
             <template v-for="entry in section.items" :key="entry.label">
               <li
                 v-if="isMenuParent(entry)"
@@ -229,6 +212,12 @@ watch(
         </ul>
       </nav>
     </div>
+    <div class="sidebar__footer">
+      <button type="button" class="sidebar__toggle" :aria-label="mini ? 'باز نگه داشتن منو' : 'جمع کردن منو'" :title="mini ? 'باز نگه داشتن منو' : 'جمع کردن منو'" @click="toggleMini">
+        <i class="ri-side-bar-fill" aria-hidden="true"></i><span>{{ mini ? 'باز نگه داشتن منو' : 'جمع کردن منو' }}</span>
+      </button>
+      <button type="button" class="sidebar__close" aria-label="بستن منو" @click="$emit('close')"><i class="ri-close-line" aria-hidden="true"></i><span>بستن منو</span></button>
+    </div>
     <div v-if="thumb.show" class="sidebar__rail" aria-hidden="true">
       <div
         class="sidebar__thumb"
@@ -253,302 +242,58 @@ watch(
   background: var(--xr-gradient-shell) fixed;
   color: #fff;
   box-shadow: var(--xr-shadow-bar);
-  transition: width 0.3s ease-in-out;
+  transition: width .3s ease-in-out;
 }
-
-.sidebar__scroll {
-  flex: 1;
-  min-height: 0;
-  margin-top: 15px;
-  padding: 0 15px 20px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: none;
-}
-
-.sidebar__scroll::-webkit-scrollbar {
-  display: none;
-}
-
-/* A short rail centred on the sidebar edge replaces the full-height native scrollbar. */
-.sidebar__rail {
-  position: absolute;
-  inset-inline-end: 4px;
-  top: 50%;
-  width: 3px;
-  height: 88px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.18);
-  opacity: 0;
-  transform: translateY(-50%);
-  transition: opacity 0.2s;
-}
-
-/* At rest the template shows no scrollbar; the rail appears once the pointer is over the menu. */
-.sidebar:hover .sidebar__rail {
-  opacity: 1;
-}
-
-.sidebar__thumb {
-  position: relative;
-  width: 100%;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.75);
-  cursor: grab;
-  touch-action: none;
-}
-
-/* Wider invisible grab area: the visible thumb alone is too thin to hit with a mouse. */
-.sidebar__thumb::before {
-  content: '';
-  position: absolute;
-  inset: -4px -6px;
-}
-
-.sidebar__thumb:hover,
-.sidebar__thumb:active {
-  background: #fff;
-}
-
-.sidebar__thumb:active {
-  cursor: grabbing;
-}
-
-.sidebar__brand {
-  display: flex;
-  flex: none;
-  align-items: center;
-  height: 60px;
-  padding-block-start: 15px;
-  padding-inline-start: 20px;
-}
-
-.sidebar__logo {
-  flex: none;
-  width: 40px;
-  font-size: 38px;
-  line-height: 45px;
-  text-align: center;
-}
-
-.sidebar__name {
-  margin-inline-start: 10px;
-  font-size: 28px;
-  line-height: 45px;
-  white-space: nowrap;
-}
-
-.sidebar__toggle {
-  flex: none;
-  width: 44px;
-  height: 41px;
-  margin-inline: auto 15px;
-  padding: 0;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
-  color: #fff;
-  font-size: 30px;
-  line-height: 41px;
-}
-
-.sidebar__menu,
-.sidebar__submenu-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sidebar__title {
-  padding: 15px;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 500;
-  line-height: 18px;
-  white-space: nowrap;
-}
-
-.sidebar__title i {
-  display: none;
-  font-size: 20px;
-}
-
-/* A white card holds the active row, or an open row together with its whole submenu. */
-.sidebar__item {
-  overflow: hidden;
-  border-radius: var(--xr-radius-card);
-  transition: background-color 0.5s ease-out, box-shadow 0.5s ease-out;
-}
-
-.sidebar__item--active,
-.sidebar__item--open {
-  margin-bottom: 10px;
-  background: #fff;
-  box-shadow: var(--xr-shadow-active);
-}
-
-.sidebar__link {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-height: 47px;
-  padding: 15px;
-  border: 0;
-  border-radius: var(--xr-radius-link);
-  background: transparent;
-  color: #fff;
-  font-family: var(--xr-font);
-  font-size: 14px;
-  line-height: 17px;
-  text-align: start;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color 0.5s ease-out;
-}
-
-.sidebar__link:hover {
-  color: #fff;
-}
-
-.sidebar__link i {
-  flex: none;
-  width: 20px;
-  margin-inline-end: 10px;
-  font-size: 20px;
-  line-height: 17px;
-}
-
-.sidebar__item--active > .sidebar__link,
-.sidebar__item--open > .sidebar__link {
-  color: var(--xr-primary);
-}
-
-.sidebar__link .sidebar__arrow {
-  margin-inline: auto 0;
-  transition: transform 0.3s ease-in-out;
-}
-
-.sidebar__item--open .sidebar__arrow {
-  transform: rotate(-90deg);
-}
-
-.sidebar__submenu {
-  display: grid;
-  grid-template-rows: 0fr;
-  visibility: hidden;
-  transition: grid-template-rows 0.3s ease-in-out, visibility 0.3s;
-}
-
-.sidebar__item--open > .sidebar__submenu {
-  grid-template-rows: 1fr;
-  visibility: visible;
-}
-
-.sidebar__submenu-list {
-  min-height: 0;
-  overflow: hidden;
-}
-
-.sidebar__child .sidebar__link {
-  min-height: 41px;
-  padding: 12px 15px;
-  color: var(--xr-sidebar-child);
-}
-
-.sidebar__child .sidebar__link i {
-  font-size: 16px;
-}
-
-.sidebar__child .sidebar__link:hover {
-  color: var(--xr-primary);
-}
-
-.sidebar__child--active .sidebar__link,
-.sidebar__child--active .sidebar__link:hover {
-  border-radius: 0;
-  background: var(--xr-primary-light);
-  color: var(--xr-primary);
-}
-
-.sidebar__link:focus-visible,
-.sidebar__toggle:focus-visible {
-  outline: 3px solid #fff;
-  outline-offset: -3px;
-}
-
-/* White would disappear on the white card. */
-.sidebar__item--active .sidebar__link:focus-visible,
-.sidebar__item--open .sidebar__link:focus-visible {
-  outline-color: var(--xr-primary);
-}
-
-/* Collapsed: icons only, and the full menu slides back out while the pointer or keyboard focus is in it. */
+.sidebar__scroll { flex: 1; min-height: 0; margin-top: 24px; padding: 0 12px 12px; overflow-x: hidden; overflow-y: auto; scrollbar-width: none; }
+.sidebar__scroll::-webkit-scrollbar { display: none; }
+.sidebar__menu, .sidebar__submenu-list { margin: 0; padding: 0; list-style: none; }
+.sidebar__item { margin-bottom: 12px; overflow: hidden; border-radius: 25px; background: transparent; box-shadow: none; }
+.sidebar__link { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 60px; padding: 17px 16px; border: 0; border-radius: 5px; background: transparent; color: #fff; font-family: var(--xr-font); font-size: 17px; font-weight: 500; line-height: 26px; text-align: start; white-space: nowrap; cursor: pointer; transition: background-color .15s; }
+.sidebar__link i { flex: 0 0 24px; width: 24px; font-size: 24px; line-height: 26px; text-align: center; }
+.sidebar__link span { min-width: 0; }
+.sidebar__link:hover { color: #fff; background: rgba(255,255,255,.12); }
+.sidebar__item--active, .sidebar__item--open { background: #fff; box-shadow: var(--xr-shadow-active); }
+.sidebar__item--active > .sidebar__link, .sidebar__item--open > .sidebar__link,
+.sidebar__item--active > .sidebar__link:hover, .sidebar__item--open > .sidebar__link:hover { background: #fff; color: var(--xr-primary); }
+.sidebar__link .sidebar__arrow { margin-inline-start: auto; flex: 0 0 16px; font-size: 16px; transition: transform .15s; }
+.sidebar__item--open .sidebar__arrow { transform: rotate(-90deg); }
+.sidebar__submenu { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows .2s ease-in-out, visibility .2s; }
+.sidebar__item--open > .sidebar__submenu { grid-template-rows: 1fr; visibility: visible; }
+.sidebar__submenu-list { min-height: 0; overflow: hidden; padding-inline-start: 0; }
+.sidebar__child { margin-top: 0; }
+.sidebar__child .sidebar__link { min-height: 52px; padding: 13px 16px; border-radius: 0; color: var(--xr-sidebar-child); font-size: 15px; }
+.sidebar__child .sidebar__link i { font-size: 22px; }
+.sidebar__child .sidebar__link:hover { background: var(--xr-page-bg); color: var(--xr-primary); }
+.sidebar__child--active > .sidebar__link, .sidebar__child--active > .sidebar__link:hover { background: var(--xr-primary-light); color: var(--xr-primary); }
+.sidebar__item--active .sidebar__link:focus-visible, .sidebar__item--open .sidebar__link:focus-visible { outline-color: var(--xr-primary); }
+.sidebar__link:focus-visible, .sidebar__toggle:focus-visible, .sidebar__close:focus-visible { outline: 2px solid #fff; outline-offset: -3px; }
+.sidebar__footer { flex: none; padding: 10px 12px; border-top: 1px solid rgba(255,255,255,.14); }
+.sidebar__toggle, .sidebar__close { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 40px; padding: 8px 14px; border: 0; border-radius: 5px; background: transparent; color: #fff; font: inherit; font-size: 12px; text-align: start; cursor: pointer; }
+.sidebar__toggle i, .sidebar__close i { width: 20px; flex: 0 0 20px; text-align: center; font-size: 20px; }
+.sidebar__toggle:hover, .sidebar__close:hover { background: rgba(255,255,255,.12); }
+.sidebar__close { display: none; }
+.sidebar__rail { position: absolute; inset-inline-end: 3px; top: 50%; width: 3px; height: 88px; border-radius: 3px; background: rgba(255,255,255,.18); opacity: 0; transform: translateY(-50%); transition: opacity .2s; }
+.sidebar:hover .sidebar__rail { opacity: 1; }
+.sidebar__thumb { position: relative; width: 100%; border-radius: 3px; background: rgba(255,255,255,.75); cursor: grab; touch-action: none; }
+.sidebar__thumb::before { content: ''; position: absolute; inset: -4px -6px; }
+.sidebar__thumb:hover, .sidebar__thumb:active { background: #fff; }
+.sidebar__thumb:active { cursor: grabbing; }
 @media (min-width: 992px) and (hover: hover) {
-  .sidebar--mini {
-    width: var(--xr-sidebar-mini);
-  }
-
-  .sidebar--mini .sidebar__name,
-  .sidebar--mini .sidebar__toggle,
-  .sidebar--mini .sidebar__link span,
-  .sidebar--mini .sidebar__arrow {
-    display: none;
-  }
-
-  .sidebar--mini .sidebar__link i {
-    margin-inline: 0;
-  }
-
-  /* The dash stays while the pointer slides the menu out; titles return only when the menu is kept open. */
-  .sidebar--dash-titles .sidebar__title span {
-    display: none;
-  }
-
-  .sidebar--dash-titles .sidebar__title i {
-    display: block;
-  }
+  .sidebar--mini { width: var(--xr-sidebar-mini); }
+  .sidebar--mini .sidebar__link span, .sidebar--mini .sidebar__toggle span, .sidebar--mini .sidebar__arrow { display: none; }
+  .sidebar--mini .sidebar__link, .sidebar--mini .sidebar__toggle { justify-content: center; padding-inline: 0; }
+  .sidebar--mini .sidebar__submenu-list { padding-inline-start: 0; }
 }
-
-@media (hover: none) {
-  .sidebar__toggle {
-    display: none;
-  }
-}
-
-.sidebar-backdrop {
-  display: none;
-}
-
+@media (hover: none) { .sidebar__toggle { display: none; } }
+@media (min-width: 992px) and (hover: none) { .sidebar__footer { display: none; } }
+.sidebar-backdrop { display: none; }
 @media (max-width: 991.98px) {
-  .sidebar {
-    background: var(--xr-gradient-primary);
-    transform: translateX(100%);
-    transition: transform 0.15s;
-  }
-
-  .sidebar__toggle {
-    display: none;
-  }
-
-  .sidebar--open {
-    transform: none;
-  }
-
-  .sidebar-backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 1029;
-    background: rgba(0, 0, 0, 0.35);
-  }
+  .sidebar { background: var(--xr-gradient-primary); transform: translateX(100%); transition: transform .15s; }
+  .sidebar__toggle { display: none; }
+  .sidebar__close { display: flex; }
+  .sidebar__footer { padding: 10px 12px; border-top: 1px solid rgba(255,255,255,.14); }
+  .sidebar--open { transform: none; }
+  .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 1029; background: rgba(0,0,0,.35); }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .sidebar__submenu,
-  .sidebar__arrow,
-  .sidebar__item,
-  .sidebar__link {
-    transition: none;
-  }
-}
+@media (prefers-reduced-motion: reduce) { .sidebar, .sidebar__submenu, .sidebar__arrow, .sidebar__item, .sidebar__link { transition: none; } }
 </style>

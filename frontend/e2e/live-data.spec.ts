@@ -324,7 +324,7 @@ test('inventory shows the drug form apart from group and unit, finds drugs in an
   }
 
   // A new drug cannot be saved without its form.
-  await page.getByRole('button', { name: /جنس جدید/ }).click()
+  await page.getByRole('button', { name: 'ثبت محصول' }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByLabel('کد').fill(`NF${tag}`)
   await dialog.getByLabel('نام جنس').fill(`بدون نوعیت ${tag}`)

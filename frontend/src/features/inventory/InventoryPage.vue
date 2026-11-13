@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { api, ApiError, errorMessage, newIdempotencyKey } from '@/api/http'
 import { useLiveRefresh } from '@/api/realtime'
 import UiCard from '@/components/UiCard.vue'
+import InventoryStockList from './InventoryStockList.vue'
+import type { InventoryListRow } from './stockPresentation'
 import UiModal from '@/components/UiModal.vue'
 import UiListSkeleton from '@/components/UiListSkeleton.vue'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime } from '@/utils/date'
 import { money, quantity } from '@/utils/money'
 import { removeRecord } from '@/utils/removeRecord'
-import { drugFormChoices, drugFormOf, loadStoredDrugForms, productGroupLabels, stockUnits } from './drugForms'
+import { drugFormChoices, loadStoredDrugForms, productGroupLabels, stockUnits } from './drugForms'
 import { movementLabels } from './labels'
 
 interface LocationRow {
@@ -88,10 +90,11 @@ function locationVisual(code: string) {
 }
 
 const auth = useAuthStore()
-const tab = ref('locations')
+const tab = ref('products')
 const stockView = ref<'batches' | 'alerts'>('batches')
 const historyView = ref<'purchases' | 'movements'>('purchases')
-const q = ref('')
+const stockLocations = ref(new Map<number, { code: string; name: string }[]>())
+const locationError = ref('')
 const locations = ref<LocationRow[]>([])
 const products = ref<ProductRow[]>([])
 const batches = ref<BatchRow[]>([])
@@ -110,31 +113,57 @@ const tabs = computed(() => [
   { key: 'history', label: 'سوابق', count: 0 },
 ])
 
-// Typing in the search box reloads only the product list; a newer search cancels the older one.
+// Read every server page so local search, filters and eight-row pagination include the entire catalogue.
 let productsController: AbortController | null = null
 
 async function loadProducts() {
   productsController?.abort()
   const controller = new AbortController()
   productsController = controller
-  const params = new URLSearchParams({ pageSize: '100' })
-  if (q.value.trim()) params.set('q', q.value.trim())
   try {
-    const rows = (await api<{ items: ProductRow[] }>(`/inventory/products?${params}`, { signal: controller.signal })).items
-    if (!controller.signal.aborted) products.value = rows
+    const all: ProductRow[] = []
+    let page = 1
+    let total = 0
+    do {
+      const result = await api<{ items: ProductRow[]; total: number }>(`/inventory/products?pageSize=100&page=${page++}`, { signal: controller.signal })
+      all.push(...result.items)
+      total = result.total
+      if (!result.items.length) break
+    } while (all.length < total && !controller.signal.aborted)
+    if (!controller.signal.aborted) products.value = all
   } catch (cause) {
     if (!controller.signal.aborted) throw cause
   }
 }
 
-async function searchProducts() {
-  error.value = ''
-  try {
-    await loadProducts()
-  } catch (cause) {
-    error.value = errorMessage(cause)
+// The batch endpoint is capped, so use full per-location stock to avoid inventing or omitting locations.
+let locationRequest = 0
+async function loadStockLocations(rows: LocationRow[]) {
+  const request = ++locationRequest
+  const result = await Promise.allSettled(rows.map(async location => ({
+    location,
+    detail: await api<{ stock: { productId: number }[] }>(`/inventory/locations/${encodeURIComponent(location.code)}`),
+  })))
+  if (request !== locationRequest) return
+  const map = new Map<number, { code: string; name: string }[]>()
+  locationError.value = result.some(r => r.status === 'rejected') ? 'فهرست محل‌های نگهداری کامل بارگذاری نشد؛ دوباره تلاش کنید.' : ''
+  for (const item of result) {
+    if (item.status !== 'fulfilled') continue
+    const { location, detail } = item.value
+    for (const row of detail.stock) {
+      const list = map.get(row.productId) ?? []
+      list.push({ code: location.code, name: location.name })
+      map.set(row.productId, list)
+    }
   }
+  stockLocations.value = map
 }
+const listRows = computed<InventoryListRow[]>(() => products.value.map(row => ({
+  id: row.id, name: row.name, code: row.code, kind: row.kind, category: row.category,
+  quantity: row.onHand, unit: row.unit, reorderLevel: row.reorderLevel, isActive: row.isActive,
+  locations: stockLocations.value.get(row.id) ?? [],
+})))
+const productById = (id: number) => products.value.find(row => row.id === id)!
 
 async function load() {
   error.value = ''
@@ -149,6 +178,7 @@ async function load() {
         api<{ items: PurchaseRow[] }>('/inventory/purchases?pageSize=100').then((r) => r.items),
       ]).then((rows) => {
         ;[locations.value, batches.value, alerts.value, movements.value, purchases.value] = rows
+        return loadStockLocations(locations.value)
       }),
     ])
   } catch (cause) {
@@ -280,11 +310,7 @@ async function saveTransfer() {
   }
 }
 
-let debounce: ReturnType<typeof setTimeout> | undefined
-watch(q, () => {
-  clearTimeout(debounce)
-  debounce = setTimeout(searchProducts, 300)
-})
+onBeforeUnmount(() => { productsController?.abort(); locationRequest++ })
 
 useLiveRefresh(['InventoryChanged'], load)
 onMounted(load)
@@ -293,7 +319,7 @@ onMounted(load)
 <template>
   <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
   <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
-  <section class="xr-card">
+  <section class="xr-card inventory-workspace">
     <div class="xr-card__header flex-wrap">
       <nav class="xr-tabs" role="tablist" aria-label="بخش‌های گدام">
         <button v-for="t in tabs" :key="t.key" type="button" role="tab" class="xr-tab" :class="{ 'xr-tab--active': tab === t.key }" :aria-selected="tab === t.key" :aria-describedby="t.count ? 'inventory-alert-count' : undefined" @click="tab = t.key">
@@ -302,12 +328,12 @@ onMounted(load)
       </nav>
       <span v-if="alertCount" id="inventory-alert-count" class="visually-hidden">{{ quantity(alertCount) }} هشدار موجودی</span>
       <div class="d-flex flex-wrap gap-2">
-        <button v-if="auth.can('inventory.create')" type="button" class="btn btn-soft" @click="openProduct()">جنس جدید</button>
+        <button v-if="auth.can('inventory.create')" type="button" class="btn btn-soft" @click="openProduct()">ثبت محصول</button>
         <RouterLink v-if="auth.can('inventory.create')" :to="{ name: 'inventory-purchase', query: { opening: '1' } }" class="btn btn-soft">موجودی اول دوره</RouterLink>
         <RouterLink v-if="auth.can('inventory.create')" :to="{ name: 'inventory-purchase' }" class="btn btn-primary">ثبت خرید</RouterLink>
       </div>
     </div>
-    <div class="xr-card__body">
+    <div class="xr-card__body inventory-workspace__body">
       <UiListSkeleton v-if="loading" />
       <template v-else-if="tab === 'locations'">
         <p v-if="locations.length === 0" class="xr-state">گدامی ثبت نشده است.</p>
@@ -340,29 +366,13 @@ onMounted(load)
       </template>
 
       <template v-else-if="tab === 'products'">
-        <div class="row mb-3"><div class="col-md-6"><input v-model="q" type="search" class="form-control" placeholder="جستجوی نام یا کد جنس" aria-label="جستجوی جنس" /></div></div>
-        <p v-if="products.length === 0" class="xr-state">جنسی ثبت نشده است.</p>
-        <div v-else class="xr-table-wrap">
-          <table class="xr-table">
-            <thead><tr><th>کد</th><th>نام</th><th>گروه جنس</th><th>نوعیت دوا</th><th>موجودی</th><th>حد کمبود</th><th>قیمت فروش</th><th>وضعیت</th><th v-if="auth.can('inventory.edit')">عملیات</th></tr></thead>
-            <tbody>
-              <tr v-for="row in products" :key="row.id">
-                <td><span class="ltr-num">{{ row.code }}</span></td>
-                <td>{{ row.name }}</td>
-                <td>{{ kindLabels[row.kind] }}</td>
-                <td>{{ drugFormOf(row) ?? '—' }}</td>
-                <td>{{ quantity(row.onHand) }} {{ row.unit }}</td>
-                <td>{{ quantity(row.reorderLevel) }}</td>
-                <td>{{ money(row.salePrice) }}</td>
-                <td><span class="xr-badge" :class="row.isActive ? 'xr-badge--green' : 'xr-badge--red'">{{ row.isActive ? 'فعال' : 'غیرفعال' }}</span></td>
-                <td v-if="auth.can('inventory.edit')" class="text-nowrap">
-                  <button type="button" class="btn btn-soft btn-sm" @click="openProduct(row)">ویرایش</button>
-                  <button type="button" class="btn btn-soft-danger btn-sm ms-2" @click="removeProduct(row)">حذف</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <InventoryStockList :rows="listRows" :error="locationError">
+          <template v-if="auth.can('inventory.edit')" #name="{ row }"><button type="button" @click="openProduct(productById(row.id))">{{ row.name }}</button></template>
+          <template v-if="auth.can('inventory.edit')" #actions="{ row }">
+            <button type="button" @click="openProduct(productById(row.id))">ویرایش جنس</button>
+            <button type="button" @click="removeProduct(productById(row.id))">حذف جنس</button>
+          </template>
+        </InventoryStockList>
       </template>
 
       <template v-else-if="tab === 'stock'">
@@ -566,6 +576,16 @@ onMounted(load)
   font-weight: 700;
   line-height: 1;
 }
+
+.inventory-workspace { display: flex; flex-direction: column; border-radius: 7px; box-shadow: none; border: 1px solid #f0f1f5; }
+.inventory-workspace > .xr-card__header { padding: 14px 24px; min-height: 64px; border-top: 0; border-bottom: 1px solid #f0f1f5; }
+.inventory-workspace__body { padding: 0; }
+.inventory-workspace__body > :not(.inventory-list) { margin: 20px 24px; }
+.inventory-workspace .xr-tabs { gap: 18px; }
+.inventory-workspace .xr-tab { font-size: 12px; }
+.inventory-workspace .xr-tab { color: #69768a; }.inventory-workspace .xr-tab--active { color: #315bd4; background: #f0f3fb; border-radius: 4px; }
+.inventory-workspace > .xr-card__header .btn { font-size: 13px; border-radius: 4px; padding: 7px 12px; }
+.inventory-workspace > .xr-card__header .btn-primary { background: #2854ce; border-color: #2854ce; }
 
 .xr-inventory-switch {
   display: inline-flex;
