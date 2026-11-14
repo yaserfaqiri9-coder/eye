@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api } from '@/api/http'
 import { parseFindings, parseMeasurements, parsePlan, parseRefractionExtras, systemicConditions } from '@/features/clinical/examRecord'
 import type { Chart, Refraction } from '@/features/clinical/types'
@@ -14,6 +14,10 @@ const props = defineProps<{ visitId: string }>()
 const { hospital, load: loadHospital } = useHospital()
 const { clipped, clip } = useClipper()
 const overflow = ref<string[]>([])
+const paperRoot = ref<HTMLElement | null>(null)
+const backSheet = ref<HTMLElement | null>(null)
+const contentCompact = ref(false)
+const fitReady = ref(false)
 
 const page = usePaperPage(async () => {
   const chart = await api<Chart>(`/consultations/${props.visitId}/chart`)
@@ -84,6 +88,9 @@ const numbered = (rows: string[]) => Array.from({ length: Math.max(3, rows.lengt
 const rxItems = computed(() => (chart.value?.prescriptions ?? []).filter((p) => p.status !== 'Cancelled').flatMap((p) => p.items))
 const rxShown = computed(() => rxItems.value.slice(0, RX_LINES))
 const rxHidden = computed(() => rxItems.value.length - rxShown.value.length)
+// Known-dense prescriptions start compact. Shorter prescriptions are measured in their
+// generous layout and compact only when the real rendered content exceeds the fixed A4 back.
+const densePrescription = computed(() => rxShown.value.length >= 13 || contentCompact.value)
 const optical = computed(() => (chart.value?.opticalPrescriptions ?? []).filter((o) => !o.isCancelled))
 const rxNotes = computed(() => (chart.value?.prescriptions ?? []).filter((p) => p.status !== 'Cancelled' && p.notes).map((p, i) => clip(`Rx note ${i + 1}`, p.notes, 160)))
 
@@ -91,26 +98,67 @@ const followUp = computed(() => chart.value?.followUps[0] ?? null)
 const isMale = computed(() => patient.value?.gender === 'Male')
 const isFemale = computed(() => patient.value?.gender === 'Female')
 
-/** A sheet that overflows would lose its last lines on paper, so the screen says so before anyone prints it. */
-function checkFit() {
-  overflow.value = [...document.querySelectorAll<HTMLElement>('.sheet')].filter((el) => el.scrollHeight > el.clientHeight + 1).map((el) => el.dataset.side ?? '')
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+let fitRun = 0
+let resizeFrame = 0
+
+/**
+ * Measure the actual rendered record after fonts and images settle. The back stays hidden during
+ * this one-frame decision, so switching to compact density never flashes or jumps on screen.
+ */
+async function settleFit() {
+  const run = ++fitRun
+  fitReady.value = false
+  contentCompact.value = false
+  overflow.value = []
+  await nextTick()
+  await document.fonts?.ready
+  await Promise.all([...document.images].map((image) => image.decode?.().catch(() => undefined)))
+  await nextFrame()
+  if (run !== fitRun) return
+
+  const back = backSheet.value
+  if (back && !densePrescription.value && back.scrollHeight > back.clientHeight + 1) {
+    contentCompact.value = true
+    await nextTick()
+    await nextFrame()
+    if (run !== fitRun) return
+  }
+
+  overflow.value = [...(paperRoot.value?.querySelectorAll<HTMLElement>('.sheet') ?? [])]
+    .filter((sheet) => sheet.scrollHeight > sheet.clientHeight + 1)
+    .map((sheet) => sheet.dataset.side ?? '')
+  fitReady.value = true
+}
+
+function scheduleFit() {
+  fitReady.value = false
+  cancelAnimationFrame(resizeFrame)
+  resizeFrame = requestAnimationFrame(() => void settleFit())
 }
 
 onMounted(async () => {
+  window.addEventListener('resize', scheduleFit, { passive: true })
+  document.fonts?.addEventListener?.('loadingdone', scheduleFit)
   await Promise.all([page.load(), loadHospital()])
-  await nextTick()
-  await document.fonts?.ready
-  checkFit()
+  await settleFit()
+})
+
+onBeforeUnmount(() => {
+  ++fitRun
+  cancelAnimationFrame(resizeFrame)
+  window.removeEventListener('resize', scheduleFit)
+  document.fonts?.removeEventListener?.('loadingdone', scheduleFit)
 })
 </script>
 
 <template>
-  <div class="paper-screen">
+  <div ref="paperRoot" class="paper-screen">
     <div v-if="page.error.value" class="alert alert-danger" role="alert">{{ page.error.value }}</div>
     <p v-else-if="page.loading.value" class="xr-state" role="status">در حال آماده‌سازی دوسیه...</p>
 
     <div v-if="chart" class="paper-tools">
-      <button type="button" class="btn btn-primary" :disabled="overflow.length > 0" @click="printPaper">چاپ پشت و رو</button>
+      <button type="button" class="btn btn-primary" :disabled="!fitReady || overflow.length > 0" @click="printPaper">چاپ پشت و رو</button>
       <span class="paper-tools__hint">در پنجره چاپ، گزینه چاپ دو طرفه را روشن کنید. یادداشت محرمانه و معلومات مالی چاپ نمی‌شوند.</span>
     </div>
     <div v-if="clipped.length" class="alert alert-warning paper-tools" role="alert">
@@ -118,7 +166,7 @@ onMounted(async () => {
       {{ clipped.map((c) => c.field).join('، ') }}.
       متن کامل در پرونده دیجیتالی باقی است.
     </div>
-    <div v-if="overflow.length" class="alert alert-danger paper-tools" role="alert">محتوای این دوسیه از یک ورق بیشتر شد و چاپ متوقف است. لطفاً به مسئول سیستم اطلاع دهید.</div>
+    <div v-if="fitReady && overflow.length" class="alert alert-danger paper-tools" role="alert">محتوای این دوسیه از یک ورق بیشتر شد و چاپ متوقف است. لطفاً به مسئول سیستم اطلاع دهید.</div>
 
     <template v-if="chart && patient">
       <!-- Front: identity and examinations. -->
@@ -300,7 +348,7 @@ onMounted(async () => {
       </article>
 
       <!-- Back: advice, diagnosis, prescription, follow-up and signature. -->
-      <article class="sheet sheet--back" data-side="پشت ورق" dir="ltr" aria-label="پشت دوسیه">
+      <article ref="backSheet" class="sheet sheet--back" :class="{ 'sheet--back-dense': densePrescription, 'sheet--back-measuring': !fitReady }" :aria-busy="!fitReady" data-side="پشت ورق" dir="ltr" aria-label="پشت دوسیه">
         <section class="back-advice box">
           <b>Advice:</b>
           <p dir="auto">{{ clip('Advice', plan.advice, 420) }}</p>
@@ -316,14 +364,27 @@ onMounted(async () => {
         </section>
         <section class="back-rx box">
           <div class="rx-mark">Rx:</div>
-          <table v-if="rxShown.length" class="rx-table">
+          <table v-if="rxShown.length" class="rx-table" dir="rtl">
+            <colgroup>
+              <col class="rx-table__drug-col" />
+              <col class="rx-table__dose-col" />
+              <col class="rx-table__qty-col" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">دوا</th>
+                <th scope="col">دوز</th>
+                <th scope="col" class="rx-table__qty">تعداد</th>
+              </tr>
+            </thead>
             <tbody>
               <tr v-for="(item, i) in rxShown" :key="item.id">
-                <td class="rx-table__n">{{ i + 1 }}.</td>
-                <td dir="auto">{{ clip(`Rx ${i + 1}`, item.drugName, 80) }}</td>
-                <td dir="auto">{{ [item.dose, item.route, item.duration].filter(Boolean).join(' · ') }}</td>
-                <td dir="auto">{{ clip(`Rx instructions ${i + 1}`, item.instructions, 60) }}</td>
-                <td class="rx-table__qty">#{{ item.quantity }}</td>
+                <td class="rx-table__drug"><span class="rx-table__index">{{ i + 1 }}.</span> <span dir="auto">{{ clip(`Rx ${i + 1}`, item.drugName, 80) }}</span></td>
+                <td class="rx-table__dose">
+                  <strong dir="auto">{{ item.dose || '—' }}</strong>
+                  <small v-if="item.route || item.duration" dir="auto">{{ [item.route, item.duration].filter(Boolean).join(' · ') }}</small>
+                </td>
+                <td class="rx-table__qty" dir="auto">{{ item.quantity }}</td>
               </tr>
             </tbody>
           </table>
@@ -392,6 +453,10 @@ onMounted(async () => {
 
 .sheet * {
   box-sizing: border-box;
+}
+
+.sheet--back-measuring {
+  visibility: hidden;
 }
 
 .sheet p {
@@ -821,19 +886,88 @@ onMounted(async () => {
 }
 
 .rx-table {
+  table-layout: fixed;
   width: 100%;
   border-collapse: collapse;
+  border: 0.75pt solid #000;
+}
+
+.rx-table__drug-col {
+  width: 52%;
+}
+
+.rx-table__dose-col {
+  width: 33%;
+}
+
+.rx-table__qty-col {
+  width: 15%;
+}
+
+.rx-table th,
+.rx-table td {
+  border-inline-start: 0.5pt solid #000;
+  border-bottom: 0.5pt solid #000;
+  text-align: start;
+  vertical-align: middle;
+}
+
+.rx-table th:first-child,
+.rx-table td:first-child {
+  border-inline-start: 0;
+}
+
+.rx-table th {
+  padding: 1.2mm 1.8mm;
+  border-bottom-width: 0.75pt;
+  font-size: 8.5pt;
+  font-weight: 700;
 }
 
 .rx-table td {
-  padding: 0.7mm 1.4mm;
-  border-bottom: 0.25pt solid #999;
-  vertical-align: top;
+  height: 8.5mm;
+  padding: 1.2mm 1.8mm;
 }
 
-.rx-table__n,
-.rx-table__qty {
-  width: 8mm;
+.rx-table__drug {
+  font-size: 11pt;
+  font-weight: 700;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.rx-table__index {
+  display: inline-block;
+  min-width: 4mm;
+  font-size: 8pt;
+  font-weight: 600;
+}
+
+.rx-table__dose strong {
+  display: block;
+  font-size: 10pt;
+  font-weight: 650;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.rx-table__dose small {
+  display: block;
+  margin-top: 0.7mm;
+  font-size: 7.5pt;
+  font-weight: 500;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.rx-table th.rx-table__qty,
+.rx-table td.rx-table__qty {
+  text-align: center;
+}
+
+.rx-table td.rx-table__qty {
+  font-size: 11.5pt;
+  font-weight: 700;
   white-space: nowrap;
 }
 
@@ -841,6 +975,91 @@ onMounted(async () => {
 .rx-note,
 .rx-glasses {
   margin-top: 1.4mm !important;
+}
+
+/* A fixed A4 back supports up to 16 medicines. Only dense prescriptions tighten the
+   surrounding vertical rhythm; ordinary prescriptions retain the generous ledger. */
+.sheet--back-dense {
+  font-size: 8.5pt;
+  line-height: 1.25;
+}
+
+.sheet--back-dense .back-advice {
+  min-height: 20mm;
+}
+
+.sheet--back-dense .back-dx {
+  gap-block: 1mm;
+  padding-block: 1.2mm;
+}
+
+.sheet--back-dense .back-dx__title {
+  margin-bottom: 0.4mm;
+}
+
+.sheet--back-dense .back-dx li {
+  padding-block: 0.45mm;
+}
+
+.sheet--back-dense .dots {
+  min-height: 4mm;
+}
+
+.sheet--back-dense .back-rx {
+  padding-block: 1.2mm;
+}
+
+.sheet--back-dense .rx-mark {
+  margin-bottom: 1mm;
+  font-size: 17pt;
+}
+
+.sheet--back-dense .rx-table th {
+  padding: 0.65mm 1.2mm;
+  font-size: 7.5pt;
+}
+
+.sheet--back-dense .rx-table td {
+  height: 5.8mm;
+  padding: 0.35mm 1.2mm;
+}
+
+.sheet--back-dense .rx-table__drug {
+  font-size: 9.5pt;
+  line-height: 1.05;
+}
+
+.sheet--back-dense .rx-table__index {
+  min-width: 3.5mm;
+  font-size: 7pt;
+}
+
+.sheet--back-dense .rx-table__dose strong {
+  font-size: 8.75pt;
+  line-height: 1.05;
+}
+
+.sheet--back-dense .rx-table__dose small {
+  margin-top: 0.2mm;
+  font-size: 6.75pt;
+  line-height: 1.05;
+}
+
+.sheet--back-dense .rx-table td.rx-table__qty {
+  font-size: 10.25pt;
+}
+
+.sheet--back-dense .rx-more,
+.sheet--back-dense .rx-note,
+.sheet--back-dense .rx-glasses {
+  margin-top: 0.8mm !important;
+  font-size: 7.5pt;
+  line-height: 1.15;
+}
+
+.sheet--back-dense .back-sign {
+  gap: 1mm;
+  font-size: 8pt;
 }
 
 .back-sign {

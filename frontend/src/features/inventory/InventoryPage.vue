@@ -387,12 +387,12 @@ onMounted(load)
           <p v-if="batches.length === 0" class="xr-state">موجودی ثبت نشده است.</p>
           <div v-else class="xr-table-wrap">
             <table class="xr-table">
-              <thead><tr><th>جنس</th><th>محل</th><th>بچ</th><th>انقضا</th><th>مقدار</th><th>قیمت خرید</th><th>عملیات</th></tr></thead>
+              <thead><tr><th>جنس</th><th>محل</th><th>قیمت فروش</th><th>انقضا</th><th>مقدار</th><th>قیمت خرید</th><th>عملیات</th></tr></thead>
               <tbody>
                 <tr v-for="row in batches" :key="row.id">
                   <td>{{ row.productName }}</td>
                   <td>{{ row.locationName }}</td>
-                  <td><span class="ltr-num">{{ row.lotNumber || '—' }}</span></td>
+                  <td>{{ money(productById(row.productId).salePrice) }}</td>
                   <td>{{ formatDate(row.expiryDate) }}</td>
                   <td>{{ quantity(row.quantity) }}</td>
                   <td>{{ money(row.unitCost) }}</td>
@@ -406,16 +406,84 @@ onMounted(load)
           </div>
         </template>
         <template v-else>
-          <h3 class="h6">کمبود موجودی</h3>
-          <p v-if="alerts.lowStock.length === 0" class="text-muted">موردی نیست.</p>
-          <ul v-else>
-            <li v-for="row in alerts.lowStock" :key="row.id">{{ row.name }}: {{ quantity(row.onHand) }} {{ row.unit }} (حد: {{ quantity(row.reorderLevel) }})</li>
-          </ul>
-          <h3 class="h6 mt-3">انقضای نزدیک یا گذشته (۹۰ روز)</h3>
-          <p v-if="alerts.expiring.length === 0" class="text-muted">موردی نیست.</p>
-          <ul v-else>
-            <li v-for="row in alerts.expiring" :key="row.id">{{ row.productName }} — {{ row.locationName }} — انقضا: {{ formatDate(row.expiryDate) }} — مقدار: {{ quantity(row.quantity) }}</li>
-          </ul>
+          <div class="xr-alerts" aria-labelledby="inventory-alerts-title">
+            <header class="xr-alerts__summary">
+              <span class="xr-alerts__summary-icon" aria-hidden="true"><i class="ri-notification-3-line"></i></span>
+              <div class="xr-alerts__summary-copy">
+                <h2 id="inventory-alerts-title">موارد نیازمند بررسی</h2>
+                <p>کمبود موجودی و اقلام دارای انقضای نزدیک یا گذشته، به تفکیک نمایش داده شده‌اند.</p>
+              </div>
+              <div class="xr-alerts__total" aria-label="تعداد کل هشدارهای فعال">
+                <strong>{{ quantity(alertCount) }}</strong>
+                <span>هشدار فعال</span>
+              </div>
+            </header>
+
+            <div class="xr-alert-panels">
+              <section class="xr-alert-panel xr-alert-panel--stock" aria-labelledby="low-stock-title">
+                <header class="xr-alert-panel__header">
+                  <span class="xr-alert-panel__icon" aria-hidden="true"><i class="ri-archive-drawer-line"></i></span>
+                  <div class="xr-alert-panel__heading">
+                    <h3 id="low-stock-title">کمبود موجودی</h3>
+                    <p>اقلامی که موجودی آن‌ها به حد سفارش رسیده یا کمتر شده است.</p>
+                  </div>
+                  <span class="xr-alert-panel__count">{{ quantity(alerts.lowStock.length) }} مورد</span>
+                </header>
+
+                <div v-if="alerts.lowStock.length === 0" class="xr-alert-empty" role="status">
+                  <span aria-hidden="true"><i class="ri-checkbox-circle-line"></i></span>
+                  <div><strong>موجودی در وضعیت مناسب است</strong><small>هیچ قلمی به حد سفارش نرسیده است.</small></div>
+                </div>
+                <div v-else class="xr-alert-list xr-alert-list--stock" role="table" aria-label="فهرست کمبود موجودی">
+                  <div class="xr-alert-list__header" role="row">
+                    <span role="columnheader">جنس</span>
+                    <span role="columnheader">موجودی فعلی</span>
+                    <span role="columnheader">حد سفارش</span>
+                    <span role="columnheader">وضعیت</span>
+                  </div>
+                  <div v-for="row in alerts.lowStock" :key="row.id" class="xr-alert-list__row" role="row">
+                    <strong class="xr-alert-list__name" role="cell">{{ row.name }}</strong>
+                    <span class="xr-alert-list__metric" role="cell" data-label="موجودی فعلی">{{ quantity(row.onHand) }} {{ row.unit }}</span>
+                    <span class="xr-alert-list__metric" role="cell" data-label="حد سفارش">{{ quantity(row.reorderLevel) }} {{ row.unit }}</span>
+                    <span role="cell" data-label="وضعیت">
+                      <span v-if="row.reorderLevel > row.onHand" class="xr-alert-status">کمبود {{ quantity(row.reorderLevel - row.onHand) }} {{ row.unit }}</span>
+                      <span v-else class="xr-alert-status">در حد سفارش</span>
+                    </span>
+                  </div>
+                </div>
+              </section>
+
+              <section class="xr-alert-panel xr-alert-panel--expiry" aria-labelledby="expiry-alert-title">
+                <header class="xr-alert-panel__header">
+                  <span class="xr-alert-panel__icon" aria-hidden="true"><i class="ri-calendar-close-line"></i></span>
+                  <div class="xr-alert-panel__heading">
+                    <h3 id="expiry-alert-title">انقضای نزدیک یا گذشته</h3>
+                    <p>اقلام منقضی‌شده یا دارای تاریخ انقضا در ۹۰ روز آینده.</p>
+                  </div>
+                  <span class="xr-alert-panel__count">{{ quantity(alerts.expiring.length) }} مورد</span>
+                </header>
+
+                <div v-if="alerts.expiring.length === 0" class="xr-alert-empty" role="status">
+                  <span aria-hidden="true"><i class="ri-checkbox-circle-line"></i></span>
+                  <div><strong>مورد نزدیک به انقضا وجود ندارد</strong><small>در بازه ۹۰ روزه، موردی برای بررسی نیست.</small></div>
+                </div>
+                <div v-else class="xr-alert-list xr-alert-list--expiry" role="table" aria-label="فهرست اقلام نزدیک به انقضا یا منقضی‌شده">
+                  <div class="xr-alert-list__header" role="row">
+                    <span role="columnheader">جنس</span>
+                    <span role="columnheader">محل</span>
+                    <span role="columnheader">تاریخ انقضا</span>
+                    <span role="columnheader">مقدار</span>
+                  </div>
+                  <div v-for="row in alerts.expiring" :key="row.id" class="xr-alert-list__row" role="row">
+                    <strong class="xr-alert-list__name" role="cell">{{ row.productName }}</strong>
+                    <span role="cell" data-label="محل">{{ row.locationName }}</span>
+                    <span class="xr-alert-list__date" role="cell" data-label="تاریخ انقضا">{{ formatDate(row.expiryDate) }}</span>
+                    <span class="xr-alert-list__metric" role="cell" data-label="مقدار">{{ quantity(row.quantity) }}</span>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
         </template>
       </template>
 
@@ -632,6 +700,237 @@ onMounted(load)
   font-size: 0.66rem;
 }
 
+.xr-alerts {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.xr-alerts__summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--xr-row-border);
+  border-radius: var(--xr-radius-control);
+  background: #f8fbfc;
+}
+
+.xr-alerts__summary-icon,
+.xr-alert-panel__icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 2.45rem;
+  height: 2.45rem;
+  place-items: center;
+  border-radius: 0.65rem;
+  font-size: 1.15rem;
+}
+
+.xr-alerts__summary-icon {
+  background: var(--xr-tone-primary-bg);
+  color: var(--xr-tone-primary-text);
+}
+
+.xr-alerts__summary-copy,
+.xr-alert-panel__heading {
+  min-width: 0;
+}
+
+.xr-alerts__summary-copy h2,
+.xr-alert-panel__heading h3 {
+  margin: 0;
+  color: var(--xr-text);
+  font-size: 0.98rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.xr-alerts__summary-copy p,
+.xr-alert-panel__heading p {
+  margin: 0.12rem 0 0;
+  color: var(--xr-text-soft);
+  font-size: 0.76rem;
+  line-height: 1.65;
+}
+
+.xr-alerts__total {
+  display: grid;
+  min-width: 4.7rem;
+  justify-items: center;
+  padding-inline-start: 0.8rem;
+  border-inline-start: 1px solid var(--xr-row-border);
+  color: var(--xr-tone-primary-text);
+}
+
+.xr-alerts__total strong {
+  font-size: 1.25rem;
+  line-height: 1.15;
+}
+
+.xr-alerts__total span {
+  color: var(--xr-text-soft);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.xr-alert-panels {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.xr-alert-panel {
+  --alert-accent: var(--xr-status-orange);
+  --alert-tone-bg: var(--xr-tone-orange-bg);
+  --alert-tone-text: var(--xr-tone-orange-text);
+  overflow: hidden;
+  min-width: 0;
+  border: 1px solid var(--xr-row-border);
+  border-inline-start: 3px solid var(--alert-accent);
+  border-radius: var(--xr-radius-control);
+  background: var(--xr-surface);
+}
+
+.xr-alert-panel--expiry {
+  --alert-accent: var(--xr-status-red);
+  --alert-tone-bg: var(--xr-tone-red-bg);
+  --alert-tone-text: var(--xr-tone-red-text);
+}
+
+.xr-alert-panel__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 4.8rem;
+  padding: 0.72rem 0.85rem;
+  border-block-end: 1px solid var(--xr-row-border);
+  background: #fcfdfd;
+}
+
+.xr-alert-panel__icon {
+  background: var(--alert-tone-bg);
+  color: var(--alert-tone-text);
+}
+
+.xr-alert-panel__count,
+.xr-alert-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.45rem;
+  background: var(--alert-tone-bg);
+  color: var(--alert-tone-text);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.xr-alert-panel__count {
+  min-width: 3.55rem;
+  padding: 0.25rem 0.45rem;
+}
+
+.xr-alert-list {
+  min-width: 0;
+}
+
+.xr-alert-list__header,
+.xr-alert-list__row {
+  display: grid;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  padding-inline: 0.85rem;
+}
+
+.xr-alert-list--stock .xr-alert-list__header,
+.xr-alert-list--stock .xr-alert-list__row {
+  grid-template-columns: minmax(7rem, 1.45fr) minmax(5.2rem, 0.9fr) minmax(5.2rem, 0.9fr) minmax(6rem, auto);
+}
+
+.xr-alert-list--expiry .xr-alert-list__header,
+.xr-alert-list--expiry .xr-alert-list__row {
+  grid-template-columns: minmax(7rem, 1.4fr) minmax(5.5rem, 0.9fr) minmax(6.2rem, 0.9fr) minmax(3rem, 0.45fr);
+}
+
+.xr-alert-list__header {
+  min-height: 2.1rem;
+  background: #f8fafb;
+  color: var(--xr-text-soft);
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.xr-alert-list__row {
+  min-height: 3.35rem;
+  color: var(--xr-text-soft);
+  font-size: 0.76rem;
+}
+
+.xr-alert-list__row + .xr-alert-list__row {
+  border-block-start: 1px solid var(--xr-row-border);
+}
+
+.xr-alert-list__name {
+  overflow: hidden;
+  color: var(--xr-text);
+  font-size: 0.82rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.xr-alert-list__metric,
+.xr-alert-list__date {
+  color: var(--xr-text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.xr-alert-status {
+  padding: 0.22rem 0.42rem;
+}
+
+.xr-alert-empty {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 5.3rem;
+  padding: 0.85rem 1rem;
+  color: var(--xr-tone-green-text);
+}
+
+.xr-alert-empty > span {
+  display: grid;
+  flex: 0 0 2rem;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border-radius: 0.55rem;
+  background: var(--xr-tone-green-bg);
+  font-size: 1.05rem;
+}
+
+.xr-alert-empty div {
+  display: grid;
+}
+
+.xr-alert-empty strong {
+  color: var(--xr-text);
+  font-size: 0.8rem;
+}
+
+.xr-alert-empty small {
+  color: var(--xr-text-soft);
+  font-size: 0.72rem;
+}
+
 .xr-location-list {
   overflow: hidden;
   border: 1px solid var(--xr-row-border);
@@ -764,7 +1063,85 @@ onMounted(load)
   color: var(--location-accent-strong);
 }
 
+@media (min-width: 1400px) {
+  .xr-alert-panels {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767.98px) {
+  .xr-alert-list__header {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .xr-alert-list--stock .xr-alert-list__row,
+  .xr-alert-list--expiry .xr-alert-list__row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem 1rem;
+    padding-block: 0.8rem;
+  }
+
+  .xr-alert-list__name {
+    grid-column: 1 / -1;
+    overflow: visible;
+    text-overflow: initial;
+    white-space: normal;
+  }
+
+  .xr-alert-list__row [data-label] {
+    display: grid;
+    align-content: start;
+    justify-items: start;
+    gap: 0.12rem;
+    min-width: 0;
+  }
+
+  .xr-alert-list__row [data-label]::before {
+    content: attr(data-label);
+    color: var(--xr-text-soft);
+    font-size: 0.64rem;
+    font-weight: 500;
+    line-height: 1.4;
+  }
+}
+
 @media (max-width: 575.98px) {
+  .xr-alerts__summary {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .xr-alerts__total {
+    display: flex;
+    grid-column: 2;
+    align-items: baseline;
+    justify-self: start;
+    gap: 0.35rem;
+    min-width: 0;
+    padding-inline-start: 0;
+    border-inline-start: 0;
+  }
+
+  .xr-alerts__total strong {
+    font-size: 1rem;
+  }
+
+  .xr-alert-panel__header {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .xr-alert-panel__count {
+    grid-column: 2;
+    justify-self: start;
+  }
+
   .xr-location-list__header,
   .xr-location-row {
     grid-template-columns: minmax(0, 1fr) 3.25rem minmax(6.25rem, auto) 0.75rem;

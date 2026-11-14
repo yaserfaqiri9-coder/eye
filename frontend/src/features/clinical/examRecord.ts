@@ -7,27 +7,33 @@ export interface ExamRow {
   options: string[]
 }
 
-/** Provisional until the medical lead confirms them (WORKFLOWS.md M-2). Nothing is ever selected by default. */
+/**
+ * The choices are exactly those of the hospital's previous paper-form system, in its order, which the doctors know.
+ * Nothing is ever selected by default. Episclera is kept for older records; the paper form has no row for it.
+ */
 export const anteriorRows: ExamRow[] = [
-  { code: 'Lids', label: 'پلک', options: ['Ptosis', 'Blepharitis', 'Chalazion', 'Entropion', 'Ectropion'] },
-  { code: 'Conjunctiva', label: 'ملتحمه', options: ['Injection', 'Pterygium', 'Pinguecula', 'Follicles', 'Papillae'] },
-  { code: 'Cornea', label: 'قرنیه', options: ['Clear', 'Edema', 'Opacity', 'Ulcer', 'Keratic precipitates'] },
+  { code: 'Lids', label: 'پلک', options: ['Normal', 'Ptosis', 'Ectropion', 'Entropion', 'Trichiasis', 'Edema', 'Chalazion', 'Stye', 'Blepharitis'] },
+  { code: 'Conjunctiva', label: 'ملتحمه', options: ['Clear', 'Congested', 'Chemosis', 'Discharge', 'Follicles', 'Papillae', 'Pinguecula', 'Pterygium', 'Subconjunctival Hemorrhage'] },
+  { code: 'Cornea', label: 'قرنیه', options: ['Clear', 'Hazy', 'Opacity', 'Scar', 'Ulcer', 'Abrasion', 'Edema', 'Dystrophy', 'Keratitis'] },
   { code: 'Episclera', label: 'اپی‌اسکلرا', options: [] },
-  { code: 'Sclera', label: 'صلبیه', options: ['Injection', 'Thinning', 'Nodule'] },
-  { code: 'AC', label: 'اتاق قدامی', options: ['Deep', 'Shallow', 'Cells', 'Flare', 'Hypopyon', 'Hyphema'] },
-  { code: 'Iris', label: 'عنبیه', options: ['Rubeosis', 'Synechiae', 'Atrophy', 'Coloboma'] },
-  { code: 'Pupil', label: 'مردمک', options: ['Round', 'Irregular', 'RAPD', 'Fixed', 'Dilated'] },
-  { code: 'Lens', label: 'عدسیه', options: ['Clear', 'Nuclear sclerosis', 'Cortical cataract', 'PSC', 'Pseudophakia', 'Aphakia'] },
-  { code: 'Vitreous', label: 'زجاجیه', options: ['Clear', 'Floaters', 'Hemorrhage', 'PVD', 'Cells'] },
-  { code: 'EOM', label: 'حرکات چشم', options: [] },
+  { code: 'Sclera', label: 'صلبیه', options: ['White', 'Injected', 'Icterus', 'Blue', 'Nodule', 'Thinning'] },
+  { code: 'AC', label: 'اتاق قدامی', options: ['Clear', 'Shallow', 'Deep', 'Cells', 'Flare', 'Hypopyon', 'Hyphema', 'Fibrin'] },
+  { code: 'Iris', label: 'عنبیه', options: ['Normal', 'Atrophy', 'Synechiae', 'Rubeosis', 'Heterochromia', 'Coloboma', 'Cysts'] },
+  { code: 'Pupil', label: 'مردمک', options: ['Round', 'Reactive', 'Fixed', 'Dilated', 'Constricted', 'Irregular', 'RAPD+', 'RAPD-'] },
+  { code: 'Lens', label: 'عدسیه', options: ['Clear', 'Cataract', 'Nuclear Sclerosis', 'Cortical', 'PSC', 'Mature', 'Hypermature', 'IOL', 'Aphakic'] },
+  { code: 'Vitreous', label: 'زجاجیه', options: ['Clear', 'Hazy', 'Hemorrhage', 'Floaters', 'Detachment', 'Syneresis', 'PVD'] },
+  { code: 'EOM', label: 'حرکات چشم', options: ['Full', 'Restricted', 'Paralysis', 'Nystagmus', 'Diplopia'] },
 ]
+
+/** Chosen by clicking the drawing of each eye, as on the previous system. */
+export const fundusOptions = ['Normal', 'Cup/Disc 0.3', 'Cup/Disc 0.4', 'Cup/Disc 0.5', 'Cup/Disc 0.6', 'Cup/Disc 0.7', 'Cup/Disc 0.8', 'Glaucomatous', 'DR Changes', 'ARMD', 'Retinal Detachment', 'Vitreous Hemorrhage', 'Papilledema', 'Optic Atrophy']
 
 // The drop and lens codes are the paper's own. Their meaning awaits confirmation (M-10), so they are offered untranslated.
 export const posteriorRows: ExamRow[] = [
   { code: 'Dilatation', label: 'گشادسازی مردمک', options: ['T', 'T+Ph', 'Ph', 'C'] },
   { code: 'DilateTime', label: 'زمان گشادسازی', options: [] },
   { code: 'Method', label: 'روش معاینه', options: ['90D', '78D', 'Direct', 'Indirect'] },
-  { code: 'Fundus', label: 'فوندوس', options: [] },
+  { code: 'Fundus', label: 'فوندوس', options: fundusOptions },
   { code: 'Disc', label: 'دیسک بینایی', options: ['Pink', 'Pale', 'Swollen', 'Cupped'] },
   { code: 'CDR', label: 'نسبت کاپ به دیسک', options: [] },
   { code: 'Macula', label: 'ماکولا', options: ['Foveal reflex present', 'Edema', 'Drusen', 'Hole', 'Scar'] },

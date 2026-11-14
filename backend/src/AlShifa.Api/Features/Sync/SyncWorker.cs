@@ -159,6 +159,19 @@ public sealed class SyncWorker(IServiceScopeFactory scopes, IHttpClientFactory h
             await SendAsync(http, schema, [], ct, reset: true);
         }
 
+        // Small pages share a batch, so a database with many small tables needs few requests.
+        var pending = new List<SyncTableRows>();
+        var pendingRows = 0;
+        async Task FlushAsync()
+        {
+            if (pending.Count > 0)
+            {
+                await SendAsync(http, schema, pending, ct);
+                pending = [];
+                pendingRows = 0;
+            }
+        }
+
         foreach (var table in SyncSchema.Tables(db))
         {
             var columns = SyncSchema.SyncedColumns(table);
@@ -172,19 +185,28 @@ public sealed class SyncWorker(IServiceScopeFactory scopes, IHttpClientFactory h
                     + (paged && after is not null ? $" WHERE {SyncSchema.Quote(keys[0].Name)} > @after" : "")
                     + (paged ? $" ORDER BY {SyncSchema.Quote(keys[0].Name)} LIMIT {options.Value.BatchSize}" : "");
                 var rows = await ReadAsync(db, null, sql, after is null ? [] : [("@after", after)], ct);
-                if (rows.Count > 0)
+                var more = paged && rows.Count == options.Value.BatchSize;
+                var through = more ? rows[^1][columns.ToList().FindIndex(c => c.Name == keys[0].Name)] : null;
+
+                // Even an empty page goes: the online copy removes what it holds in this key range and the hospital no longer has.
+                var prune = new SyncPrune(after is null ? null : SyncValues.ToJson(after), through is null ? null : SyncValues.ToJson(through));
+                pending.Add(new SyncTableRows(table.Name, columns.Select(c => c.Name).ToArray(), rows.Select(r => r.Select(SyncValues.ToJson).ToArray()).ToList(), [], prune));
+                pendingRows += rows.Count;
+                if (pendingRows >= options.Value.BatchSize)
                 {
-                    await SendAsync(http, schema, [new SyncTableRows(table.Name, columns.Select(c => c.Name).ToArray(), rows.Select(r => r.Select(SyncValues.ToJson).ToArray()).ToList(), [])], ct);
+                    await FlushAsync();
                 }
 
-                if (!paged || rows.Count < options.Value.BatchSize)
+                if (!more)
                 {
                     break;
                 }
 
-                after = rows[^1][columns.ToList().FindIndex(c => c.Name == keys[0].Name)];
+                after = through;
             }
         }
+
+        await FlushAsync();
     }
 
     /// <summary>True when at least one batch went out.</summary>

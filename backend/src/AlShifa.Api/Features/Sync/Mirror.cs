@@ -30,7 +30,13 @@ public sealed class MirrorOptions
     public string SyncConnection { get; set; } = "";
 }
 
-public sealed record SyncTableRows(string Table, string[] Columns, List<JsonElement[]> Upserts, List<JsonElement[]> Deletes);
+/// <summary>Prune makes the online table match these rows exactly within a key range: online rows in the range that are not here are removed.
+/// Sent with every page of a full copy, so rows deleted while changes were not recorded (sync switched off, a migration) disappear online too.</summary>
+public sealed record SyncTableRows(string Table, string[] Columns, List<JsonElement[]> Upserts, List<JsonElement[]> Deletes, SyncPrune? Prune = null);
+
+/// <summary>Key range of a full-copy page: above After (open when null), up to and including Through (open when null).
+/// Tables with a composite key always go in one piece, with both ends open.</summary>
+public sealed record SyncPrune(JsonElement? After, JsonElement? Through);
 
 /// <summary>Reset empties the online copy before this batch: the first batch of a full resend after the online copy lost data
 /// or holds rows this hospital never sent (a test, or a hospital database restored from a backup).</summary>
@@ -243,16 +249,35 @@ public static class MirrorApply
                 }
             }
 
-            foreach (var rows in batch.Tables.Where(r => r.Upserts.Count > 0))
+            // Rows the hospital no longer has. Their children are gone at the hospital too and are pruned with their own table.
+            foreach (var rows in batch.Tables.Where(r => r.Prune is not null))
             {
-                upserted += await UpsertAsync(connection, tx, tables[rows.Table], rows, ct);
+                deleted += await PruneAsync(connection, tx, tables[rows.Table], rows, ct);
             }
 
+            // Deletions go before writes: a new row may reuse a unique value (a code, a refraction line's eye) that a deleted row still holds online.
+            // A parent that a child still points to online, until the writes below move the child, waits until after them.
             await ExecuteAsync(connection, tx, "SET FOREIGN_KEY_CHECKS=1", [], ct);
             var byTable = batch.Tables.Where(r => r.Deletes.Count > 0).GroupBy(r => r.Table).ToDictionary(g => g.Key, g => g.SelectMany(r => r.Deletes).ToList());
-            foreach (var table in SyncSchema.ChildrenFirst(byTable.Keys.Select(k => tables[k])))
+            var deleteOrder = SyncSchema.ChildrenFirst(byTable.Keys.Select(k => tables[k]));
+            var heldBack = new Dictionary<string, List<JsonElement[]>>();
+            foreach (var table in deleteOrder)
             {
-                deleted += await DeleteAsync(connection, tx, table, byTable[table.Name], ct);
+                var (count, held) = await DeleteAsync(connection, tx, table, byTable[table.Name], deferParents: true, ct);
+                deleted += count;
+                if (held.Count > 0)
+                {
+                    heldBack[table.Name] = held;
+                }
+            }
+
+            await ExecuteAsync(connection, tx, "SET FOREIGN_KEY_CHECKS=0", [], ct);
+            upserted += await UpsertAllAsync(connection, tx, tables, batch.Tables.Where(r => r.Upserts.Count > 0).ToList(), ct);
+
+            await ExecuteAsync(connection, tx, "SET FOREIGN_KEY_CHECKS=1", [], ct);
+            foreach (var table in deleteOrder.Where(t => heldBack.ContainsKey(t.Name)))
+            {
+                deleted += (await DeleteAsync(connection, tx, table, heldBack[table.Name], deferParents: false, ct)).Count;
             }
 
             await SetStateAsync(connection, tx, "apply.seq", batch.Seq.ToString(CultureInfo.InvariantCulture), ct);
@@ -286,9 +311,14 @@ public static class MirrorApply
             throw new AppException(StatusCodes.Status400BadRequest, "unknown_column", $"Unexpected columns for {rows.Table}.");
         }
 
-        if (rows.Upserts.Count > 0 && SyncSchema.KeyColumns(table).Any(k => !rows.Columns.Contains(k.Name)))
+        if ((rows.Upserts.Count > 0 || rows.Prune is not null) && SyncSchema.KeyColumns(table).Any(k => !rows.Columns.Contains(k.Name)))
         {
             throw new AppException(StatusCodes.Status400BadRequest, "missing_key", $"Key columns missing for {rows.Table}.");
+        }
+
+        if (rows.Prune is { } prune && SyncSchema.KeyColumns(table).Count != 1 && (prune.After is not null || prune.Through is not null))
+        {
+            throw new AppException(StatusCodes.Status400BadRequest, "bad_row", $"A key range needs a single-column key: {rows.Table}.");
         }
 
         if (rows.Upserts.Any(r => r.Length != rows.Columns.Length) || rows.Deletes.Any(d => d.Length != table.PrimaryKey!.Columns.Count))
@@ -297,54 +327,175 @@ public static class MirrorApply
         }
     }
 
-    private static async Task<int> UpsertAsync(MySqlConnection connection, DbTransaction tx, ITable table, SyncTableRows rows, CancellationToken ct)
-    {
-        var columns = rows.Columns.Select(name => table.Columns.Single(c => c.Name == name)).ToList();
-        var keys = SyncSchema.KeyColumns(table);
-        var keyIndexes = keys.Select(k => Array.IndexOf(rows.Columns, k.Name)).ToList();
-        var others = Enumerable.Range(0, columns.Count).Where(i => !keyIndexes.Contains(i)).ToList();
-        var where = string.Join(" AND ", keys.Select((k, i) => $"{SyncSchema.Quote(k.Name)}=@k{i}"));
-        var extra = table.Columns.Where(c => !SyncSchema.IsSyncedColumn(table.Name, c.Name) && SyncSchema.InsertDefault(table.Name, c) is not null).ToList();
+    private const int DuplicateKey = 1062;
+    private const int RowIsReferenced = 1451;
 
+    /// <summary>
+    /// Rows are written in the order the hospital changed them. When two rows trade a unique value (one gives it up, the other takes it),
+    /// the taker may come first; it is tried again after the rest, until every row is written. A row that still collides fails the batch.
+    /// </summary>
+    private static async Task<int> UpsertAllAsync(MySqlConnection connection, DbTransaction tx, Dictionary<string, ITable> tables, List<SyncTableRows> batch, CancellationToken ct)
+    {
+        var waiting = batch.SelectMany(rows => rows.Upserts.Select(row => (Rows: rows, Row: row))).ToList();
         var count = 0;
-        foreach (var row in rows.Upserts)
+        while (waiting.Count > 0)
         {
-            var values = columns.Select((c, i) => SyncValues.ToDb(row[i], c)).ToList();
-            var keyValues = keyIndexes.Select(i => values[i]).ToList();
-            var exists = await ScalarAsync(connection, tx, $"SELECT 1 FROM {SyncSchema.Quote(table.Name)} WHERE {where}", Named("k", keyValues), ct) is not null;
-            if (exists)
+            var collided = new List<(SyncTableRows Rows, JsonElement[] Row)>();
+            MySqlException? last = null;
+            foreach (var item in waiting)
             {
-                if (others.Count > 0)
+                try
                 {
-                    var set = string.Join(",", others.Select(i => $"{SyncSchema.Quote(columns[i].Name)}=@v{i}"));
-                    var parameters = Named("k", keyValues).Concat(others.Select(i => ($"@v{i}", values[i])));
-                    await ExecuteAsync(connection, tx, $"UPDATE {SyncSchema.Quote(table.Name)} SET {set} WHERE {where}", parameters, ct);
+                    await UpsertRowAsync(connection, tx, tables[item.Rows.Table], item.Rows.Columns, item.Row, ct);
+                    count++;
+                }
+                catch (MySqlException e) when (e.Number == DuplicateKey)
+                {
+                    // MySQL undoes only this statement; the transaction goes on.
+                    collided.Add(item);
+                    last = e;
                 }
             }
-            else
+
+            if (collided.Count == waiting.Count)
             {
-                var names = columns.Select(c => c.Name).Concat(extra.Select(c => c.Name)).Select(SyncSchema.Quote);
-                var allValues = values.Concat(extra.Select(c => SyncSchema.InsertDefault(table.Name, c))).ToList();
-                await ExecuteAsync(connection, tx, $"INSERT INTO {SyncSchema.Quote(table.Name)} ({string.Join(",", names)}) VALUES ({string.Join(",", allValues.Select((_, i) => $"@v{i}"))})", Named("v", allValues), ct);
+                // A cycle: each row holds a value another one takes. All of them are removed, then written anew as the hospital has them.
+                var removed = new List<(SyncTableRows Rows, JsonElement[] Row, Dictionary<string, object?> Kept)>();
+                foreach (var item in collided)
+                {
+                    removed.Add((item.Rows, item.Row, await RemoveRowAsync(connection, tx, tables[item.Rows.Table], item.Rows.Columns, item.Row, ct)));
+                }
+
+                foreach (var item in removed)
+                {
+                    await UpsertRowAsync(connection, tx, tables[item.Rows.Table], item.Rows.Columns, item.Row, ct, item.Kept);
+                    count++;
+                }
+
+                break;
             }
 
-            count++;
+            waiting = collided;
         }
 
         return count;
     }
 
-    private static async Task<int> DeleteAsync(MySqlConnection connection, DbTransaction tx, ITable table, List<JsonElement[]> keys, CancellationToken ct)
+    /// <summary>Deletes one row and returns its online-only values (an account's online password), so writing it again keeps them.</summary>
+    private static async Task<Dictionary<string, object?>> RemoveRowAsync(MySqlConnection connection, DbTransaction tx, ITable table, string[] columnNames, JsonElement[] row, CancellationToken ct)
+    {
+        var keys = SyncSchema.KeyColumns(table);
+        var keyValues = keys.Select(k => SyncValues.ToDb(row[Array.IndexOf(columnNames, k.Name)], k)).ToList();
+        var where = string.Join(" AND ", keys.Select((k, i) => $"{SyncSchema.Quote(k.Name)}=@k{i}"));
+        var localOnly = table.Columns.Where(c => !SyncSchema.IsSyncedColumn(table.Name, c.Name)).ToList();
+        var kept = new Dictionary<string, object?>();
+        if (localOnly.Count > 0)
+        {
+            await using var command = Command(connection, tx, $"SELECT {string.Join(",", localOnly.Select(c => SyncSchema.Quote(c.Name)))} FROM {SyncSchema.Quote(table.Name)} WHERE {where}", Named("k", keyValues));
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                for (var i = 0; i < localOnly.Count; i++)
+                {
+                    kept[localOnly[i].Name] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                }
+            }
+        }
+
+        await ExecuteAsync(connection, tx, $"DELETE FROM {SyncSchema.Quote(table.Name)} WHERE {where}", Named("k", keyValues), ct);
+        return kept;
+    }
+
+    private static async Task UpsertRowAsync(MySqlConnection connection, DbTransaction tx, ITable table, string[] columnNames, JsonElement[] row, CancellationToken ct, Dictionary<string, object?>? kept = null)
+    {
+        var columns = columnNames.Select(name => table.Columns.Single(c => c.Name == name)).ToList();
+        var keys = SyncSchema.KeyColumns(table);
+        var keyIndexes = keys.Select(k => Array.IndexOf(columnNames, k.Name)).ToList();
+        var others = Enumerable.Range(0, columns.Count).Where(i => !keyIndexes.Contains(i)).ToList();
+        var where = string.Join(" AND ", keys.Select((k, i) => $"{SyncSchema.Quote(k.Name)}=@k{i}"));
+        var values = columns.Select((c, i) => SyncValues.ToDb(row[i], c)).ToList();
+        var keyValues = keyIndexes.Select(i => values[i]).ToList();
+        var exists = await ScalarAsync(connection, tx, $"SELECT 1 FROM {SyncSchema.Quote(table.Name)} WHERE {where}", Named("k", keyValues), ct) is not null;
+        if (exists)
+        {
+            if (others.Count > 0)
+            {
+                var set = string.Join(",", others.Select(i => $"{SyncSchema.Quote(columns[i].Name)}=@v{i}"));
+                var parameters = Named("k", keyValues).Concat(others.Select(i => ($"@v{i}", values[i])));
+                await ExecuteAsync(connection, tx, $"UPDATE {SyncSchema.Quote(table.Name)} SET {set} WHERE {where}", parameters, ct);
+            }
+        }
+        else
+        {
+            var extra = table.Columns.Where(c => !SyncSchema.IsSyncedColumn(table.Name, c.Name) && (kept?.ContainsKey(c.Name) == true || SyncSchema.InsertDefault(table.Name, c) is not null)).ToList();
+            var names = columns.Select(c => c.Name).Concat(extra.Select(c => c.Name)).Select(SyncSchema.Quote);
+            var allValues = values.Concat(extra.Select(c => kept is not null && kept.TryGetValue(c.Name, out var v) ? v : SyncSchema.InsertDefault(table.Name, c))).ToList();
+            await ExecuteAsync(connection, tx, $"INSERT INTO {SyncSchema.Quote(table.Name)} ({string.Join(",", names)}) VALUES ({string.Join(",", allValues.Select((_, i) => $"@v{i}"))})", Named("v", allValues), ct);
+        }
+    }
+
+    /// <summary>With deferParents, a row that another row still points to online is handed back instead of failing the batch.</summary>
+    private static async Task<(int Count, List<JsonElement[]> Held)> DeleteAsync(MySqlConnection connection, DbTransaction tx, ITable table, List<JsonElement[]> keys, bool deferParents, CancellationToken ct)
     {
         var keyColumns = SyncSchema.KeyColumns(table);
         var where = string.Join(" AND ", keyColumns.Select((k, i) => $"{SyncSchema.Quote(k.Name)}=@k{i}"));
         var count = 0;
+        var held = new List<JsonElement[]>();
         foreach (var key in keys)
         {
-            count += await ExecuteAsync(connection, tx, $"DELETE FROM {SyncSchema.Quote(table.Name)} WHERE {where}", Named("k", keyColumns.Select((c, i) => SyncValues.ToDb(key[i], c)).ToList()), ct);
+            try
+            {
+                count += await ExecuteAsync(connection, tx, $"DELETE FROM {SyncSchema.Quote(table.Name)} WHERE {where}", Named("k", keyColumns.Select((c, i) => SyncValues.ToDb(key[i], c)).ToList()), ct);
+            }
+            catch (MySqlException e) when (deferParents && e.Number == RowIsReferenced)
+            {
+                held.Add(key);
+            }
         }
 
-        return count;
+        return (count, held);
+    }
+
+    /// <summary>Removes online rows in the page's key range that the hospital did not send.</summary>
+    private static async Task<int> PruneAsync(MySqlConnection connection, DbTransaction tx, ITable table, SyncTableRows rows, CancellationToken ct)
+    {
+        var keys = SyncSchema.KeyColumns(table);
+        var keyIndexes = keys.Select(k => Array.IndexOf(rows.Columns, k.Name)).ToList();
+        string KeyText(IEnumerable<object?> values) => JsonSerializer.Serialize(values.Select(SyncValues.ToJson));
+        var keep = rows.Upserts.Select(r => KeyText(keyIndexes.Select((i, n) => SyncValues.ToDb(r[i], keys[n])))).ToHashSet(StringComparer.Ordinal);
+
+        var range = new List<string>();
+        var parameters = new List<(string Name, object? Value)>();
+        if (rows.Prune!.After is { } after)
+        {
+            range.Add($"{SyncSchema.Quote(keys[0].Name)} > @after");
+            parameters.Add(("@after", SyncValues.ToDb(after, keys[0])));
+        }
+
+        if (rows.Prune.Through is { } through)
+        {
+            range.Add($"{SyncSchema.Quote(keys[0].Name)} <= @through");
+            parameters.Add(("@through", SyncValues.ToDb(through, keys[0])));
+        }
+
+        var sql = $"SELECT {string.Join(",", keys.Select(k => SyncSchema.Quote(k.Name)))} FROM {SyncSchema.Quote(table.Name)}"
+            + (range.Count > 0 ? " WHERE " + string.Join(" AND ", range) : "");
+        var gone = new List<JsonElement[]>();
+        await using (var command = Command(connection, tx, sql, parameters))
+        await using (var reader = await command.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                // Read back through the same conversion as the sent keys, so both compare in one form.
+                var key = keys.Select((k, i) => SyncValues.ToJson(reader.IsDBNull(i) ? null : reader.GetValue(i))).ToArray();
+                if (!keep.Contains(KeyText(key.Select((v, i) => SyncValues.ToDb(v, keys[i])))))
+                {
+                    gone.Add(key);
+                }
+            }
+        }
+
+        return gone.Count == 0 ? 0 : (await DeleteAsync(connection, tx, table, gone, deferParents: false, ct)).Count;
     }
 
     private static IEnumerable<(string, object?)> Named(string prefix, IReadOnlyList<object?> values) =>

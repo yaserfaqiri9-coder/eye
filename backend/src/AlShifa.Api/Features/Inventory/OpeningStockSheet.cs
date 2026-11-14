@@ -25,6 +25,7 @@ public static class OpeningStockSheet
 {
     public const string ExpectFlag = "--expect-import";
     public const string ReportFlag = "--report";
+    public const string AllowMissingDrugExpiryFlag = "--allow-missing-drug-expiry";
     public const string LedgerKind = "OpeningStock";
     public const string NoDose = "-";
 
@@ -236,7 +237,7 @@ public static class OpeningStockSheet
     };
 
     /// <summary>Decides one row from the sheet alone; nothing is filled in that the sheet does not say.</summary>
-    public static Decision Evaluate(SheetRow row, IReadOnlyList<Location> locations, DateOnly today)
+    public static Decision Evaluate(SheetRow row, IReadOnlyList<Location> locations, DateOnly today, bool allowMissingDrugExpiry = false)
     {
         var problems = new List<string>();
         Decision Stop(Outcome outcome) => new(row, outcome, string.Join("؛ ", problems));
@@ -279,7 +280,7 @@ public static class OpeningStockSheet
 
         // Missing on the sheet: kept out rather than guessed.
         if (kind == ProductKind.Drug && row.Dose.Length == 0) problems.Add($"دوز ذکر نشده (اگر دوز ندارد «{NoDose}» بنویسید)");
-        if (kind == ProductKind.Drug && expiry is null) problems.Add("تاریخ انقضای دوا ذکر نشده");
+        if (kind == ProductKind.Drug && expiry is null && !allowMissingDrugExpiry) problems.Add("تاریخ انقضای دوا ذکر نشده");
         if (expiry < today) problems.Add($"منقضی: {expiry:yyyy-MM-dd}");
         if (problems.Count > 0)
         {
@@ -360,7 +361,7 @@ public static class OpeningStockSheet
     }
 
     public static async Task<Result> RunAsync(IServiceProvider services, string path, string? userName, bool apply, bool backupTaken, int? expectImport,
-        string? reportPath, TextWriter output, CancellationToken ct = default)
+        string? reportPath, TextWriter output, CancellationToken ct = default, bool allowMissingDrugExpiry = false)
     {
         if (services.GetRequiredService<SyncSwitch>().ReadOnly)
         {
@@ -383,7 +384,7 @@ public static class OpeningStockSheet
         }
 
         var rows = Read(path);
-        var decisions = await DecideAsync(db, rows, ct);
+        var decisions = await DecideAsync(db, rows, ct, allowMissingDrugExpiry);
         var result = new Result(database, decisions, false);
 
         foreach (var d in decisions)
@@ -432,7 +433,7 @@ public static class OpeningStockSheet
         accessor.HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "operator")) };
         try
         {
-            await ApplyAsync(services, db, rows, toImport, Path.GetFileName(path), ct);
+            await ApplyAsync(services, db, rows, toImport, Path.GetFileName(path), ct, allowMissingDrugExpiry);
         }
         finally
         {
@@ -447,11 +448,11 @@ public static class OpeningStockSheet
         item.UnitCost is { } cost ? decimal.Round(item.Quantity * cost, 2, MidpointRounding.AwayFromZero) : 0;
 
     /// <summary>Checks every row against the sheet, the other rows and what the database already holds.</summary>
-    public static async Task<List<Decision>> DecideAsync(AppDbContext db, List<SheetRow> rows, CancellationToken ct)
+    public static async Task<List<Decision>> DecideAsync(AppDbContext db, List<SheetRow> rows, CancellationToken ct, bool allowMissingDrugExpiry = false)
     {
         var locations = await db.StockLocations.AsNoTracking().Select(l => new Location(l.Code, l.Name)).ToListAsync(ct);
         var today = KabulClock.Today;
-        var decisions = rows.Select(r => Evaluate(r, locations, today)).ToList();
+        var decisions = rows.Select(r => Evaluate(r, locations, today, allowMissingDrugExpiry)).ToList();
 
         void Hold(Func<Decision, bool> which, Func<Decision, string> reason)
         {
@@ -525,7 +526,8 @@ public static class OpeningStockSheet
         return decisions;
     }
 
-    private static async Task ApplyAsync(IServiceProvider services, AppDbContext db, List<SheetRow> rows, List<Decision> preview, string fileName, CancellationToken ct)
+    private static async Task ApplyAsync(IServiceProvider services, AppDbContext db, List<SheetRow> rows, List<Decision> preview, string fileName, CancellationToken ct,
+        bool allowMissingDrugExpiry)
     {
         var stock = services.GetRequiredService<StockService>();
         var ledger = services.GetRequiredService<LedgerService>();
@@ -537,7 +539,7 @@ public static class OpeningStockSheet
 
         // A second run started at the same time waits here, then sees these rows as recorded.
         await db.Database.ExecuteSqlRawAsync("SELECT Id FROM StockLocations ORDER BY Id FOR UPDATE", ct);
-        var toImport = (await DecideAsync(db, rows, ct)).Where(d => d.Outcome == Outcome.Import).ToList();
+        var toImport = (await DecideAsync(db, rows, ct, allowMissingDrugExpiry)).Where(d => d.Outcome == Outcome.Import).ToList();
         if (!toImport.Select(d => d.Key).SequenceEqual(preview.Select(d => d.Key)))
         {
             throw new InvalidOperationException("The database changed since the preview. Run the preview again. Nothing was changed.");

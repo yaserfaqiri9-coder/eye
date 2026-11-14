@@ -136,7 +136,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .layout {
   --xr-sidebar-current: var(--xr-sidebar-width);
-  min-height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   background: var(--xr-gradient-shell);
 }
 
@@ -150,7 +151,10 @@ onBeforeUnmount(() => {
 .layout__main {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100dvh;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  direction: rtl;
   margin-inline-start: var(--xr-sidebar-current);
   padding: 120px 27px 0;
   background: var(--xr-page-bg);
@@ -159,14 +163,19 @@ onBeforeUnmount(() => {
 
 .layout__content {
   flex: 1;
+  flex-shrink: 0;
 }
 
 @media print {
   .layout {
+    height: auto;
+    overflow: visible;
     background: #fff;
   }
 
   .layout__main {
+    height: auto;
+    overflow: visible;
     margin: 0;
     padding: 0;
     background: #fff;

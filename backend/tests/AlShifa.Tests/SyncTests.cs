@@ -497,6 +497,95 @@ public sealed class SyncTests(SyncFixture sync) : IClassFixture<SyncFixture>
             services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.Extensions.Hosting.HostOptions>>().Value.BackgroundServiceExceptionBehavior);
     }
 
+    [Fact]
+    public async Task A_unique_value_freed_by_a_deleted_row_can_be_taken_by_a_new_one()
+    {
+        // As when a refraction is saved again: its lines are deleted and written anew with the same stage and eye.
+        var code = "RU" + Random.Shared.Next(1000, 9999);
+        await LocalAsync(db => db.Departments.Add(new AlShifa.Api.Features.Users.Department { Code = code, Name = "old" }));
+        await sync.SyncAsync();
+
+        await LocalAsync(async db => db.Departments.Remove(await db.Departments.SingleAsync(d => d.Code == code)));
+        await LocalAsync(db => db.Departments.Add(new AlShifa.Api.Features.Users.Department { Code = code, Name = "new" }));
+        await sync.SyncAsync();
+
+        await using var online = sync.MirrorData();
+        Assert.Equal("new", (await online.Departments.AsNoTracking().SingleAsync(d => d.Code == code)).Name);
+        await AssertNothingPendingAsync();
+    }
+
+    [Fact]
+    public async Task Two_rows_that_trade_a_unique_value_both_arrive()
+    {
+        var (first, second) = ("TA" + Random.Shared.Next(1000, 9999), "TB" + Random.Shared.Next(1000, 9999));
+        await LocalAsync(db => db.Departments.AddRange(
+            new AlShifa.Api.Features.Users.Department { Code = first, Name = "one" },
+            new AlShifa.Api.Features.Users.Department { Code = second, Name = "two" }));
+        await sync.SyncAsync();
+
+        // "two" changes first, so it reaches the online copy first and finds "one" still holding the code.
+        await LocalAsync(async db => (await db.Departments.SingleAsync(d => d.Name == "two" && d.Code == second)).Code = "TMP" + second);
+        await LocalAsync(async db => (await db.Departments.SingleAsync(d => d.Name == "one" && d.Code == first)).Code = second);
+        await LocalAsync(async db => (await db.Departments.SingleAsync(d => d.Name == "two" && d.Code == "TMP" + second)).Code = first);
+        await sync.SyncAsync();
+
+        await using var online = sync.MirrorData();
+        Assert.Equal("two", (await online.Departments.AsNoTracking().SingleAsync(d => d.Code == first)).Name);
+        Assert.Equal("one", (await online.Departments.AsNoTracking().SingleAsync(d => d.Code == second)).Name);
+        await AssertNothingPendingAsync();
+    }
+
+    [Fact]
+    public async Task Rows_deleted_while_sync_was_off_disappear_online_when_it_is_on_again()
+    {
+        var code = "DO" + Random.Shared.Next(1000, 9999);
+        await LocalAsync(db => db.Departments.Add(new AlShifa.Api.Features.Users.Department { Code = code, Name = "deleted while off" }));
+        await sync.SyncAsync();
+        long departmentId;
+        using (var scope = sync.Local.Services.CreateScope())
+        {
+            departmentId = await scope.ServiceProvider.GetRequiredService<AppDbContext>().Departments.Where(d => d.Code == code).Select(d => d.Id).SingleAsync();
+        }
+
+        await using (var off = sync.LocalWithoutSync())
+        {
+            _ = off.Server;
+            using var scope = off.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.Departments.Remove(await db.Departments.SingleAsync(d => d.Id == departmentId));
+            await db.SaveChangesAsync();
+            for (var i = 0; i < 50 && await db.SyncStates.AnyAsync(s => s.Key == "push.snapshotOf"); i++)
+            {
+                await Task.Delay(100);
+            }
+        }
+
+        await sync.SyncAsync();
+        await using var online = sync.MirrorData();
+        Assert.False(await online.Departments.AnyAsync(d => d.Id == departmentId));
+
+        // Everything else is still there.
+        using var scope2 = sync.Local.Services.CreateScope();
+        var local = scope2.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal(await local.Departments.CountAsync(), await online.Departments.CountAsync());
+        Assert.Equal(await local.Patients.CountAsync(), await online.Patients.CountAsync());
+    }
+
+    /// <summary>One change on the hospital database, saved with sync capture on.</summary>
+    private Task LocalAsync(Action<AppDbContext> change) => LocalAsync(db =>
+    {
+        change(db);
+        return Task.CompletedTask;
+    });
+
+    private async Task LocalAsync(Func<AppDbContext, Task> change)
+    {
+        using var scope = sync.Local.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await change(db);
+        await db.SaveChangesAsync();
+    }
+
     private async Task AssertNothingPendingAsync()
     {
         using var scope = sync.Local.Services.CreateScope();

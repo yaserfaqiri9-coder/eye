@@ -100,10 +100,11 @@ public sealed class ClinicalTests(ApiFixture api)
     }
 
     [Fact]
-    public async Task Drug_suggestions_list_only_active_drugs_starting_with_the_typed_text()
+    public async Task Drug_suggestions_list_only_active_drugs_containing_the_typed_text()
     {
         var stamp = Guid.NewGuid().ToString("N")[..10];
         var match = $"Z{stamp} قطره";
+        var middle = $"X Z{stamp} وسط نام";
         var arabicSpelling = $"ي{stamp} دوا";
         using (var scope = api.Services.CreateScope())
         {
@@ -115,13 +116,15 @@ public sealed class ClinicalTests(ApiFixture api)
                 Item(arabicSpelling, ProductKind.Drug),
                 Item($"Z{stamp} متوقف", ProductKind.Drug, active: false),
                 Item($"Z{stamp} فریم", ProductKind.Frame),
-                Item($"X Z{stamp} وسط نام", ProductKind.Drug));
+                Item(middle, ProductKind.Drug));
             await db.SaveChangesAsync();
         }
 
         var doctor = await UserAsync(Roles.Doctor);
-        Assert.Equal([match], (await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=Z{stamp}"))!);
-        Assert.Equal([match], (await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=z{stamp}"))!);
+        // A name that starts with the text is listed before one that only contains it.
+        Assert.Equal([match, middle], (await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=Z{stamp}"))!);
+        Assert.Equal([match, middle], (await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=z{stamp}"))!);
+        Assert.Equal([middle], (await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q={Uri.EscapeDataString("وسط نام")}"))!.Where(n => n.Contains(stamp)).ToArray());
         Assert.Equal([arabicSpelling], (await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=ی{stamp}"))!);
         Assert.Empty((await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=Z{stamp[..3]}%25{stamp[6..]}"))!);
         Assert.Empty((await doctor.GetFromJsonAsync<string[]>("/api/prescriptions/drugs?q=%20"))!);

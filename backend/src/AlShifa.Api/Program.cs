@@ -206,7 +206,8 @@ if (args.Contains(OpeningStockImport.Command))
         // A typed sheet (.xlsx/.csv). The launcher in deploy\stock-import passes the preview's count, so the apply imports exactly what was shown.
         await OpeningStockSheet.RunAsync(scope.ServiceProvider, path, Environment.GetEnvironmentVariable("ALSHIFA_IMPORT_USER"),
             args.Contains(OpeningStockImport.ApplyFlag), args.Contains(DatabaseSafety.BackupTakenFlag),
-            int.TryParse(After(OpeningStockSheet.ExpectFlag), out var expect) ? expect : null, After(OpeningStockSheet.ReportFlag), Console.Out);
+            int.TryParse(After(OpeningStockSheet.ExpectFlag), out var expect) ? expect : null, After(OpeningStockSheet.ReportFlag), Console.Out,
+            allowMissingDrugExpiry: args.Contains(OpeningStockSheet.AllowMissingDrugExpiryFlag));
     }
     else
     {

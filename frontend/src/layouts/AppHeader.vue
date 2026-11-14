@@ -14,18 +14,20 @@ const router = useRouter()
 const error = ref('')
 const search = ref('')
 const stuck = ref(false)
+let scrollContainer: HTMLElement | null = null
 
 /** Once the page scrolls, the floating bar snaps to the top edge and spans the content, as in the template. */
 function onScroll() {
-  stuck.value = window.scrollY > 0
+  stuck.value = (scrollContainer?.scrollTop ?? window.scrollY) > 0
 }
 
 onMounted(() => {
+  scrollContainer = document.querySelector<HTMLElement>('.layout__main')
   onScroll()
-  window.addEventListener('scroll', onScroll, { passive: true })
+  ;(scrollContainer ?? window).addEventListener('scroll', onScroll, { passive: true })
 })
 
-onBeforeUnmount(() => window.removeEventListener('scroll', onScroll))
+onBeforeUnmount(() => (scrollContainer ?? window).removeEventListener('scroll', onScroll))
 
 const password = reactive({ open: false, current: '', next: '', saving: false, error: '', done: false })
 

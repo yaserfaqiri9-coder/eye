@@ -38,18 +38,23 @@ public static class PrescriptionEndpoints
 
             // Persian and Arabic keyboards type these letters differently, and either form may be stored.
             var escaped = term.ToLowerInvariant().Replace("|", "||").Replace("%", "|%").Replace("_", "|_");
-            var persian = escaped.Replace('ي', 'ی').Replace('ك', 'ک') + "%";
-            var arabic = escaped.Replace('ی', 'ي').Replace('ک', 'ك') + "%";
+            var persian = "%" + escaped.Replace('ي', 'ی').Replace('ك', 'ک') + "%";
+            var arabic = "%" + escaped.Replace('ی', 'ي').Replace('ک', 'ك') + "%";
 
-            // Both sides lower-cased, so "t" finds "Timolol" whatever the column collation is; StartsWith would not.
+            // Any part of the name matches, as on the old paper-form system: "moxi" finds "Vigamox (Moxifloxacin)".
+            // Both sides lower-cased, so the match does not depend on the column collation.
             var names = await db.Products.AsNoTracking()
                 .Where(p => p.IsActive && p.Kind == ProductKind.Drug && (EF.Functions.Like(p.Name.ToLower(), persian, "|") || EF.Functions.Like(p.Name.ToLower(), arabic, "|")))
                 .Select(p => p.Name)
                 .Distinct()
                 .OrderBy(name => name)
-                .Take(30)
+                .Take(200)
                 .ToListAsync(ct);
-            return Results.Ok(names);
+
+            // Names that start with the typed text come first; the rest follow in order.
+            static string Fold(string s) => s.ToLowerInvariant().Replace('ي', 'ی').Replace('ك', 'ک');
+            var folded = Fold(term);
+            return Results.Ok(names.OrderBy(name => Fold(name).StartsWith(folded, StringComparison.Ordinal) ? 0 : 1).ThenBy(name => name, StringComparer.OrdinalIgnoreCase).Take(30).ToList());
         }).RequirePermission("prescriptions.create");
 
         medical.MapPost("/", async (CreatePrescriptionRequest request, AppDbContext db, ClinicalAccess access, Idempotency idempotency, NumberService numbers, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>

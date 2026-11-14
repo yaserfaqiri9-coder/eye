@@ -33,7 +33,7 @@ async function staffPage(browser: Browser, userName: string, errors: string[]) {
   return page
 }
 
-test('drug name field suggests by first letters, without replacing what the doctor typed', async ({ page, browser }) => {
+test('drug box finds any part of a name and adds each pick as a prescription line', async ({ page, browser }) => {
   test.setTimeout(120_000)
   const errors: string[] = []
   const stamp = Date.now()
@@ -60,9 +60,9 @@ test('drug name field suggests by first letters, without replacing what the doct
 
   const doctor = await staffPage(browser, `drg_d${stamp}`, errors)
   await doctor.goto(`/chart/${visit.id}`)
-  await doctor.getByRole('tab', { name: 'نسخه دوا' }).click()
-  const field = doctor.getByRole('combobox', { name: 'نام دوا 1' })
-  const list = doctor.getByRole('listbox', { name: 'نام دوا 1' })
+  // The drug box sits on the exam page itself, under the diagnosis, as Rx did on the paper form.
+  const field = doctor.getByRole('combobox', { name: 'افزودن دوا' })
+  const list = doctor.getByRole('listbox', { name: 'افزودن دوا' })
 
   // The very first letter already opens the list.
   await field.pressSequentially('q')
@@ -70,35 +70,36 @@ test('drug name field suggests by first letters, without replacing what the doct
   await field.fill('')
   await expect(list).toHaveCount(0)
 
-  // Typing the first characters lists every drug starting with them; a click fills the whole name.
-  await field.pressSequentially(`q${stamp}`)
-  await expect(list.getByRole('option')).toHaveText([first, second])
+  // Any part of the name finds it, not only its first letters; a click adds the drug as a line.
+  await field.pressSequentially(`${stamp} alpha`)
+  await expect(list.getByRole('option', { name: first })).toBeVisible()
+  await expect(list.getByRole('option', { name: second })).toBeVisible()
   await list.getByRole('option', { name: second }).click()
-  await expect(field).toHaveValue(second)
-  await expect(list).toHaveCount(0)
-
-  // The keyboard reaches the same choice.
-  await field.fill(`Q${stamp}`)
-  await expect(list.getByRole('option')).toHaveCount(2)
-  await field.press('ArrowDown')
-  await field.press('Enter')
-  await expect(field).toHaveValue(first)
-
-  // Enter never swaps typed text for a similar strength, and does not submit the prescription.
-  await field.fill(`Q${stamp} Alpha`)
-  await expect(list.getByRole('option')).toHaveCount(2)
-  await field.press('Enter')
-  await expect(field).toHaveValue(`Q${stamp} Alpha`)
-  await expect(list).toHaveCount(0)
-  await expect(doctor.getByText('نسخه ثبت و برای دواخانه ارسال شد.')).toHaveCount(0)
-
-  // A drug outside the pharmacy list can still be prescribed.
-  await field.fill(`بیرون از گدام ${stamp}`)
-  await expect(doctor.getByText('موردی پیدا نشد؛ می‌توانید نام را کامل بنویسید.')).toBeVisible()
-  await doctor.getByRole('button', { name: 'ثبت نسخه' }).click()
-  await expect(doctor.getByText('نسخه ثبت و برای دواخانه ارسال شد.')).toBeVisible()
-  await expect(doctor.getByText(`بیرون از گدام ${stamp}`)).toBeVisible()
+  await expect(doctor.getByLabel('نام دوا 1')).toHaveValue(second)
+  await expect(doctor.getByLabel('دوز 1')).toBeFocused()
   await expect(field).toHaveValue('')
+  await expect(list).toHaveCount(0)
+
+  // Enter takes the highlighted match, the first one unless the arrows moved it.
+  await field.fill(`Q${stamp}`)
+  await expect(list.getByRole('option', { name: first })).toBeVisible()
+  await field.press('Enter')
+  await expect(doctor.getByLabel('نام دوا 2')).toHaveValue(first)
+
+  // A drug outside the pharmacy list can still be prescribed, and nothing is sent before the doctor saves.
+  await field.fill(`بیرون از گدام ${stamp}`)
+  await expect(doctor.getByText('در فهرست دواخانه پیدا نشد.')).toBeVisible()
+  await field.press('Enter')
+  await expect(doctor.getByLabel('نام دوا 3')).toHaveValue(`بیرون از گدام ${stamp}`)
+  await expect(doctor.getByText('ذخیره شد و نسخه دوا برای دواخانه ارسال شد.')).toHaveCount(0)
+
+  await doctor.getByLabel('دوز 1').fill('1x3')
+  await doctor.getByRole('button', { name: 'ذخیره', exact: true }).click()
+  await expect(doctor.getByText('ذخیره شد و نسخه دوا برای دواخانه ارسال شد.')).toBeVisible()
+  // The saved prescription stays on the page, ready to change until the pharmacy starts on it.
+  await expect(doctor.getByLabel('نام دوا 3')).toHaveValue(`بیرون از گدام ${stamp}`)
+  await expect(doctor.getByLabel('دوز 1')).toHaveValue('1x3')
+  await expect(doctor.getByText(/^RX-\d+$/)).toBeVisible()
   expect(errors).toEqual([])
 })
 
@@ -186,47 +187,50 @@ test('full clinical journey crosses departments without re-entering data', async
   await triage.getByRole('button', { name: 'ذخیره و تکمیل' }).click()
   await expect(triage.getByText('رفرکشن تکمیل شد و مریض به صف داکتر برگشت.')).toBeVisible()
 
-  // Doctor sees it with the triage values, without retyping anything.
+  // Doctor sees it with the triage values in their places on the dossier, without retyping anything.
   await doctor.reload()
   await expect(docRow).toBeVisible()
   await docRow.getByRole('link', { name: 'باز کردن پرونده' }).click()
-  const summary = doctor.getByRole('region', { name: 'خلاصه پیش از معاینه' })
-  const triageOd = summary.getByRole('table').first().getByRole('row').nth(1)
-  await expect(triageOd).toContainText('6/9')
-  await expect(triageOd).toContainText('6/6')
-  await expect(summary.getByRole('table').first().getByRole('row').nth(2)).toContainText('17')
-  await expect(summary).toContainText('حساسیت به پنسلین')
-  await expect(summary.getByRole('table').nth(1).getByRole('row').nth(1)).toContainText('-2.00')
+  const front = doctor.getByRole('article', { name: 'روی دوسیه' })
+  await expect(front).toContainText('6/9')
+  await expect(front).toContainText('17')
+  await expect(front).toContainText('پنسلین')
+  await expect(front).toContainText('-2.00')
 
   // Nothing is recorded as a finding until the doctor enters it.
   await expect(doctor.getByLabel('قرنیه OD')).toHaveValue('')
-  await doctor.getByLabel('شرح حال').fill('تاری دید از دو ماه')
-  await doctor.getByLabel('قرنیه OD').fill('Clear')
-  await doctor.getByLabel('عدسیه OS').fill('Nuclear sclerosis')
-  await doctor.getByLabel(/یافته‌های چشم راست/).fill('یافته نمونه')
+  await doctor.getByLabel('شرح حال داکتر').fill('تاری دید از دو ماه')
+  await doctor.getByLabel('قرنیه OD').selectOption('Clear')
+  await doctor.getByLabel('عدسیه OS').selectOption('Nuclear Sclerosis')
+  // A click on the drawing of the eye opens the fundus choices.
+  await doctor.getByLabel('فوندوس OD').selectOption('Cup/Disc 0.4')
   await doctor.getByRole('button', { name: 'ذخیره', exact: true }).click()
-  await expect(doctor.getByRole('status')).toContainText('ذخیره شد')
+  await expect(doctor.getByText('ذخیره شد.')).toBeVisible()
 
-  // Structured values come back from the database in their own rows, with the free note kept apart.
+  // Structured values come back from the database in their own boxes, with the free note kept apart.
   await doctor.reload()
   await expect(doctor.getByLabel('قرنیه OD')).toHaveValue('Clear')
   await expect(doctor.getByLabel('قرنیه OS')).toHaveValue('')
-  await expect(doctor.getByLabel('عدسیه OS')).toHaveValue('Nuclear sclerosis')
-  await expect(doctor.getByLabel('شرح حال')).toHaveValue('تاری دید از دو ماه')
-  await expect(doctor.getByLabel(/یافته‌های چشم راست/)).toHaveValue('یافته نمونه')
+  await expect(doctor.getByLabel('عدسیه OS')).toHaveValue('Nuclear Sclerosis')
+  await expect(doctor.getByLabel('شرح حال داکتر')).toHaveValue('تاری دید از دو ماه')
+  await expect(doctor.getByLabel('فوندوس OD')).toHaveValue('Cup/Disc 0.4')
+  await expect(doctor.getByRole('article', { name: 'روی دوسیه' })).toContainText('Cup/Disc 0.4')
 
   // The final refraction fills the glasses form only when asked, and is issued only on submit.
-  await doctor.getByRole('tab', { name: 'نسخه عینک' }).click()
+  await doctor.getByRole('button', { name: /^نسخه عینک/ }).click()
+  await doctor.getByRole('button', { name: 'نسخه عینک جدید' }).click()
   await expect(doctor.getByLabel('نسخه عینک: SPH OD')).toHaveValue('')
   await doctor.getByRole('button', { name: 'انتقال از نسخه نهایی بینایی‌سنجی' }).click()
   await expect(doctor.getByLabel('نسخه عینک: SPH OD')).toHaveValue('-2.00')
   await expect(doctor.getByLabel('PD', { exact: true })).toHaveValue('63')
   await expect(doctor.getByText('نسخه عینک ثبت نشده است.')).toBeVisible()
+  await doctor.keyboard.press('Escape')
 
   // Lab order travels to the lab, and the result comes back to the chart.
-  await doctor.getByRole('tab', { name: 'آزمایش' }).click()
+  await doctor.getByRole('button', { name: /^درخواست تشخیصی/ }).click()
+  await doctor.getByRole('button', { name: 'درخواست تشخیصی جدید' }).click()
   await pick(doctor, doctor.locator('body'), 'درخواست', testName)
-  await doctor.getByRole('button', { name: 'درخواست' }).click()
+  await doctor.getByRole('button', { name: 'درخواست', exact: true }).click()
   await expect(doctor.getByRole('row', { name: new RegExp(testName) })).toContainText('درخواست‌شده')
 
   const lab = await staffPage(browser, `lab_${stamp}`, errors)
@@ -239,14 +243,14 @@ test('full clinical journey crosses departments without re-entering data', async
   await expect(labRow).toContainText('نتیجه آماده')
 
   await doctor.reload()
-  await doctor.getByRole('tab', { name: 'آزمایش' }).click()
+  await doctor.getByRole('button', { name: /^درخواست تشخیصی/ }).click()
   await expect(doctor.getByRole('row', { name: new RegExp(testName) })).toContainText('نتیجه نمونه آزمایش')
+  await doctor.keyboard.press('Escape')
 
   // Finalise: direct edit closes, amendment stays available.
-  await doctor.getByRole('tab', { name: 'معاینه' }).click()
   await doctor.getByRole('button', { name: 'نهایی‌سازی و تکمیل مراجعه' }).click()
-  await expect(doctor.getByRole('status')).toContainText('نهایی')
-  await expect(doctor.getByLabel(/یافته‌های چشم راست/)).toBeDisabled()
+  await expect(doctor.getByText('معاینه نهایی و مراجعه تکمیل شد.')).toBeVisible()
+  await expect(doctor.getByLabel('فوندوس OD')).toBeDisabled()
   await expect(doctor.getByRole('button', { name: 'ثبت اصلاحیه' })).toBeVisible()
 
   // Reception still has no way into the clinical record.

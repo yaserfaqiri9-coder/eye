@@ -74,6 +74,8 @@ public sealed class OpeningStockSheetTests(ApiFixture api)
         Assert.Equal(Outcome.Error, Evaluate(Row(expiry: "11/12/2028"), Locations, today).Outcome);
         Assert.Equal(Outcome.Held, Evaluate(Row(dose: ""), Locations, today).Outcome);
         Assert.Equal(Outcome.Held, Evaluate(Row(expiry: ""), Locations, today).Outcome);
+        var explicitlyUndated = Evaluate(Row(expiry: ""), Locations, today, allowMissingDrugExpiry: true);
+        Assert.Equal((Outcome.Import, (DateOnly?)null), (explicitlyUndated.Outcome, explicitlyUndated.Item!.Expiry));
         Assert.Equal(Outcome.Held, Evaluate(Row(expiry: "2026-10"), Locations, today).Outcome);
 
         // A supply needs neither dose nor expiry, and unknown prices stay unknown.
