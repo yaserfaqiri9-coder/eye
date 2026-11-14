@@ -152,7 +152,6 @@ test('the file prints on one double-sided A4 sheet from recorded data, and the o
   await doctor.getByRole('combobox', { name: 'افزودن دوا' }).fill('Timolol 0.5%')
   await doctor.getByRole('combobox', { name: 'افزودن دوا' }).press('Enter')
   await doctor.getByLabel('دوز 1').fill('1x2')
-  await doctor.getByLabel('مدت 1').fill('30 days')
   await doctor.getByRole('textbox', { name: 'تاریخ پیگیری', exact: true }).fill('1410/01/15')
   await doctor.getByRole('textbox', { name: 'تاریخ پیگیری', exact: true }).press('Tab')
   await doctor.getByRole('button', { name: 'ذخیره', exact: true }).click()
