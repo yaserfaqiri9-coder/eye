@@ -126,6 +126,29 @@ public sealed class CallTests(ApiFixture api)
         client.PostAsJsonAsync("/api/calls", new CreateCallRequest(desk, visitId, null, recall));
 
     [Fact]
+    public async Task Tv_observes_patient_name_without_claiming_audio_and_hides_expired_calls()
+    {
+        var (station, stationId) = await StationAsync();
+        var (patient, visit) = await NewVisitAsync();
+        var triage = await UserAsync(Roles.Triage);
+        var tv = await UserAsync(Roles.AudioStation);
+        await Read<CallRow>(await Call(triage, CallDesk.Vision, visit.Id), HttpStatusCode.Created);
+        Assert.Equal(HttpStatusCode.NoContent, (await tv.GetAsync("/api/calls/display")).StatusCode);
+        var next = (await NextAsync(station, stationId))!;
+        var display = await Read<DisplayCallDto>(await tv.GetAsync("/api/calls/display"));
+        Assert.Equal(next.Id, display.Id);
+        Assert.Equal(visit.QueueNumber, display.QueueNumber);
+        Assert.Equal($"{patient.FirstName} {patient.LastName}".Trim(), display.PatientName);
+        Assert.Equal(next.Destination, display.Destination);
+        Assert.Equal(HttpStatusCode.Forbidden, (await triage.GetAsync("/api/calls/display")).StatusCode);
+        Assert.True((await Finish(station, stationId, next.Id)).IsSuccessStatusCode);
+        Assert.Equal(next.Id, (await Read<DisplayCallDto>(await tv.GetAsync("/api/calls/display"))).Id);
+        await InDbAsync(db => db.PatientCalls.Where(c => c.Id == next.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.FinishedAt, DateTime.UtcNow.AddMinutes(-1))));
+        Assert.Equal(HttpStatusCode.NoContent, (await tv.GetAsync("/api/calls/display")).StatusCode);
+    }
+
+    [Fact]
     public async Task A_call_reaches_the_speaker_once_with_number_and_place_only_and_changes_nothing_else()
     {
         var (station, stationId) = await StationAsync();
@@ -140,9 +163,9 @@ public sealed class CallTests(ApiFixture api)
         var raw = await station.PostAsJsonAsync("/api/calls/station/next", new NextCallRequest(stationId));
         var text = await raw.Content.ReadAsStringAsync();
         Assert.DoesNotContain(patient.FirstName, text);
-        Assert.DoesNotContain(patient.FileNumber, text);
+        Assert.DoesNotContain("fileNumber", text, StringComparison.OrdinalIgnoreCase);
         var next = JsonSerializer.Deserialize<NextCallDto>(text, JsonOptions)!;
-        Assert.Equal([$"number-{visit.QueueNumber:D4}.mp3", "to-vision.mp3"], next.Clips);
+        Assert.Equal(VoicePack.RecordedClips(visit.QueueNumber!.Value, "vision", CallDesk.Vision), next.Clips);
 
         // Nothing else is handed out while one is playing, so announcements cannot overlap.
         await AssertRefused(await Call(triage, CallDesk.Vision, visit.Id), "already_calling");
@@ -160,9 +183,9 @@ public sealed class CallTests(ApiFixture api)
         var view = await Read<CallDeskView>(await triage.GetAsync("/api/calls/desk/Vision"));
         Assert.Equal("Played", view.Rows.Single(r => r.VisitId == visit.Id).LastCall!.Status);
 
-        // The recall says "again", and the history records who called for which visit.
+        // Recall has a new event ID and repeats the recorded announcement; history retains the actor.
         await Read<CallRow>(await Call(triage, CallDesk.Vision, visit.Id, recall: true), HttpStatusCode.Created);
-        Assert.Equal("again-vision.mp3", (await NextAsync(station, stationId))!.Clips[1]);
+        Assert.Equal(VoicePack.RecordedBase + "destinations/destination_initial_exam.wav", (await NextAsync(station, stationId))!.Clips[1]);
         var audit = await InDbAsync(db => db.AuditLogs.AsNoTracking().Where(a => a.Action == "PatientRecalled" && a.EntityId == visit.Id.ToString()).SingleAsync());
         Assert.Contains(visit.VisitNumber, audit.Details);
         Assert.NotNull(audit.UserId);
@@ -184,7 +207,7 @@ public sealed class CallTests(ApiFixture api)
 
         await AssertRefused(await Call(triage, CallDesk.Vision, visit.Id), "not_in_queue");
         await Read<CallRow>(await Call(doctor, CallDesk.Doctor, visit.Id), HttpStatusCode.Created);
-        Assert.Equal("to-room-03.mp3", (await NextAsync(station, stationId))!.Clips[1]);
+        Assert.Equal(VoicePack.RecordedBase + "destinations/destination_doctor.wav", (await NextAsync(station, stationId))!.Clips[1]);
     }
 
     [Fact]
@@ -208,7 +231,7 @@ public sealed class CallTests(ApiFixture api)
         var called = await Read<CallRow>(await Call(triage, CallDesk.Refraction, visit.Id), HttpStatusCode.Created);
         var next = await NextAsync(station, stationId);
         Assert.Equal(called.Id, next!.Id);
-        Assert.Equal("to-refraction.mp3", next.Clips[1]);
+        Assert.Equal(VoicePack.RecordedBase + "destinations/destination_refraction.wav", next.Clips[1]);
         Assert.True((await Finish(station, stationId, next.Id)).IsSuccessStatusCode);
 
         // The doctor still waits for the answer, so the patient cannot be called back yet.
@@ -222,7 +245,7 @@ public sealed class CallTests(ApiFixture api)
         var other = await DoctorInRoomAsync(5);
         await AssertRefused(await Call(other.Client, CallDesk.Doctor, visit.Id), "not_responsible_doctor", HttpStatusCode.Forbidden);
         await Read<CallRow>(await Call(doctor, CallDesk.Doctor, visit.Id), HttpStatusCode.Created);
-        Assert.Equal("to-room-04.mp3", (await NextAsync(station, stationId))!.Clips[1]);
+        Assert.Equal(VoicePack.RecordedBase + "destinations/destination_doctor.wav", (await NextAsync(station, stationId))!.Clips[1]);
     }
 
     [Fact]
@@ -321,7 +344,7 @@ public sealed class CallTests(ApiFixture api)
     }
 
     [Fact]
-    public async Task One_station_at_a_time_and_no_call_without_a_working_station_or_clip()
+    public async Task One_station_at_a_time_and_missing_legacy_audio_does_not_block_calls()
     {
         var (first, firstId) = await StationAsync();
         var triage = await UserAsync(Roles.Triage);
@@ -341,10 +364,12 @@ public sealed class CallTests(ApiFixture api)
         File.Delete(clip);
         try
         {
-            await AssertRefused(await Call(triage, CallDesk.Vision, visit.Id), "voice_clip_missing");
+            var created = await Read<CallRow>(await Call(triage, CallDesk.Vision, visit.Id), HttpStatusCode.Created);
+            Assert.Equal(created.Id, (await NextAsync(second, secondId))!.Id);
+            Assert.True((await Finish(second, secondId, created.Id)).IsSuccessStatusCode);
             var status = await Read<StationStatus>(await second.GetAsync($"/api/calls/station/status?stationId={secondId}"));
             Assert.True(status.Active);
-            Assert.Equal(1, status.ClipsMissing);
+            Assert.Equal(0, status.ClipsMissing);
             Assert.Equal(HttpStatusCode.NotFound, (await second.GetAsync("/api/calls/voice/to-vision.mp3")).StatusCode);
         }
         finally
@@ -357,8 +382,8 @@ public sealed class CallTests(ApiFixture api)
         Assert.False((await Read<CallDeskView>(await triage.GetAsync("/api/calls/desk/Vision"))).StationOnline);
 
         // No station online: the desk that pressed the button announces it, and a station returning later does not repeat it.
-        var local = await Read<CallRow>(await Call(triage, CallDesk.Vision, visit.Id), HttpStatusCode.Created);
-        Assert.Equal([$"number-{visit.QueueNumber:D4}.mp3", "to-vision.mp3"], local.LocalClips);
+        var local = await Read<CallRow>(await Call(triage, CallDesk.Vision, visit.Id, recall: true), HttpStatusCode.Created);
+        Assert.Equal(VoicePack.RecordedClips(visit.QueueNumber!.Value, "vision", CallDesk.Vision), local.LocalClips);
         Assert.Equal(nameof(CallStatus.Playing), local.Status);
         await AssertRefused(await Call(triage, CallDesk.Vision, visit.Id), "already_calling");
 
@@ -410,7 +435,7 @@ public sealed class CallTests(ApiFixture api)
         Assert.DoesNotContain(view.Rows, r => r.TokenId == unpaid.Id);
 
         await Read<CallRow>(await desk.PostAsJsonAsync("/api/calls", new CreateCallRequest(CallDesk.Reception, null, tokenId, false)), HttpStatusCode.Created);
-        Assert.Equal("to-reception.mp3", (await NextAsync(station, stationId))!.Clips[1]);
+        Assert.Equal(VoicePack.RecordedBase + "destinations/destination_reception.wav", (await NextAsync(station, stationId))!.Clips[1]);
 
         var admin = await UserAsync(Roles.SuperAdmin);
         await AssertRefused(await admin.PutAsJsonAsync("/api/calls/settings", new SaveCallSettingsRequest([new CallDeskRoom(CallDesk.Vision, 99)], [])), "invalid_room", HttpStatusCode.BadRequest);
@@ -427,7 +452,7 @@ public sealed class CallTests(ApiFixture api)
 
             await InDbAsync(db => db.PatientCalls.Where(c => c.Status == CallStatus.Playing).ExecuteUpdateAsync(s => s.SetProperty(c => c.Status, CallStatus.Played)));
             await Read<CallRow>(await Call(triage, CallDesk.Vision, visit.Id), HttpStatusCode.Created);
-            Assert.Equal("to-room-07.mp3", (await NextAsync(station, stationId))!.Clips[1]);
+            Assert.Equal(VoicePack.RecordedBase + "destinations/destination_initial_exam.wav", (await NextAsync(station, stationId))!.Clips[1]);
         }
         finally
         {

@@ -211,7 +211,7 @@ public static class SettingsEndpoints
 
             if (file.Length > MaxFileSize)
             {
-                throw new AppException(StatusCodes.Status400BadRequest, "file_too_large", "حجم فایل بیشتر از ۱۰ مگابایت است.");
+                throw new AppException(StatusCodes.Status400BadRequest, "file_too_large", "حجم فایل بیشتر از 10 مگابایت است.");
             }
 
             await using var buffer = new MemoryStream();

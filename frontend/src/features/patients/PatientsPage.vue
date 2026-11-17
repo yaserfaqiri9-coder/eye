@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, errorMessage } from '@/api/http'
 import UiCard from '@/components/UiCard.vue'
+import UiFilterBar from '@/components/UiFilterBar.vue'
 import UiPager from '@/components/UiPager.vue'
 import UiListSkeleton from '@/components/UiListSkeleton.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -73,17 +74,19 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <UiCard title="مریضان">
-    <template #actions>
-      <RouterLink v-if="auth.can('patients.create')" to="/patients/new" class="btn btn-primary">مریض جدید</RouterLink>
+  <UiFilterBar
+    v-model:search="q"
+    title="مریضان"
+    search-label="جستجوی مریض"
+    search-placeholder="جستجو با نام، شماره پرونده یا شماره تماس"
+    :count="total > 0 ? `${quantity(total)} مریض` : undefined"
+  >
+    <template v-if="auth.can('patients.create')" #actions>
+      <RouterLink to="/patients/new" class="btn btn-primary">مریض جدید</RouterLink>
     </template>
+  </UiFilterBar>
 
-    <div class="row mb-3 align-items-center gy-2">
-      <div class="col-md-6">
-        <input v-model="q" type="search" class="form-control" placeholder="جستجو با نام، شماره پرونده یا شماره تماس" aria-label="جستجوی مریض" />
-      </div>
-      <div v-if="total > 0" class="col-md-6 text-md-end xr-meta">{{ quantity(total) }} مریض</div>
-    </div>
+  <UiCard>
 
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
     <UiListSkeleton v-if="loading && rows.length === 0" />

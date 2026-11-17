@@ -13,6 +13,7 @@ export interface Patient extends PatientListItem {
   birthDate: string | null
   estimatedBirthYear: number | null
   address: string | null
+  occupation: string | null
   createdAt: string
   version: number
 }

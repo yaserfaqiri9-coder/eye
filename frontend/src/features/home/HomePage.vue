@@ -84,6 +84,7 @@ const timeline = computed(() => [...visits.value].sort((a, b) => b.createdAt.loc
 
   <!-- Today's money and stock figures first, always on one row however narrow the screen. -->
   <div v-if="dashboard" class="home-stats">
+    <StatCard label="مراجعات امروز" :value="todayTotal" icon="ri-group-fill" tone="cyan" />
     <StatCard label="اجناس کم‌موجود" :value="dashboard.lowStockProducts" icon="ri-archive-fill" tone="orange" />
     <StatCard v-if="financial" label="دریافت امروز" :value="money(financial.receipts)" icon="ri-money-dollar-circle-fill" />
     <StatCard v-if="financial" label="مصارف امروز" :value="money(financial.expenses)" icon="ri-wallet-3-fill" tone="red" />
@@ -371,34 +372,6 @@ const timeline = computed(() => [...visits.value].sort((a, b) => b.createdAt.loc
   grid-auto-columns: minmax(0, 1fr);
   gap: var(--xr-gap);
   margin-bottom: var(--xr-gap-y);
-}
-
-.home-stats :deep(.stat) {
-  min-width: 0;
-  container-type: inline-size;
-}
-
-@container (max-width: 260px) {
-  .home-stats :deep(.stat__tile) { min-height: 96px; padding: 14px; gap: 10px; }
-  .home-stats :deep(.stat__icon) { width: 44px; height: 44px; font-size: 18px; }
-  .home-stats :deep(.stat__value) { font-size: 22px; line-height: 1.35; }
-  .home-stats :deep(.stat__label) { font-size: 14px; line-height: 1.5; }
-}
-
-/* Too narrow for icon beside text: stack them and centre. */
-@container (max-width: 180px) {
-  .home-stats :deep(.stat__tile) { flex-direction: column; justify-content: center; min-height: 0; padding: 10px 8px; gap: 6px; }
-  .home-stats :deep(.stat__icon) { width: 34px; height: 34px; font-size: 15px; }
-  .home-stats :deep(.stat__text) { text-align: center; }
-  .home-stats :deep(.stat__value) { font-size: 16px; }
-  .home-stats :deep(.stat__label) { font-size: 12px; }
-}
-
-@container (max-width: 100px) {
-  .home-stats :deep(.stat__icon) { display: none; }
-  .home-stats :deep(.stat__tile) { padding: 8px 4px; }
-  .home-stats :deep(.stat__value) { font-size: 13px; }
-  .home-stats :deep(.stat__label) { font-size: 11px; }
 }
 
 @media (max-width: 575.98px) {

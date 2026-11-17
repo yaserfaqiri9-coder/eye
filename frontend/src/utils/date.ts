@@ -5,8 +5,9 @@ export const afghanMonths = ['حمل', 'ثور', 'جوزا', 'سرطان', 'اس
 /** Week columns as printed on Afghan calendars: Saturday first. */
 export const weekdayNames = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه']
 
-const dateFormat = new Intl.DateTimeFormat('fa-AF-u-ca-persian', { timeZone: ZONE, year: 'numeric', month: 'long', day: 'numeric' })
-const dateTimeFormat = new Intl.DateTimeFormat('fa-AF-u-ca-persian', {
+// Dari month names with English digits: the hospital reads numbers in English digits everywhere.
+const dateFormat = new Intl.DateTimeFormat('fa-AF-u-ca-persian-nu-latn', { timeZone: ZONE, year: 'numeric', month: 'long', day: 'numeric' })
+const dateTimeFormat = new Intl.DateTimeFormat('fa-AF-u-ca-persian-nu-latn', {
   timeZone: ZONE,
   year: 'numeric',
   month: 'long',
@@ -15,7 +16,7 @@ const dateTimeFormat = new Intl.DateTimeFormat('fa-AF-u-ca-persian', {
   minute: '2-digit',
   hour12: false,
 })
-const timeFormat = new Intl.DateTimeFormat('fa-AF', { timeZone: ZONE, hour: '2-digit', minute: '2-digit', hour12: false })
+const timeFormat = new Intl.DateTimeFormat('fa-AF-u-nu-latn', { timeZone: ZONE, hour: '2-digit', minute: '2-digit', hour12: false })
 const partsFormat = (timeZone: string) => new Intl.DateTimeFormat('en-u-ca-persian-nu-latn', { timeZone, year: 'numeric', month: 'numeric', day: 'numeric' })
 const kabulParts = partsFormat(ZONE)
 const utcParts = partsFormat('UTC')
@@ -97,6 +98,13 @@ export function shamsiToIso(year: number, month: number, day: number) {
 // A calendar date has no time of day: read at UTC midnight and formatted in UTC, it cannot shift by a day in any zone.
 const atUtcMidnight = (iso: string) => new Date(`${iso.slice(0, 10)}T00:00:00Z`)
 
+/** A yyyy-MM-dd date moved by whole days. */
+export function addDays(iso: string, days: number) {
+  const date = atUtcMidnight(iso)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
 /** Converts a stored yyyy-MM-dd date to its Shamsi parts. */
 export function isoToShamsi(iso: string): ShamsiDate {
   return readParts(utcParts, atUtcMidnight(iso))
@@ -110,19 +118,16 @@ export function shamsiWeekColumn(year: number, month: number, day: number) {
 const persianDigits = '۰۱۲۳۴۵۶۷۸۹'
 const arabicDigits = '٠١٢٣٤٥٦٧٨٩'
 
-export function latinDigits(value: string) {
-  return value.replace(/[۰-۹]/g, (d) => String(persianDigits.indexOf(d))).replace(/[٠-٩]/g, (d) => String(arabicDigits.indexOf(d)))
+/** Reads Dari or Arabic digits as English ones. Typed input may still come in either, so it is always accepted. */
+export function latinDigits(value: string | number) {
+  return String(value).replace(/[۰-۹]/g, (d) => String(persianDigits.indexOf(d))).replace(/[٠-٩]/g, (d) => String(arabicDigits.indexOf(d)))
 }
 
-export function faDigits(value: string | number) {
-  return String(value).replace(/\d/g, (d) => persianDigits[Number(d)])
-}
-
-/** yyyy-MM-dd as the digits a user reads and types, such as ۱۴۰۵/۰۸/۱۲. */
+/** yyyy-MM-dd as the digits a user reads and types, such as 1405/08/12. */
 export function formatShamsi(iso: string | null | undefined) {
   if (!iso) return ''
   const { year, month, day } = isoToShamsi(iso)
-  return faDigits(`${year}/${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}`)
+  return `${year}/${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}`
 }
 
 /** Reads a typed Shamsi date in Dari or Latin digits. Returns yyyy-MM-dd, or null when no such day exists. */

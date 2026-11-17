@@ -103,6 +103,33 @@ public sealed class HospitalReadinessTests(ApiFixture api)
         (int)(await client.GetFromJsonAsync<List<LookupItem>>("/api/lookups/departments"))!.Single(d => d.Name == name).Id;
 
     [Fact]
+    public async Task Purchase_adds_a_typed_product_once_and_a_failed_purchase_adds_none()
+    {
+        var inventory = await UserAsync(Roles.Inventory);
+        var name = "دوای تازه " + Name("n");
+        var expiry = DateOnly.FromDateTime(DateTime.UtcNow.AddYears(1));
+        PurchaseLineInput Line(string product, decimal quantity) =>
+            new(0, Name("L"), expiry, quantity, 40, new NewProductInput(" " + product + " ", ProductKind.Drug, "دانه", 120));
+
+        // The same new name twice on one form, then again on a later purchase: one product, all stock on it.
+        await Created<JsonElement>(await inventory.SendAsync(Post("/api/inventory/purchases", new CreatePurchaseRequest("تأمین‌کننده", "pharmacy", [Line(name, 5), Line(name, 3)]))));
+        await Created<JsonElement>(await inventory.SendAsync(Post("/api/inventory/purchases", new CreatePurchaseRequest("تأمین‌کننده", "pharmacy", [Line(name, 2)]))));
+
+        // A purchase that fails after the new product was added (its other line is unknown) leaves no product behind.
+        var lost = "دوای ناموفق " + Name("n");
+        var failed = await inventory.SendAsync(Post("/api/inventory/purchases", new CreatePurchaseRequest("تأمین‌کننده", "pharmacy",
+            [Line(lost, 1), new PurchaseLineInput(int.MaxValue, null, null, 1, 40)])));
+        Assert.Equal(HttpStatusCode.BadRequest, failed.StatusCode);
+
+        using var scope = api.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var product = await db.Products.AsNoTracking().SingleAsync(p => p.Name == name);
+        Assert.Equal((ProductKind.Drug, "دانه", 120m, true), (product.Kind, product.Unit, product.SalePrice, product.IsActive));
+        Assert.Equal(10m, await db.StockBatches.Where(b => b.ProductId == product.Id).SumAsync(b => b.Quantity));
+        Assert.False(await db.Products.AnyAsync(p => p.Name == lost));
+    }
+
+    [Fact]
     public async Task Four_users_log_in_at_once_and_their_sessions_stay_independent()
     {
         var roles = new[] { Roles.Receptionist, Roles.Doctor, Roles.Pharmacist, Roles.Cashier };

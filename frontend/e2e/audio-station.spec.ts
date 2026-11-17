@@ -1,17 +1,11 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { expect, test, type Browser, type Page } from '@playwright/test'
 import { call, ensureTariffs, openDesk, paidToken } from './helpers'
 
 const adminUser = process.env.ALSHIFA_E2E_USER!
 const adminPassword = process.env.ALSHIFA_E2E_PASSWORD!
-// The API's Storage:Path plus "voice".
-const voiceDir = process.env.ALSHIFA_E2E_VOICE_DIR!
 const password = 'E2e-Password-123'
 
-/** Half a second of real, decodable MPEG audio. The test measures the player's timing, not how anything sounds. */
-const silence = Buffer.concat(Array.from({ length: 20 }, () => Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x00]), Buffer.alloc(413)])))
-
+// These integration tests require a disposable test database; never run against hospital data.
 interface Spied {
   started: number[]
   ended: number[]
@@ -61,8 +55,6 @@ async function newVisit(reception: Page, departmentId: number) {
 
 test('with no station online, a call plays on the computer that pressed the button', async ({ page, browser }) => {
   test.setTimeout(120_000)
-  mkdirSync(voiceDir, { recursive: true })
-  for (const clip of ['to-vision.mp3', 'again-vision.mp3']) writeFileSync(join(voiceDir, clip), silence)
 
   await login(page, adminUser, adminPassword)
   await ensureTariffs(page)
@@ -70,7 +62,6 @@ test('with no station online, a call plays on the computer that pressed the butt
   await openDesk(page, reception.page)
   const departments = await call<{ id: number; name: string }[]>(reception.page, 'GET', '/lookups/departments')
   const visit = await newVisit(reception.page, departments.find((d) => d.name === 'معاینه ابتدایی')!.id)
-  writeFileSync(join(voiceDir, `number-${String(visit.queueNumber).padStart(4, '0')}.mp3`), silence)
 
   const nurse = await staff(browser, page, 'Triage', true)
   await nurse.page.goto('/triage')
@@ -78,17 +69,15 @@ test('with no station online, a call plays on the computer that pressed the butt
 
   const number = visit.queueNumber.toLocaleString('fa-AF', { useGrouping: false })
   await nurse.page.getByRole('button', { name: `فراخوان نوبت ${number}`, exact: true }).click()
-  await expect.poll(async () => (await audio(nurse.page)).ended.length, { timeout: 30_000 }).toBe(2)
+  await expect.poll(async () => (await audio(nurse.page)).ended.length, { timeout: 30_000 }).toBe(1)
   await expect(nurse.page.getByRole('row').filter({ hasText: number }).getByText('اعلان شد')).toBeVisible({ timeout: 15_000 })
 
   await reception.context.close()
   await nurse.context.close()
 })
 
-test('calls play once, one at a time, survive a network outage without repeats, and report a missing file', async ({ page, browser }) => {
+test('calls play once, one at a time, survive a network outage without repeats, and preserve attendance behavior', async ({ page, browser }) => {
   test.setTimeout(180_000)
-  mkdirSync(voiceDir, { recursive: true })
-  for (const clip of ['to-vision.mp3', 'again-vision.mp3']) writeFileSync(join(voiceDir, clip), silence)
 
   await spyOnAudio(page)
   await login(page, adminUser, adminPassword)
@@ -102,7 +91,6 @@ test('calls play once, one at a time, survive a network outage without repeats, 
   const second = await newVisit(reception.page, triageDepartment)
   const third = await newVisit(reception.page, triageDepartment)
   expect(new Set([first.queueNumber, second.queueNumber, third.queueNumber]).size).toBe(3)
-  for (const visit of [first, second, third]) writeFileSync(join(voiceDir, `number-${String(visit.queueNumber).padStart(4, '0')}.mp3`), silence)
 
   const nurse = await staff(browser, page, 'Triage')
   await nurse.page.goto('/triage')
@@ -144,7 +132,7 @@ test('calls play once, one at a time, survive a network outage without repeats, 
   await colleague.page.goto('/triage')
   const colleagueButton = colleague.page.getByRole('button', { name: `فراخوان نوبت ${faNumber(second)}`, exact: true })
   await Promise.all([callButton(first).click(), colleagueButton.click()])
-  await expect.poll(async () => (await audio(page)).ended.length, { timeout: 30_000 }).toBe(4)
+  await expect.poll(async () => (await audio(page)).ended.length, { timeout: 30_000 }).toBe(2)
   const heard = await audio(page)
   for (let i = 1; i < heard.started.length; i++) {
     expect(heard.started[i]).toBeGreaterThanOrEqual(heard.ended[i - 1] - 0.05)
@@ -167,19 +155,15 @@ test('calls play once, one at a time, survive a network outage without repeats, 
   await page.waitForTimeout(3_000)
   expect((await audio(page)).started).toHaveLength(0)
   await page.context().setOffline(false)
-  await expect.poll(async () => (await audio(page)).ended.length, { timeout: 30_000 }).toBe(2)
+  await expect.poll(async () => (await audio(page)).ended.length, { timeout: 30_000 }).toBe(1)
   await page.waitForTimeout(6_000)
-  expect((await audio(page)).started).toHaveLength(2)
+  expect((await audio(page)).started).toHaveLength(1)
 
-  // Recall is a person's decision and uses its own announcement.
+  // Recall is a person's decision: a new event repeats the same recorded announcement.
   await callButton(first, 'فراخوان مجدد').click()
-  await expect.poll(async () => (await audio(page)).ended.length, { timeout: 30_000 }).toBe(4)
+  await expect.poll(async () => (await audio(page)).ended.length, { timeout: 30_000 }).toBe(2)
 
-  // A missing file stops the call at the desk, with the file named, and nothing goes out half-said.
-  rmSync(join(voiceDir, 'again-vision.mp3'))
-  await callButton(first, 'فراخوان مجدد').click()
-  await expect(nurse.page.getByRole('alert').filter({ hasText: 'فایل صوتی این اعلان موجود نیست' })).toBeVisible()
-  expect((await audio(page)).started).toHaveLength(4)
+  // Missing-file recovery and unsupported audio are covered by the isolated recorded-audio suite.
 
   // Attendance is recorded on the row and does not move the patient.
   await nurse.page.getByRole('button', { name: `گزینه‌های بیشتر نوبت ${faNumber(first)}`, exact: true }).click()

@@ -102,7 +102,7 @@ public static class SurgeryEndpoints
 
                 var surgery = new SurgeryCase
                 {
-                    CaseNumber = $"SG-{await numbers.NextAsync("surgery", ct: ct):D6}",
+                    CaseNumber = await numbers.NextNumberAsync("surgery", ct),
                     PatientId = patientId,
                     VisitId = request.VisitId,
                     SurgeryType = request.SurgeryType.Trim(),

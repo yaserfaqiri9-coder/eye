@@ -17,6 +17,9 @@ export interface VisitRow {
   nextStatuses: string[]
   patientGender: string
   feeStatus: 'Paid' | 'Unpaid' | 'Refunded' | 'None'
+  /** Triage has finished its part for this visit. */
+  visionComplete?: boolean
+  patientAgeYears?: number | null
 }
 
 export interface VisitToken {

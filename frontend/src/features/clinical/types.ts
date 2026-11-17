@@ -180,6 +180,10 @@ export interface HistoryItem {
   doctorName: string | null
   treatmentPlan: string | null
   diagnoses: Diagnosis[]
+  visualAcuityOd?: string | null
+  visualAcuityOs?: string | null
+  iopOd?: string | null
+  iopOs?: string | null
 }
 
 export interface SurgeryRow {
@@ -227,6 +231,10 @@ export interface SurgeryPackage {
   isActive: boolean
   version: number
   items: PackageItem[]
+  /** Packages on the shelf of its store. */
+  onHand: number
+  /** Buying price of the latest stock added. */
+  costPrice: number | null
 }
 
 export interface SupplyStock {

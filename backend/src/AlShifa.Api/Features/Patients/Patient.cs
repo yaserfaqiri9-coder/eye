@@ -37,6 +37,10 @@ public class Patient
     [MaxLength(300)]
     public string? Address { get; set; }
 
+    /// <summary>The "Occupation" line at the head of the paper file.</summary>
+    [MaxLength(100)]
+    public string? Occupation { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public long CreatedByUserId { get; set; }

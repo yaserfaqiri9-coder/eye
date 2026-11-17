@@ -7,7 +7,11 @@ import { useAuthStore } from '@/stores/auth'
 import { formatDate } from '@/utils/date'
 import { quantity } from '@/utils/money'
 
-const props = defineProps<{ visit: VisitRow }>()
+/**
+ * `allergy` is what the patient reacts to, `conditions` the systemic diseases they answered yes to.
+ * Both sit beside the name so they are read before anything is prescribed.
+ */
+const props = defineProps<{ visit: VisitRow; allergy?: string | null; conditions?: string[] }>()
 const auth = useAuthStore()
 const patient = ref<Patient | null>(null)
 
@@ -54,6 +58,14 @@ onMounted(load)
         <dd>{{ visit.reason ?? '—' }}</dd>
       </div>
     </dl>
+    <div v-if="allergy != null || conditions?.length" class="banner__alerts">
+      <span v-if="allergy != null" class="banner__alert banner__alert--danger" role="alert">
+        <i class="ri-alert-fill" aria-hidden="true"></i> حساسیت: <bdi>{{ allergy || 'دارد (نوع آن ثبت نشده)' }}</bdi>
+      </span>
+      <span v-if="conditions?.length" class="banner__alert">
+        <i class="ri-heart-pulse-line" aria-hidden="true"></i> بیماری‌ها: <bdi dir="ltr">{{ conditions.join(', ') }}</bdi>
+      </span>
+    </div>
   </section>
 </template>
 
@@ -79,6 +91,30 @@ onMounted(load)
 
 .banner__details {
   color: var(--xr-text-muted);
+}
+
+.banner__alerts {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  gap: 8px;
+}
+
+.banner__alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--xr-status-orange) 14%, transparent);
+  color: var(--xr-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.banner__alert--danger {
+  background: color-mix(in srgb, var(--xr-status-red) 16%, transparent);
+  color: var(--xr-status-red);
 }
 
 @media (max-width: 991.98px) {

@@ -1,5 +1,8 @@
 # Local SDK, MySQL data and development passwords
 .tools/
+.artifacts/
+__pycache__/
+*.pyc
 
 # Build output
 bin/
@@ -41,3 +44,18 @@ storage/
 
 # Release builds of the hospital package
 /release/
+
+# Local backups, import data and downloaded installer packages
+/backups/
+/.work/
+/outputs/
+/11111111111/
+/11111111111.zip
+/eye_clinic_backup.json
+/*.xlsx
+/AlShifa-TV.zip
+/frontend/public/tools/AlShifa-TV.zip
+/*.rar
+/*.zip
+/*.pdf
+/deploy/stock-import/hospital-drug-list-2026-11-16.csv

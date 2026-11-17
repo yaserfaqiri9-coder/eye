@@ -267,6 +267,12 @@ public sealed class VisitFlowTests(ApiFixture api)
         await Read<RefractionDto>(await triage.PutAsJsonAsync($"/api/refractions/{visit.Id}", refraction));
         Assert.Equal(HttpStatusCode.NoContent, (await triage.PostAsync($"/api/refractions/{visit.Id}/complete", null)).StatusCode);
 
+        // A finished refraction leaves the queue for the list of done ones, where it can be opened again.
+        static bool Has(JsonElement list, long visitId) => list.EnumerateArray().Any(r => r.GetProperty("visitId").GetInt64() == visitId);
+        Assert.False(Has(await triage.GetFromJsonAsync<JsonElement>("/api/refractions/queue"), visit.Id));
+        Assert.True(Has(await triage.GetFromJsonAsync<JsonElement>("/api/refractions/queue?done=true"), visit.Id));
+        Assert.False(Has(await triage.GetFromJsonAsync<JsonElement>($"/api/refractions/queue?done=true&date={KabulClock.Today.AddDays(-1):yyyy-MM-dd}"), visit.Id));
+
         var queue = await doctor.GetFromJsonAsync<List<VisitRow>>("/api/clinical/worklist?kind=doctor", JsonOptions);
         Assert.Contains(queue!, v => v.Id == visit.Id && v.Status == nameof(VisitStatus.ReadyForDoctor));
 
@@ -284,6 +290,10 @@ public sealed class VisitFlowTests(ApiFixture api)
 
         Assert.Equal(HttpStatusCode.OK, (await doctor.PostAsJsonAsync($"/api/consultations/{visit.Id}/finalize", new FinalizeRequest(continued.Version, true))).StatusCode);
         Assert.Equal(nameof(VisitStatus.Completed), (await ReadVisitAsync(doctor, visit.Id)).Status);
+        Assert.DoesNotContain((await doctor.GetFromJsonAsync<List<VisitRow>>("/api/clinical/worklist?kind=doctor", JsonOptions))!, v => v.Id == visit.Id);
+        Assert.Contains((await doctor.GetFromJsonAsync<List<VisitRow>>("/api/clinical/worklist?kind=doctor&done=true", JsonOptions))!, v => v.Id == visit.Id);
+        var other = await UserAsync(Roles.Doctor);
+        Assert.DoesNotContain((await other.GetFromJsonAsync<List<VisitRow>>("/api/clinical/worklist?kind=doctor&done=true", JsonOptions))!, v => v.Id == visit.Id);
         await AssertLedgerReconciles();
     }
 

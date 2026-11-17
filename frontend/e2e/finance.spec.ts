@@ -49,14 +49,19 @@ test('stock is bought, sold at the pharmacy, paid at the cashier and reconciled 
   await expect(inventory).toHaveURL(/\/inventory$/)
   await inventory.getByRole('button', { name: 'ثبت محصول' }).click()
   const pd = inventory.getByRole('dialog')
-  await pd.getByLabel('کد').fill(`D${stamp}`)
+  // The code is given by the system.
+  await expect(pd.getByLabel('کد')).toHaveValue('خودکار')
   await pd.getByLabel('نام جنس').fill(drug)
+  await pd.getByLabel('نوعیت دوا').selectOption({ index: 1 })
   await pd.getByLabel('قیمت فروش').fill('250')
   await pd.getByRole('button', { name: 'ذخیره' }).click()
   await expect(pd).toBeHidden()
 
   const supplier = `تأمین${stamp}`
   await call(inventory, 'POST', '/suppliers', { name: supplier })
+  // Purchases have their own item in the sidebar, under pharmacy and optical.
+  await inventory.getByRole('link', { name: 'خرید', exact: true }).click()
+  await expect(inventory).toHaveURL(/\/purchases$/)
   await inventory.getByRole('link', { name: 'ثبت خرید' }).click()
   await pick(inventory, inventory.locator('body'), 'تأمین‌کننده', supplier)
   await pick(inventory, inventory.locator('body'), 'جنس ردیف 1', drug)
@@ -64,16 +69,19 @@ test('stock is bought, sold at the pharmacy, paid at the cashier and reconciled 
   await inventory.getByLabel('مقدار ردیف 1').fill('5')
   await inventory.getByLabel('قیمت خرید واحد ردیف 1').fill('100')
   await inventory.getByRole('button', { name: 'ثبت خرید' }).click()
-  await expect(inventory).toHaveURL(/\/inventory$/)
-  await inventory.getByRole('tab', { name: 'اجناس' }).click()
-  await expect(inventory.getByRole('row', { name: new RegExp(drug) })).toContainText('۵')
+  await expect(inventory).toHaveURL(/\/purchases$/)
+  await inventory.goto('/inventory')
+  await inventory.getByRole('tab', { name: 'محصولات' }).click()
+  // The list is paged; searching keeps the product in view however many others earlier runs left.
+  await inventory.getByLabel('جستجوی نام یا کد جنس').fill(drug)
+  await expect(inventory.getByRole('row', { name: new RegExp(drug) })).toContainText('5')
 
   const pharmacy = await staffPage(browser, `pha_${stamp}`, errors)
   await expect(pharmacy).toHaveURL(/\/pharmacy$/)
   await pharmacy.getByRole('link', { name: 'فروش مستقل' }).click()
   await pick(pharmacy, pharmacy.locator('body'), 'جنس', drug)
   await pharmacy.getByLabel('مقدار ردیف 1').fill('2')
-  await expect(pharmacy.locator('form.xr-card')).toContainText('۵۰۰')
+  await expect(pharmacy.locator('form.xr-card')).toContainText('500')
   await pharmacy.getByRole('button', { name: 'ایجاد بل و ارسال به صندوق' }).click()
   const saleDone = pharmacy.locator('.alert-success')
   await expect(saleDone).toContainText('در صندوق مرکزی پرداخت کند')
@@ -97,16 +105,22 @@ test('stock is bought, sold at the pharmacy, paid at the cashier and reconciled 
   expect(asked[0]).toContain('ذخیره نشده')
 
   // Cashier has to open a session first, then takes a partial payment.
+  // A register of this run's own: a register has one open session at a time, so a shared one could be held by another run.
+  const registerName = `صندوق ${stamp}`
+  await call(page, 'POST', '/cash/registers', { name: registerName })
   const cashier = await staffPage(browser, `cas_${stamp}`, errors)
   await expect(cashier).toHaveURL(/\/cashier$/)
   const openButton = cashier.getByRole('button', { name: 'باز کردن صندوق' })
   await expect(openButton).toBeVisible()
+  await cashier.getByRole('combobox', { name: 'صندوق' }).selectOption({ label: registerName })
   await openButton.click()
   await expect(cashier.getByRole('button', { name: 'بستن صندوق' })).toBeVisible()
 
   await cashier.getByLabel('جستجوی فاکتور').fill(invoiceNumber)
-  const row = cashier.getByRole('row', { name: new RegExp(invoiceNumber) })
-  await expect(row).toContainText('۵۰۰')
+  // The invoices to collect; the register's own receipts below list the same invoice number once paid.
+  const toCollect = cashier.locator('section', { has: cashier.getByRole('heading', { name: 'فاکتورهای قابل دریافت' }) })
+  const row = toCollect.getByRole('row', { name: new RegExp(invoiceNumber) })
+  await expect(row).toContainText('500')
   await row.getByRole('button', { name: 'دریافت' }).click()
   const pay = cashier.getByRole('dialog')
   await pay.getByLabel('مبلغ').fill('200')
@@ -114,7 +128,10 @@ test('stock is bought, sold at the pharmacy, paid at the cashier and reconciled 
   await expect(pay.getByRole('status')).toContainText('شماره رسید')
   await pay.getByRole('button', { name: 'بستن' }).click()
   await expect(row).toContainText('پرداخت ناقص')
-  await expect(row).toContainText('۳۰۰')
+  await expect(row).toContainText('300')
+  // The payment is now listed under this register, ready to be printed again.
+  const receipts = cashier.locator('section', { has: cashier.getByRole('heading', { name: 'دریافت‌های این صندوق' }) })
+  await expect(receipts.getByRole('row', { name: new RegExp(invoiceNumber) })).toContainText('200')
 
   // Accountant sees the ledger reconciled and can see the same invoice.
   const accounting = await staffPage(browser, `acc_${stamp}`, errors)

@@ -76,7 +76,7 @@ test('drug box finds any part of a name and adds each pick as a prescription lin
   await expect(list.getByRole('option', { name: second })).toBeVisible()
   await list.getByRole('option', { name: second }).click()
   await expect(doctor.getByLabel('نام دوا 1')).toHaveValue(second)
-  await expect(doctor.getByLabel('دوز 1')).toBeFocused()
+  await expect(doctor.getByLabel('طریقه مصرف 1')).toBeFocused()
   await expect(field).toHaveValue('')
   await expect(list).toHaveCount(0)
 
@@ -93,12 +93,12 @@ test('drug box finds any part of a name and adds each pick as a prescription lin
   await expect(doctor.getByLabel('نام دوا 3')).toHaveValue(`بیرون از گدام ${stamp}`)
   await expect(doctor.getByText('ذخیره شد و نسخه دوا برای دواخانه ارسال شد.')).toHaveCount(0)
 
-  await doctor.getByLabel('دوز 1').fill('1x3')
+  await doctor.getByLabel('طریقه مصرف 1').fill('1x3')
   await doctor.getByRole('button', { name: 'ذخیره', exact: true }).click()
   await expect(doctor.getByText('ذخیره شد و نسخه دوا برای دواخانه ارسال شد.')).toBeVisible()
   // The saved prescription stays on the page, ready to change until the pharmacy starts on it.
   await expect(doctor.getByLabel('نام دوا 3')).toHaveValue(`بیرون از گدام ${stamp}`)
-  await expect(doctor.getByLabel('دوز 1')).toHaveValue('1x3')
+  await expect(doctor.getByLabel('طریقه مصرف 1')).toHaveValue('1x3')
   await expect(doctor.getByText(/^RX-\d+$/)).toBeVisible()
   expect(errors).toEqual([])
 })
@@ -154,6 +154,9 @@ test('full clinical journey crosses departments without re-entering data', async
   await triage.getByLabel(/PH OD/).fill('6/6')
   await triage.getByLabel(/IOP OS/).fill('17')
   await triage.getByLabel('سوابق ضروری').fill('حساسیت به پنسلین')
+  // An allergy is answered in its own place, so the doctor is warned of it before prescribing.
+  await triage.getByRole('group', { name: 'Allergies' }).getByRole('button', { name: 'Y' }).click()
+  await triage.getByLabel('Allergic to').fill('پنسلین')
   await triage.getByRole('button', { name: 'ذخیره و ارسال به داکتر' }).click()
   await expect(triage).toHaveURL(/\/triage$/)
 
@@ -216,19 +219,44 @@ test('full clinical journey crosses departments without re-entering data', async
   await expect(doctor.getByLabel('فوندوس OD')).toHaveValue('Cup/Disc 0.4')
   await expect(doctor.getByRole('article', { name: 'روی دوسیه' })).toContainText('Cup/Disc 0.4')
 
+  // The allergy is read beside the name, before anything is prescribed.
+  await expect(doctor.getByRole('alert').filter({ hasText: 'پنسلین' }).first()).toBeVisible()
+
+  // One click fills only the empty slit lamp boxes as normal; a finding already chosen stays.
+  await doctor.getByRole('button', { name: 'بقیه نارمل' }).click()
+  await expect(doctor.getByLabel('قرنیه OS')).toHaveValue('Clear')
+  await expect(doctor.getByLabel('عدسیه OS')).toHaveValue('Nuclear Sclerosis')
+  await doctor.getByLabel('پلان درمان').fill('پیگیری فشار چشم')
+  // The lower half of the paper: gonioscopy, dilatation, the funduscopy method and the note.
+  await doctor.getByLabel('گونیوسکوپی OD').selectOption('Grade 3')
+  await doctor.getByLabel('گشادسازی OU').check()
+  await doctor.getByLabel('قطره T+Ph').check()
+  await doctor.getByRole('button', { name: '90D', exact: true }).click()
+  await doctor.getByLabel('یادداشت', { exact: true }).fill('یادداشت آزمایشی')
+  await doctor.getByRole('button', { name: 'ذخیره', exact: true }).click()
+  await expect(doctor.getByText('ذخیره شد.')).toBeVisible()
+  await doctor.reload()
+  await expect(doctor.getByLabel('پلان درمان')).toHaveValue('پیگیری فشار چشم')
+  await expect(doctor.getByLabel('قرنیه OS')).toHaveValue('Clear')
+  await expect(doctor.getByLabel('گونیوسکوپی OD')).toHaveValue('Grade 3')
+  await expect(doctor.getByLabel('گشادسازی OD')).toBeChecked()
+  await expect(doctor.getByLabel('گشادسازی OS')).toBeChecked()
+  await expect(doctor.getByLabel('قطره T+Ph')).toBeChecked()
+  await expect(doctor.getByRole('button', { name: '90D', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(doctor.getByLabel('یادداشت', { exact: true })).toHaveValue('یادداشت آزمایشی')
+
   // The final refraction fills the glasses form only when asked, and is issued only on submit.
+  // The order opens on its form: no second click to start a new one.
   await doctor.getByRole('button', { name: /^نسخه عینک/ }).click()
-  await doctor.getByRole('button', { name: 'نسخه عینک جدید' }).click()
   await expect(doctor.getByLabel('نسخه عینک: SPH OD')).toHaveValue('')
   await doctor.getByRole('button', { name: 'انتقال از نسخه نهایی بینایی‌سنجی' }).click()
   await expect(doctor.getByLabel('نسخه عینک: SPH OD')).toHaveValue('-2.00')
   await expect(doctor.getByLabel('PD', { exact: true })).toHaveValue('63')
-  await expect(doctor.getByText('نسخه عینک ثبت نشده است.')).toBeVisible()
+  await expect(doctor.getByText('نسخه‌های ثبت‌شده')).toHaveCount(0)
   await doctor.keyboard.press('Escape')
 
   // Lab order travels to the lab, and the result comes back to the chart.
   await doctor.getByRole('button', { name: /^درخواست تشخیصی/ }).click()
-  await doctor.getByRole('button', { name: 'درخواست تشخیصی جدید' }).click()
   await pick(doctor, doctor.locator('body'), 'درخواست', testName)
   await doctor.getByRole('button', { name: 'درخواست', exact: true }).click()
   await expect(doctor.getByRole('row', { name: new RegExp(testName) })).toContainText('درخواست‌شده')
@@ -243,15 +271,22 @@ test('full clinical journey crosses departments without re-entering data', async
   await expect(labRow).toContainText('نتیجه آماده')
 
   await doctor.reload()
+  // The result is read at the top of the file, without opening anything.
+  await expect(doctor.getByRole('region', { name: 'خلاصه پیش از معاینه' })).toContainText('نتیجه نمونه آزمایش')
   await doctor.getByRole('button', { name: /^درخواست تشخیصی/ }).click()
   await expect(doctor.getByRole('row', { name: new RegExp(testName) })).toContainText('نتیجه نمونه آزمایش')
   await doctor.keyboard.press('Escape')
 
   // Finalise: direct edit closes, amendment stays available.
-  await doctor.getByRole('button', { name: 'نهایی‌سازی و تکمیل مراجعه' }).click()
+  await doctor.getByRole('button', { name: 'نهایی‌سازی', exact: true }).click()
   await expect(doctor.getByText('معاینه نهایی و مراجعه تکمیل شد.')).toBeVisible()
   await expect(doctor.getByLabel('فوندوس OD')).toBeDisabled()
+  // Amendments live in the file's menu, off the page itself.
+  await expect(doctor.getByRole('button', { name: 'ثبت اصلاحیه' })).toHaveCount(0)
+  await doctor.getByRole('button', { name: 'گزینه‌های بیشتر پرونده' }).click()
+  await doctor.getByRole('menuitem', { name: 'ادامه معاینه یا اصلاحیه' }).click()
   await expect(doctor.getByRole('button', { name: 'ثبت اصلاحیه' })).toBeVisible()
+  await doctor.keyboard.press('Escape')
 
   // Reception still has no way into the clinical record.
   await reception.goto(doctor.url().replace(/^https?:\/\/[^/]+/, ''))

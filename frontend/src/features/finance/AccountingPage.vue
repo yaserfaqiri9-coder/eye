@@ -1,12 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api, ApiError, errorMessage, newIdempotencyKey } from '@/api/http'
+import { usePagedList } from '@/api/paged'
+import { useRoute } from 'vue-router'
 import ShamsiDateInput from '@/components/ShamsiDateInput.vue'
-import UiCard from '@/components/UiCard.vue'
+import UiFilterBar from '@/components/UiFilterBar.vue'
+import UiPeriodFilter from '@/components/UiPeriodFilter.vue'
 import UiModal from '@/components/UiModal.vue'
+import UiPager from '@/components/UiPager.vue'
 import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime, todayIso } from '@/utils/date'
-import { money } from '@/utils/money'
+import { money, quantity } from '@/utils/money'
+import type { DateRange } from '@/utils/period'
 import { invoiceStatusLabels, invoiceStatusTones, type InvoiceDetail, type InvoiceRow, type PaymentRow } from './types'
 
 interface LedgerBalance {
@@ -26,6 +31,21 @@ interface Reconciliation {
   paymentsLessRefundsAndExpenses: number
 }
 
+// Plain Dari names for staff who are not accountants; the ledger's own names stay in the accountant's table.
+// A minus line lowers income (discounts, money handed back).
+const incomeLines = [
+  { code: '4000', label: 'خدمات' },
+  { code: '4100', label: 'دواخانه' },
+  { code: '4200', label: 'عینک' },
+  { code: '4900', label: 'تخفیف', minus: true },
+  { code: '4950', label: 'پول پس‌داده', minus: true },
+]
+const costLines = [
+  { code: '5000', label: 'قیمت خرید اجناس فروخته‌شده' },
+  { code: '6000', label: 'مصارف' },
+  { code: '6100', label: 'کمی اجناس' },
+]
+
 interface ExpenseRow {
   id: number
   expenseNumber: string
@@ -38,17 +58,77 @@ interface ExpenseRow {
 }
 
 const auth = useAuthStore()
+const route = useRoute()
 const tab = ref('ledger')
 const error = ref('')
 const balances = ref<LedgerBalance[]>([])
 const reconciliation = ref<Reconciliation | null>(null)
-const invoices = ref<InvoiceRow[]>([])
-const payments = ref<PaymentRow[]>([])
-const expenses = ref<ExpenseRow[]>([])
+/** Debit minus credit; negated for accounts that grow on the credit side, so every amount reads as a plain number. */
+function balanceOf(code: string, creditSide = false) {
+  const b = balances.value.find((row) => row.code === code)
+  const net = b ? b.debit - b.credit : 0
+  return creditSide ? -net : net
+}
+
+const income = computed(() => incomeLines.map((l) => ({ ...l, amount: l.minus ? balanceOf(l.code) : balanceOf(l.code, true) })))
+const costs = computed(() => costLines.map((l) => ({ ...l, amount: balanceOf(l.code) })))
+const incomeTotal = computed(() => income.value.reduce((sum, l) => sum + (l.minus ? -l.amount : l.amount), 0))
+const costTotal = computed(() => costs.value.reduce((sum, l) => sum + l.amount, 0))
+const profit = computed(() => incomeTotal.value - costTotal.value)
+
+const headline = computed(() => [
+  { label: 'صندوق', amount: balanceOf('1000') },
+  { label: 'باقیات مریضان', amount: balanceOf('1100') },
+  { label: 'قرض به شرکت‌ها', amount: balanceOf('2000', true) },
+  { label: 'ارزش گدام', amount: balanceOf('1200') },
+])
+
+const invoiceSearch = ref('')
+// Each list is read a page at a time, so older invoices, receipts and expenses stay reachable however many there are.
+const invoiceList = usePagedList<InvoiceRow>(() => (invoiceSearch.value.trim() ? `/invoices?q=${encodeURIComponent(invoiceSearch.value.trim())}` : '/invoices'))
+const paymentDays = reactive({ from: null as string | null, to: null as string | null })
+const expenseDays = reactive({ from: null as string | null, to: null as string | null })
+const withDays = (path: string, days: { from: string | null; to: string | null }) => {
+  const params = new URLSearchParams()
+  if (days.from) params.set('from', days.from)
+  if (days.to) params.set('to', days.to)
+  return params.size ? `${path}?${params}` : path
+}
+const paymentList = usePagedList<PaymentRow>(() => withDays('/payments', paymentDays))
+const expenseList = usePagedList<ExpenseRow>(() => withDays('/expenses', expenseDays))
+watch(() => ({ ...paymentDays }), () => paymentList.first().catch((cause) => (error.value = errorMessage(cause))))
+watch(() => ({ ...expenseDays }), () => expenseList.first().catch((cause) => (error.value = errorMessage(cause))))
+
+/** The shared period filter speaks in whole ranges; null is every day. */
+function periodOf(days: { from: string | null; to: string | null }) {
+  return computed<DateRange | null>({
+    get: () => (days.from || days.to ? { from: (days.from ?? days.to)!, to: (days.to ?? days.from)! } : null),
+    set: (range) => Object.assign(days, range ?? { from: null, to: null }),
+  })
+}
+const paymentPeriod = periodOf(paymentDays)
+const expensePeriod = periodOf(expenseDays)
+const invoices = invoiceList.rows
+const payments = paymentList.rows
+const expenses = expenseList.rows
+
+/** Every category already used, offered while typing, so one kind of expense is not split in the reports by a spelling. */
+const expenseCategories = computed(() => [...new Set(expenses.value.map((row) => row.category.trim()).filter(Boolean))].sort())
+
+let searchTimer: ReturnType<typeof setTimeout> | undefined
+watch(invoiceSearch, () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => invoiceList.first().catch((cause) => (error.value = errorMessage(cause))), 300)
+})
+onBeforeUnmount(() => clearTimeout(searchTimer))
+
+function turn(list: { goTo: (page: number) => Promise<void> }, page: number) {
+  list.goTo(page).catch((cause) => (error.value = errorMessage(cause)))
+}
 
 const tabs = computed(() =>
   [
-    { key: 'ledger', label: 'دفتر مالی', visible: auth.can('ledger.view') },
+    { key: 'ledger', label: 'خلاصه مالی', visible: auth.can('ledger.view') },
     { key: 'invoices', label: 'فاکتورها', visible: auth.can('invoices.view') },
     { key: 'payments', label: 'دریافت‌ها و برگشت', visible: auth.can('payments.view') },
     { key: 'expenses', label: 'مصارف', visible: auth.can('expenses.view') },
@@ -61,9 +141,9 @@ async function loadAll() {
     if (auth.can('ledger.view')) {
       ;[balances.value, reconciliation.value] = await Promise.all([api<LedgerBalance[]>('/ledger/balances'), api<Reconciliation>('/ledger/reconciliation')])
     }
-    if (auth.can('invoices.view')) invoices.value = (await api<{ items: InvoiceRow[] }>('/invoices?pageSize=100')).items
-    if (auth.can('payments.view')) payments.value = (await api<{ items: PaymentRow[] }>('/payments?pageSize=100')).items
-    if (auth.can('expenses.view')) expenses.value = (await api<{ items: ExpenseRow[] }>('/expenses?pageSize=100')).items
+    if (auth.can('invoices.view')) await invoiceList.load()
+    if (auth.can('payments.view')) await paymentList.load()
+    if (auth.can('expenses.view')) await expenseList.load()
   } catch (cause) {
     error.value = errorMessage(cause)
   }
@@ -177,7 +257,9 @@ async function submitCancel() {
 
 onMounted(() => {
   // Chosen before loading, so a tab the user clicks while data is still arriving stays selected.
-  tab.value = tabs.value[0]?.key ?? 'ledger'
+  // A link from a report names the tab it means; one this user may not see falls back to the first.
+  const asked = tabs.value.find((t) => t.key === route.query.tab)
+  tab.value = asked?.key ?? tabs.value[0]?.key ?? 'ledger'
   loadAll()
 })
 </script>
@@ -193,27 +275,75 @@ onMounted(() => {
     </div>
     <div class="xr-card__body">
       <template v-if="tab === 'ledger'">
-        <div v-if="reconciliation" class="alert" :class="reconciliation.balanced ? 'alert-success' : 'alert-danger'" role="status">
-          {{ reconciliation.balanced ? 'دفتر مالی با فاکتورها و دریافت‌ها تطبیق دارد.' : 'دفتر مالی با تراکنش‌ها تطبیق ندارد. فوراً بررسی شود.' }}
+        <div v-if="reconciliation && !reconciliation.balanced" class="alert alert-danger" role="alert">حساب‌ها برابر نیست. به مدیر سیستم خبر دهید.</div>
+
+        <div class="fin-head">
+          <span v-if="reconciliation?.balanced" class="fin-ok" role="status">حساب‌ها درست است</span>
+          <span class="fin-since">از شروع سیستم تا امروز</span>
         </div>
-        <div class="xr-table-wrap">
-          <table class="xr-table">
-            <thead><tr><th>کد</th><th>حساب</th><th>بدهکار</th><th>بستانکار</th><th>مانده</th></tr></thead>
-            <tbody>
-              <tr v-for="b in balances" :key="b.code">
-                <td><span class="ltr-num">{{ b.code }}</span></td>
-                <td>{{ b.name }}</td>
-                <td>{{ money(b.debit) }}</td>
-                <td>{{ money(b.credit) }}</td>
-                <td>{{ money(b.debit - b.credit) }}</td>
-              </tr>
-            </tbody>
-          </table>
+
+        <div class="fin-tiles">
+          <div v-for="h in headline" :key="h.label" class="fin-tile">
+            <span class="fin-tile__label">{{ h.label }}</span>
+            <span class="fin-tile__value">{{ money(h.amount) }}</span>
+          </div>
         </div>
+
+        <div class="fin-panels">
+          <section class="fin-panel" aria-label="عاید">
+            <h3 class="fin-panel__title">عاید</h3>
+            <div v-for="l in income" :key="l.code" class="fin-line" :class="{ 'fin-line--minus': l.minus }">
+              <span>{{ l.label }}</span>
+              <span>{{ l.minus && l.amount ? '− ' : '' }}{{ money(l.amount) }}</span>
+            </div>
+            <div class="fin-line fin-line--total"><span>عاید خالص</span><span>{{ money(incomeTotal) }}</span></div>
+          </section>
+          <section class="fin-panel" aria-label="مصارف">
+            <h3 class="fin-panel__title">مصارف</h3>
+            <div v-for="l in costs" :key="l.code" class="fin-line">
+              <span>{{ l.label }}</span>
+              <span>{{ money(l.amount) }}</span>
+            </div>
+            <div class="fin-line fin-line--total"><span>مجموع مصارف</span><span>{{ money(costTotal) }}</span></div>
+          </section>
+        </div>
+
+        <div class="fin-result" :class="profit >= 0 ? 'fin-result--gain' : 'fin-result--loss'">
+          <span>{{ profit >= 0 ? 'مفاد' : 'ضرر' }}</span>
+          <strong>{{ money(Math.abs(profit)) }}</strong>
+        </div>
+
+        <details class="fin-detail">
+          <summary>جدول حسابداری</summary>
+          <div class="mt-3">
+            <div class="xr-table-wrap">
+              <table class="xr-table">
+                <thead><tr><th>کود</th><th>حساب</th><th>بردگی</th><th>رسیدگی</th><th>باقی</th></tr></thead>
+                <tbody>
+                  <tr v-for="b in balances" :key="b.code">
+                    <td><span class="ltr-num">{{ b.code }}</span></td>
+                    <td>{{ b.name }}</td>
+                    <td>{{ money(b.debit) }}</td>
+                    <td>{{ money(b.credit) }}</td>
+                    <td>{{ money(b.debit - b.credit) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
       </template>
 
       <template v-else-if="tab === 'invoices'">
-        <div class="xr-table-wrap">
+        <UiFilterBar
+          v-model:search="invoiceSearch"
+          flat
+          search-label="جستجوی فاکتور"
+          search-placeholder="شماره فاکتور، شماره پرونده یا نام"
+          :count="`${quantity(invoiceList.total.value)} فاکتور`"
+        />
+        <p v-if="invoices.length === 0" class="xr-state">فاکتوری پیدا نشد.</p>
+        <div v-else class="xr-table-wrap">
           <table class="xr-table">
             <thead><tr><th>شماره</th><th>مریض</th><th>مجموع</th><th>تخفیف</th><th>پرداخت</th><th>برگشت</th><th>مانده</th><th>وضعیت</th><th v-if="auth.can('invoices.approve')">عملیات</th></tr></thead>
             <tbody>
@@ -234,10 +364,15 @@ onMounted(() => {
             </tbody>
           </table>
         </div>
+        <UiPager :page="invoiceList.page.value" :page-count="invoiceList.pageCount.value" @go="turn(invoiceList, $event)" />
       </template>
 
       <template v-else-if="tab === 'payments'">
-        <div class="xr-table-wrap">
+        <UiFilterBar flat :count="`${quantity(paymentList.total.value)} رسید`">
+          <UiPeriodFilter v-model="paymentPeriod" allow-all />
+        </UiFilterBar>
+        <p v-if="payments.length === 0" class="xr-state">{{ paymentDays.from || paymentDays.to ? 'در این روزها دریافتی ثبت نشده است.' : 'دریافتی ثبت نشده است.' }}</p>
+        <div v-else class="xr-table-wrap">
           <table class="xr-table">
             <thead><tr><th>رسید</th><th>فاکتور</th><th>مبلغ</th><th>برگشت‌شده</th><th>دریافت‌کننده</th><th>زمان</th><th v-if="auth.can('payments.refund')">عملیات</th></tr></thead>
             <tbody>
@@ -253,11 +388,17 @@ onMounted(() => {
             </tbody>
           </table>
         </div>
+        <UiPager :page="paymentList.page.value" :page-count="paymentList.pageCount.value" @go="turn(paymentList, $event)" />
       </template>
 
       <template v-else>
-        <button v-if="auth.can('expenses.create')" type="button" class="btn btn-primary mb-3" @click="openExpense()">ثبت مصرف</button>
-        <p v-if="expenses.length === 0" class="xr-state">مصرفی ثبت نشده است.</p>
+        <UiFilterBar flat :count="`${quantity(expenseList.total.value)} مصرف`">
+          <UiPeriodFilter v-model="expensePeriod" allow-all />
+          <template v-if="auth.can('expenses.create')" #actions>
+            <button type="button" class="btn btn-primary" @click="openExpense()">ثبت مصرف</button>
+          </template>
+        </UiFilterBar>
+        <p v-if="expenses.length === 0" class="xr-state">{{ expenseDays.from || expenseDays.to ? 'در این روزها مصرفی ثبت نشده است.' : 'مصرفی ثبت نشده است.' }}</p>
         <div v-else class="xr-table-wrap">
           <table class="xr-table">
             <thead><tr><th>شماره</th><th>دسته</th><th>شرح</th><th>مبلغ</th><th>تاریخ</th><th>وضعیت</th><th v-if="auth.can('expenses.cancel')">عملیات</th></tr></thead>
@@ -279,6 +420,7 @@ onMounted(() => {
             </tbody>
           </table>
         </div>
+        <UiPager :page="expenseList.page.value" :page-count="expenseList.pageCount.value" @go="turn(expenseList, $event)" />
       </template>
     </div>
   </section>
@@ -313,7 +455,7 @@ onMounted(() => {
       <input id="rf-reason" v-model="refund.reason" class="form-control mb-3" minlength="3" maxlength="300" required />
       <div v-if="refund.error" class="alert alert-danger" role="alert">{{ refund.error }}</div>
       <div class="xr-form-actions">
-        <button type="submit" class="btn btn-primary" :disabled="refund.saving">تأیید برگشت وجه</button>
+        <button type="submit" class="btn btn-danger" :disabled="refund.saving">تأیید برگشت وجه</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>
@@ -326,7 +468,7 @@ onMounted(() => {
       <input id="ud-reason" v-model="undoDiscount.reason" class="form-control mb-3" minlength="3" maxlength="300" required />
       <div v-if="undoDiscount.error" class="alert alert-danger" role="alert">{{ undoDiscount.error }}</div>
       <div class="xr-form-actions">
-        <button type="submit" class="btn btn-primary" :disabled="undoDiscount.saving">برگشت تخفیف</button>
+        <button type="submit" class="btn btn-danger" :disabled="undoDiscount.saving">برگشت تخفیف</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>
@@ -337,7 +479,8 @@ onMounted(() => {
       <p v-if="expense.correcting" class="small text-muted">مصرف فعلی لغو و مصرف تازه ثبت می‌شود. سابقه هر دو می‌ماند.</p>
       <div class="mb-3">
         <label class="form-label" for="e-category">دسته</label>
-        <input id="e-category" v-model="expense.category" class="form-control" maxlength="100" required />
+        <input id="e-category" v-model="expense.category" class="form-control" maxlength="100" list="e-category-options" autocomplete="off" required />
+        <datalist id="e-category-options"><option v-for="category in expenseCategories" :key="category" :value="category" /></datalist>
       </div>
       <div class="mb-3">
         <label class="form-label" for="e-desc">شرح</label>
@@ -363,9 +506,151 @@ onMounted(() => {
       <input id="x-reason" v-model="cancelling.reason" class="form-control mb-3" maxlength="300" required />
       <div v-if="cancelling.error" class="alert alert-danger" role="alert">{{ cancelling.error }}</div>
       <div class="xr-form-actions">
-        <button type="submit" class="btn btn-primary" :disabled="cancelling.saving">لغو مصرف</button>
+        <button type="submit" class="btn btn-danger" :disabled="cancelling.saving">لغو مصرف</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>
   </UiModal>
 </template>
+
+<style scoped>
+.fin-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.fin-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--xr-tone-green-bg);
+  color: var(--xr-tone-green-text);
+  font-size: 12.5px;
+}
+
+.fin-ok::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.fin-since {
+  margin-inline-start: auto;
+  color: var(--xr-text-muted);
+  font-size: 12.5px;
+}
+
+.fin-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.fin-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  border: 1px solid var(--xr-border);
+  border-radius: var(--xr-radius-tile, var(--xr-radius-control));
+}
+
+.fin-tile__label {
+  color: var(--xr-text-soft);
+  font-size: 13px;
+}
+
+.fin-tile__value {
+  color: var(--xr-text);
+  font-size: var(--xr-fs-stat);
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.fin-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.fin-panel {
+  padding: 16px 18px 6px;
+  border: 1px solid var(--xr-border);
+  border-radius: var(--xr-radius-tile, var(--xr-radius-control));
+}
+
+.fin-panel__title {
+  margin: 0 0 6px;
+  color: var(--xr-text-soft);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.fin-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--xr-row-border);
+  color: var(--xr-text);
+}
+
+.fin-line > span:last-child {
+  white-space: nowrap;
+}
+
+.fin-line--minus {
+  color: var(--xr-text-soft);
+}
+
+.fin-line--total {
+  border-bottom: 0;
+  font-weight: 600;
+}
+
+.fin-result {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding: 16px 18px;
+  border-radius: var(--xr-radius-tile, var(--xr-radius-control));
+  font-size: 15px;
+}
+
+.fin-result strong {
+  font-size: var(--xr-fs-stat);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fin-result--gain {
+  background: var(--xr-tone-green-bg);
+  color: var(--xr-tone-green-text);
+}
+
+.fin-result--loss {
+  background: var(--xr-tone-red-bg);
+  color: var(--xr-tone-red-text);
+}
+
+.fin-detail {
+  margin-top: 20px;
+}
+
+.fin-detail > summary {
+  width: fit-content;
+  color: var(--xr-text-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+</style>

@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { api, errorMessage } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
+import TelevisionButton from './TelevisionButton.vue'
 
 interface DeskRoom {
   desk: string
@@ -65,10 +66,13 @@ onMounted(async () => {
 <template>
   <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
   <div v-if="notice" class="alert alert-success" role="status">{{ notice }}</div>
+  <div class="d-flex flex-wrap gap-2 mb-3">
+    <TelevisionButton setup-link />
+  </div>
   <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
   <form v-else @submit.prevent="save">
     <fieldset :disabled="!auth.can('settings.edit')">
-      <p class="form-hint">اگر برای بخشی اتاق تعیین نشود، نام همان بخش اعلان می‌شود. مجموعه صوتی اتاق‌های ۱ تا {{ maxRoom }} را دارد.</p>
+      <p class="form-hint">اگر برای بخشی اتاق تعیین نشود، نام همان بخش اعلان می‌شود. مجموعه صوتی اتاق‌های 1 تا {{ maxRoom }} را دارد.</p>
       <div class="xr-table-wrap mb-3">
         <table class="xr-table">
           <thead><tr><th>بخش</th><th>شماره اتاق</th></tr></thead>

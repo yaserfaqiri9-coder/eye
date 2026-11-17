@@ -1,7 +1,8 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { HubConnectionBuilder, HubConnectionState, LogLevel, type HubConnection } from '@microsoft/signalr'
 
-type Listener = (eventType: string) => void
+/** The payload is the event's identifiers as JSON text, never patient data. */
+type Listener = (eventType: string, payload?: string) => void
 
 const RECONNECTED = '*'
 const RESTART_DELAY_MS = 5_000
@@ -13,8 +14,8 @@ let restartTimer: ReturnType<typeof setTimeout> | undefined
 
 export const liveConnected = ref(false)
 
-function notify(type: string) {
-  for (const listener of listeners) listener(type)
+function notify(type: string, payload?: string) {
+  for (const listener of listeners) listener(type, payload)
 }
 
 async function start() {
@@ -38,7 +39,7 @@ export function connectRealtime() {
     .configureLogging(LogLevel.None)
     .build()
 
-  connection.on('event', (event: { type: string }) => notify(event.type))
+  connection.on('event', (event: { type: string; payload?: string }) => notify(event.type, event.payload))
   connection.onreconnecting(() => (liveConnected.value = false))
   connection.onreconnected(() => {
     liveConnected.value = true
@@ -59,8 +60,12 @@ export function disconnectRealtime() {
   if (current && current.state !== HubConnectionState.Disconnected) current.stop()
 }
 
-/** Reloads from the API when one of the events arrives; events only signal, the API stays the source of truth. */
-export function useLiveRefresh(eventTypes: string[], load: () => unknown, refreshMs = SAFETY_REFRESH_MS) {
+/**
+ * Reloads from the API when one of the events arrives; events only signal, the API stays the source of truth.
+ * accept narrows to the events a page cares about by their identifiers (one visit, say).
+ * refreshMs 0 turns off the timed safety refresh, for a read that is costly or audited each time.
+ */
+export function useLiveRefresh(eventTypes: string[], load: () => unknown, refreshMs = SAFETY_REFRESH_MS, accept?: (type: string, ids: Record<string, unknown>) => boolean) {
   let debounce: ReturnType<typeof setTimeout> | undefined
   let timer: ReturnType<typeof setInterval> | undefined
   let running = false
@@ -87,8 +92,8 @@ export function useLiveRefresh(eventTypes: string[], load: () => unknown, refres
     }
   }
 
-  const listener: Listener = (type) => {
-    if (type !== RECONNECTED && !eventTypes.includes(type)) return
+  const listener: Listener = (type, payload) => {
+    if (type !== RECONNECTED && (!eventTypes.includes(type) || (accept && !accept(type, parseIds(payload))))) return
     clearTimeout(debounce)
     debounce = setTimeout(run, 200)
   }
@@ -100,6 +105,7 @@ export function useLiveRefresh(eventTypes: string[], load: () => unknown, refres
 
   onMounted(() => {
     listeners.add(listener)
+    if (refreshMs <= 0) return
     // Safety net: a lost event can delay a screen but never leave it stale for long.
     timer = setInterval(() => {
       if (!document.hidden) run()
@@ -113,4 +119,13 @@ export function useLiveRefresh(eventTypes: string[], load: () => unknown, refres
     clearInterval(timer)
     document.removeEventListener('visibilitychange', onVisible)
   })
+}
+
+function parseIds(payload?: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = payload ? JSON.parse(payload) : null
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
 }

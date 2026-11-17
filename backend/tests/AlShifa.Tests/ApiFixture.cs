@@ -64,13 +64,18 @@ public sealed class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        // Program.Main runs migrations and seeding outside Production, so the schema must be dropped before first use.
+        // Program.Main runs migrations and seeding outside Production. Migrating from nothing takes about 15 seconds,
+        // so a schema built by an earlier run for the same model is kept and only emptied; any change rebuilds it.
         await using (var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseMySQL(ConnectionString).Options))
         {
-            await db.Database.EnsureDeletedAsync();
+            await TestSchema.ResetAsync(db);
         }
 
         _ = Services;
+        await using (var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseMySQL(ConnectionString).Options))
+        {
+            await TestSchema.MarkCurrentAsync(db);
+        }
 
         using var scope = Services.CreateScope();
         var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -212,13 +217,11 @@ public sealed class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
 
     Task IAsyncLifetime.InitializeAsync() => InitializeAsync().AsTask();
 
-    /// <summary>The test database exists only while the tests run; nothing is left behind on the development MySQL.</summary>
+    /// <summary>The test schema stays on the development MySQL for the next run, which empties it before use.</summary>
     async Task IAsyncLifetime.DisposeAsync()
     {
         await base.DisposeAsync();
         MySql.Data.MySqlClient.MySqlConnection.ClearAllPools();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseMySQL(ConnectionString).Options);
-        await db.Database.EnsureDeletedAsync();
     }
 
     public async Task<long> CreateUserAsync(string userName, params string[] roles)

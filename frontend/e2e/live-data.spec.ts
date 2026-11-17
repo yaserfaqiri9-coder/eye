@@ -92,7 +92,9 @@ test('pharmacy search: a slow answer for an older term never replaces the newer 
   await sleep(500)
   await box.fill(`فارم${tag}`)
 
-  const names = page.locator('table.xr-table tbody tr .xr-person__name')
+  // Only the search results: the work lists below also name patients from other tests' prescriptions.
+  const results = page.locator('section', { has: page.getByRole('heading', { name: 'جستجوی مریض و نسخه' }) })
+  const names = results.locator('table.xr-table tbody tr .xr-person__name')
   await expect(names).toHaveCount(2)
   await sleep(2000) // longer than the delayed older answer
   await expect(names).toHaveCount(2)
@@ -100,34 +102,35 @@ test('pharmacy search: a slow answer for an older term never replaces the newer 
   await context.close()
 })
 
-test('inventory search: typing reloads only products and the older answer is dropped', async ({ browser }) => {
+test('inventory search filters the loaded list at once, without asking the server again', async ({ browser }) => {
   const { page, context, api } = await staff(browser, 'Inventory')
   for (const prefix of ['PFA', 'PFB']) {
-    await api('POST', '/inventory/products', { name: `جنس ${prefix} ${stamp}`, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10 })
+    await api('POST', '/inventory/products', { name: `جنس ${prefix} ${stamp}`, kind: 'Drug', category: 'تابلیت', unit: 'عدد', reorderLevel: 0, salePrice: 10 })
   }
   await page.goto('/inventory')
-  await page.getByRole('tab', { name: 'اجناس' }).click()
-  await expect(page.getByLabel('جستجوی جنس')).toBeVisible()
+  await page.getByRole('tab', { name: 'محصولات' }).click()
+  const box = page.getByLabel('جستجوی نام یا کد جنس')
+  await expect(box).toBeVisible()
   // Let the first load and the live event for the two new products finish before watching.
   await page.waitForLoadState('networkidle')
   await sleep(2500)
 
-  const others: string[] = []
+  // The whole catalogue is already on the page, so typing must not reload anything.
+  const asked: string[] = []
   page.on('request', (r) => {
-    const path = new URL(r.url()).pathname
-    if (/\/api\/inventory\/(batches|alerts|movements|purchases|locations)$/.test(path)) others.push(`${new Date().toISOString()} ${path}`)
+    if (new URL(r.url()).pathname.startsWith('/api/inventory/')) asked.push(new URL(r.url()).pathname)
   })
-  await page.route('**/api/inventory/products**', delayWhen((url) => url.searchParams.get('q') === `PFA${stamp}`, 1500))
 
-  await page.getByLabel('جستجوی جنس').fill(`PFA${stamp}`)
-  await sleep(450)
-  await page.getByLabel('جستجوی جنس').fill(`PFB${stamp}`)
+  await box.fill(`PFA ${stamp}`)
+  await box.fill(`PFB ${stamp}`)
 
-  const codes = page.locator('table.xr-table tbody tr td:first-child')
-  await expect(codes).toHaveText([`PFB${stamp}`])
-  await sleep(2000)
-  await expect(codes).toHaveText([`PFB${stamp}`])
-  expect(others).toEqual([])
+  // The name is a button for whoever may edit products, plain text otherwise; the first cell holds it either way.
+  const names = page.locator('table.xr-table tbody tr td:first-child')
+  await expect(names).toHaveCount(1)
+  await expect(names).toContainText(`جنس PFB ${stamp}`)
+  await sleep(1000)
+  await expect(names).toHaveCount(1)
+  expect(asked).toEqual([])
   await context.close()
 })
 
@@ -200,12 +203,14 @@ test('a payment by one cashier reaches another, even when it lands during a relo
 
 test('stock received by one user shows on another user\'s inventory list', async ({ browser }) => {
   const keeper = await staff(browser, 'Inventory')
-  const product = await keeper.api<{ id: number }>('POST', '/inventory/products', { name: `جنس زنده ${stamp}`, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10 })
+  const product = await keeper.api<{ id: number }>('POST', '/inventory/products', { name: `جنس زنده ${stamp}`, kind: 'Drug', category: 'تابلیت', unit: 'عدد', reorderLevel: 0, salePrice: 10 })
   const watcher = await staff(browser, 'Inventory')
   await watcher.page.goto('/inventory')
-  await watcher.page.getByRole('tab', { name: 'اجناس' }).click()
-  // Columns: code, name, group, drug form, on hand …
-  const onHand = watcher.page.locator('tr', { hasText: `جنس زنده ${stamp}` }).locator('td').nth(4)
+  await watcher.page.getByRole('tab', { name: 'محصولات' }).click()
+  // The list is paged; searching keeps the product in view however many others earlier runs left.
+  await watcher.page.getByLabel('جستجوی نام یا کد جنس').fill(`جنس زنده ${stamp}`)
+  // Columns: name (with its code), form, on hand …
+  const onHand = watcher.page.locator('tr', { hasText: `جنس زنده ${stamp}` }).locator('td').nth(2)
   await expect(onHand).toHaveText(/^(۰|0)\s/)
 
   await keeper.api('POST', '/inventory/purchases', { locationCode: 'pharmacy', items: [{ productId: product.id, lotNumber: 'LV1', quantity: 37, unitCost: 4 }] })
@@ -220,8 +225,7 @@ test('stock received while another user’s list is reloading is not lost', asyn
   const product = await keeper.api<{ id: number }>('POST', '/inventory/products', { name, kind: 'Drug', unit: 'عدد', reorderLevel: 0, salePrice: 10 })
   const watcher = await staff(browser, 'Inventory')
   await watcher.page.goto('/inventory')
-  await watcher.page.getByRole('tab', { name: 'موجودی', exact: true }).click()
-  await watcher.page.getByRole('tab', { name: 'بچ‌ها', exact: true }).click()
+  await watcher.page.getByLabel('جستجوی نام یا کد جنس').fill(name)
   await watcher.page.waitForLoadState('networkidle')
   await sleep(2000)
 
@@ -229,13 +233,14 @@ test('stock received while another user’s list is reloading is not lost', asyn
   let hold = true
   let held: () => void = () => {}
   const holding = new Promise<void>((resolve) => (held = resolve))
-  await watcher.page.route('**/api/inventory/batches', async (route) => {
+  await watcher.page.route((url) => url.pathname === '/api/inventory/products', async (route) => {
     if (!hold) return route.continue()
     hold = false
     const response = await route.fetch()
     held()
     await sleep(2500)
-    await route.fulfill({ response })
+    // The list may have cancelled this read for a newer one by now.
+    await route.fulfill({ response }).catch(() => {})
   })
 
   const receive = (lot: string, quantity: number) =>
@@ -244,10 +249,10 @@ test('stock received while another user’s list is reloading is not lost', asyn
   await holding
   await receive(`B${stamp}`, 5)
 
-  const lots = watcher.page.locator('tr', { hasText: name })
-  await expect(lots).toHaveCount(2, { timeout: 8000 })
-  await sleep(3000) // the late answer, holding only the first lot, must not land last
-  await expect(lots).toHaveCount(2)
+  const row = watcher.page.getByRole('region', { name: 'فهرست اجناس' }).locator('tr', { hasText: name })
+  await expect(row).toContainText('42', { timeout: 8000 })
+  await sleep(3000) // the late answer, holding only the first receipt, must not land last
+  await expect(row).toContainText('42')
   await keeper.context.close()
   await watcher.context.close()
 })
@@ -307,37 +312,37 @@ test('inventory shows the drug form apart from group and unit, finds drugs in an
   const tag = String(stamp).slice(-6)
   await api('POST', '/inventory/products', { name: `Vigamox${tag} Eye Drops`, kind: 'Drug', category: 'قطره چشمی', unit: 'قطی', reorderLevel: 0, salePrice: 10 })
   await page.goto('/inventory')
-  await page.getByRole('tab', { name: 'اجناس' }).click()
-  await expect(page.getByRole('columnheader', { name: 'گروه جنس' })).toBeVisible()
-  await expect(page.getByRole('columnheader', { name: 'نوعیت دوا' })).toBeVisible()
+  await page.getByRole('tab', { name: 'محصولات' }).click()
+  await expect(page.getByRole('columnheader', { name: 'نوعیت', exact: true })).toBeVisible()
 
   for (const q of [`vigamox${tag}`, `VIGAMOX${tag}`, `  Vigamox${tag}  `]) {
-    await page.getByLabel('جستجوی جنس').fill(q)
+    await page.getByLabel('جستجوی نام یا کد جنس').fill(q)
     const row = page.locator('table.xr-table tbody tr')
     await expect(row).toHaveCount(1)
     const cells = row.locator('td')
-    await expect(cells.nth(1)).toHaveText(`Vigamox${tag} Eye Drops`)
-    await expect(cells.nth(2)).toHaveText('دوا')
-    await expect(cells.nth(3)).toHaveText('قطره چشمی')
-    await expect(cells.nth(4)).toContainText('قطی')
-    await expect(cells.nth(4)).not.toContainText('قطره')
+    await expect(cells.nth(0)).toContainText(`Vigamox${tag} Eye Drops`)
+    await expect(cells.nth(1)).toHaveText('قطره چشمی')
+    await expect(cells.nth(2)).toContainText('قطی')
+    await expect(cells.nth(2)).not.toContainText('قطره')
   }
 
   // A new drug cannot be saved without its form.
   await page.getByRole('button', { name: 'ثبت محصول' }).click()
   const dialog = page.getByRole('dialog')
-  await dialog.getByLabel('کد').fill(`NF${tag}`)
-  await dialog.getByLabel('نام جنس').fill(`بدون نوعیت ${tag}`)
+  // The code is given by the system, so the drug is found by its name.
+  await expect(dialog.getByLabel('کد')).toHaveValue('خودکار')
+  const name = `بدون نوعیت ${tag}`
+  await dialog.getByLabel('نام جنس').fill(name)
   await dialog.getByRole('button', { name: 'ذخیره' }).click()
   await expect(dialog).toBeVisible()
   expect(await dialog.getByLabel('نوعیت دوا').evaluate((el) => (el as HTMLSelectElement).validity.valueMissing)).toBe(true)
-  const page2 = await api<{ total: number }>('GET', `/inventory/products?q=NF${tag}`)
+  const page2 = await api<{ total: number }>('GET', `/inventory/products?q=${encodeURIComponent(name)}`)
   expect(page2.total).toBe(0)
 
   await dialog.getByLabel('نوعیت دوا').selectOption('تابلیت')
   await dialog.getByRole('button', { name: 'ذخیره' }).click()
   await expect(dialog).toBeHidden()
-  const saved = await api<{ items: { category: string; unit: string }[] }>('GET', `/inventory/products?q=NF${tag}`)
+  const saved = await api<{ items: { category: string; unit: string }[] }>('GET', `/inventory/products?q=${encodeURIComponent(name)}`)
   expect(saved.items[0].category).toBe('تابلیت')
   expect(saved.items[0].unit).toBe('عدد')
   await context.close()

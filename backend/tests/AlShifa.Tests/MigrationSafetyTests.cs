@@ -61,6 +61,20 @@ public sealed class MigrationSafetyTests
             await db.Database.ExecuteSqlRawAsync("INSERT INTO Appointments (Id, PatientId, DoctorStaffId, ScheduledAt, Status, CreatedByUserId, CreatedAt, Version) VALUES (1, 1, 1, '2026-12-01 05:00:00', 'Scheduled', 1, UTC_TIMESTAMP(6), 0)");
             await db.Database.ExecuteSqlRawAsync("INSERT INTO DiagnosticTests (Id, Name, IsActive) VALUES (1, 'آزمایش قدیمی', 1)");
             await db.Database.ExecuteSqlRawAsync("INSERT INTO DiagnosticOrders (Id, OrderNumber, PatientId, VisitId, TestId, RequestedByUserId, Status, CreatedAt, Version) VALUES (1, 'LAB-0000001', 1, 1, 1, 1, 'Requested', UTC_TIMESTAMP(6), 0)");
+            await db.Database.ExecuteSqlRawAsync("""
+                INSERT INTO Products (Id, Code, Name, Kind, Unit, ReorderLevel, SalePrice, IsActive, Version) VALUES
+                (1, '1', 'دوای کوددار', 'Drug', 'دانه', 0, 10, 1, 0),
+                (2, '10', 'دوای خارج دواخانه', 'Drug', 'دانه', 0, 10, 1, 0),
+                (3, 'OS-0a1b2c3d4e5f', 'دوای برگه', 'Drug', 'دانه', 0, 10, 1, 0),
+                (4, '3', 'دوای دواخانه دیگر', 'Drug', 'دانه', 0, 10, 1, 0)
+                """);
+            await db.Database.ExecuteSqlRawAsync("INSERT INTO StockLocations (Id, Code, Name) VALUES (99, 'pharmacy', 'دواخانه')");
+            await db.Database.ExecuteSqlRawAsync("""
+                INSERT INTO StockBatches (Id, ProductId, LocationId, LotNumber, ExpiryDate, Quantity, UnitCost) VALUES
+                (1, 1, 99, 'test-1', NULL, 1, 1),
+                (3, 3, 99, 'test-3', NULL, 1, 1),
+                (4, 4, 99, 'test-4', NULL, 1, 1)
+                """);
 
             // A database with records is not changed by a hand run, and the running application would say why.
             await Assert.ThrowsAsync<InvalidOperationException>(() => DatabaseSafety.EnsureOperatorMayMigrateAsync(db, backupTaken: false));
@@ -73,7 +87,14 @@ public sealed class MigrationSafetyTests
             Assert.Null(await DatabaseSafety.SchemaProblemAsync(db));
 
             var patient = await db.Patients.AsNoTracking().SingleAsync();
-            Assert.Equal(("P-000001", "مریض قدیمی", 3), (patient.FileNumber, patient.FirstName, patient.Version));
+            Assert.Equal(("1", "مریض قدیمی", 3), (patient.FileNumber, patient.FirstName, patient.Version));
+
+            // Pharmacy stock gets codes from 10; a non-pharmacy product occupying one of those codes moves after the sequence.
+            Assert.Equal(["1", "2"], await db.Visits.OrderBy(v => v.Id).Select(v => v.VisitNumber).ToListAsync());
+            Assert.Equal("1", await db.DiagnosticOrders.Select(o => o.OrderNumber).SingleAsync());
+            Assert.Equal(["10", "13", "11", "12"], await db.Products.OrderBy(p => p.Id).Select(p => p.Code).ToListAsync());
+            Assert.Equal([1, 3, 4], await db.StockBatches.OrderBy(b => b.Id).Select(b => b.ProductId).ToListAsync());
+            Assert.Equal(13L, await db.Database.SqlQueryRaw<long>("SELECT Value AS Value FROM NumberSequences WHERE Scope = 'code:product' AND Period = ''").SingleAsync());
 
             var visit = await db.Visits.AsNoTracking().SingleAsync(v => v.Id == 1);
             Assert.Equal((VisitStatus.InConsultation, 7, 2), (visit.Status, visit.QueueNumber, visit.Version));

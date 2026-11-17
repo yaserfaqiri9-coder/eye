@@ -163,7 +163,13 @@ const appChildren: RouteRecordRaw[] = [
     meta: { permission: 'inventory.view', title: 'جزئیات گدام' },
   },
   {
-    path: 'inventory/purchase',
+    path: 'purchases',
+    name: 'purchases',
+    component: pages.purchases,
+    meta: { permission: 'inventory.view', title: 'خریدها' },
+  },
+  {
+    path: 'purchases/new',
     name: 'inventory-purchase',
     component: pages.purchase,
     meta: { permission: 'inventory.create', title: 'ثبت خرید' },
@@ -270,6 +276,13 @@ const routes: RouteRecordRaw[] = [
     name: 'print-ot-card',
     component: () => import('@/features/print/OtCardPrint.vue'),
     props: true,
+  },
+  // The waiting-room television: full screen, outside the app layout, and itself the audio station.
+  {
+    path: '/call-screen',
+    name: 'call-screen',
+    component: () => import('@/features/calls/CallScreenPage.vue'),
+    meta: { permission: 'calls.manage', title: 'نمایش فراخوان' },
   },
   {
     // Outside the app layout so the page holds nothing but the document. The API enforces each document's permission.

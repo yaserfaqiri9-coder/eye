@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api, ApiError, errorMessage, newIdempotencyKey } from '@/api/http'
+import { fetchAll, usePagedList } from '@/api/paged'
+import UiPager from '@/components/UiPager.vue'
 import { useLiveRefresh } from '@/api/realtime'
-import StatCard from '@/components/StatCard.vue'
 import UiCard from '@/components/UiCard.vue'
 import UiModal from '@/components/UiModal.vue'
 import UiListSkeleton from '@/components/UiListSkeleton.vue'
@@ -17,7 +18,9 @@ const sessions = ref<SessionRow[]>([])
 const registers = ref<{ id: number; name: string }[]>([])
 const q = ref('')
 const loading = ref(true)
+/** What an action of the cashier refused. Kept apart from list loading, so a background refresh never wipes it before it is read. */
 const error = ref('')
+const loadError = ref('')
 
 const openSession = computed(() => sessions.value.find((s) => !s.closedAt) ?? null)
 const pendingTotal = computed(() => invoices.value.reduce((sum, i) => sum + i.balance, 0))
@@ -28,13 +31,14 @@ async function loadInvoices() {
   controller = new AbortController()
   const { signal } = controller
   try {
-    const params = new URLSearchParams({ unpaid: 'true', pageSize: '100' })
+    const params = new URLSearchParams({ unpaid: 'true' })
     if (q.value.trim()) params.set('q', q.value.trim())
-    invoices.value = (await api<{ items: InvoiceRow[] }>(`/invoices?${params}`, { signal })).items
-    error.value = ''
+    // Every open invoice, not the first page: the count and the total above are built from this list.
+    invoices.value = await fetchAll<InvoiceRow>(`/invoices?${params}`, signal)
+    loadError.value = ''
   } catch (cause) {
     if (signal.aborted) return
-    error.value = errorMessage(cause)
+    loadError.value = errorMessage(cause)
   }
   loading.value = false
 }
@@ -43,11 +47,21 @@ async function loadSessions() {
   sessions.value = await api<SessionRow[]>('/cash/sessions?mine=true')
 }
 
+/** What this register has taken so far, newest first, so a lost receipt is printed again without leaving the desk. */
+const receiptList = usePagedList<PaymentRow>(() => `/payments?sessionId=${openSession.value?.id ?? 0}`, 10)
+const showReceipts = computed(() => !!openSession.value && auth.can('payments.view'))
+
+async function loadReceipts() {
+  if (showReceipts.value) await receiptList.load()
+  else receiptList.rows.value = []
+}
+
 async function refresh() {
   try {
     await Promise.all([loadInvoices(), loadSessions()])
+    await loadReceipts()
   } catch (cause) {
-    error.value = errorMessage(cause)
+    loadError.value = errorMessage(cause)
   }
 }
 
@@ -59,8 +73,12 @@ async function open() {
   try {
     await api('/cash/sessions', { method: 'POST', body: { registerId: opening.registerId, openingAmount: opening.amount } })
     await loadSessions()
+    await loadReceipts()
   } catch (cause) {
-    error.value = errorMessage(cause)
+    // A register has one open session at a time; the plain duplicate message would not say what to do.
+    error.value = cause instanceof ApiError && cause.code === 'duplicate'
+      ? 'این صندوق را کارمند دیگری باز کرده است. صندوق دیگری انتخاب کنید یا از او بخواهید صندوق را ببندد.'
+      : errorMessage(cause)
   } finally {
     opening.saving = false
   }
@@ -75,6 +93,7 @@ async function close() {
     await api(`/cash/sessions/${openSession.value!.id}/close`, { method: 'POST', body: { countedAmount: closing.counted, version: openSession.value!.version } })
     closing.open = false
     await loadSessions()
+    await loadReceipts()
   } catch (cause) {
     closing.error = errorMessage(cause)
   } finally {
@@ -153,39 +172,40 @@ onBeforeUnmount(() => clearTimeout(debounce))
 
 <template>
   <div class="d-grid gap-4">
-    <div class="cash-stats">
-      <StatCard label="پرداخت‌های در انتظار" :value="invoices.length" icon="ri-receipt-fill" tone="orange" />
-      <StatCard label="مجموع مانده" :value="money(pendingTotal)" icon="ri-bill-fill" tone="red" />
-      <StatCard label="دریافت نقدی این صندوق" :value="money(openSession?.cashCollected ?? 0)" icon="ri-wallet-3-fill" />
+    <div v-if="error" class="alert alert-danger mb-0 d-flex align-items-center justify-content-between gap-2" role="alert">
+      <span>{{ error }}</span>
+      <button type="button" class="btn-close" aria-label="بستن پیام" @click="error = ''"></button>
     </div>
+    <div v-if="loadError" class="alert alert-danger mb-0" role="alert">{{ loadError }}</div>
 
-    <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
-
-    <UiCard title="صندوق">
+    <!-- The register and the day's figures on one line, so the invoices to collect start at the top of the screen. -->
+    <section class="xr-card cash-bar" aria-label="صندوق">
       <template v-if="openSession">
-        <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
-          <dl class="xr-facts flex-grow-1">
-            <div><dt>صندوق باز</dt><dd>{{ openSession.registerName }}</dd></div>
-            <div><dt>موجودی شروع</dt><dd>{{ money(openSession.openingAmount) }}</dd></div>
-            <div><dt>زمان باز شدن</dt><dd>{{ formatDateTime(openSession.openedAt) }}</dd></div>
-          </dl>
-          <button v-if="auth.can('cash.edit')" type="button" class="btn btn-soft" @click="closing.open = true; closing.counted = 0; closing.error = ''">بستن صندوق</button>
+        <div class="cash-bar__session">
+          <span class="xr-badge xr-badge--green">صندوق باز</span>
+          <strong>{{ openSession.registerName }}</strong>
+          <span class="xr-meta">از {{ formatDateTime(openSession.openedAt) }} · موجودی شروع {{ money(openSession.openingAmount) }}</span>
         </div>
       </template>
-      <form v-else-if="auth.can('cash.create')" class="row g-3 align-items-end" @submit.prevent="open">
-        <div class="col-md-4">
-          <label class="form-label" for="c-register">صندوق</label>
-          <select id="c-register" v-model.number="opening.registerId" class="form-select" required>
-            <option v-for="r in registers" :key="r.id" :value="r.id">{{ r.name }}</option>
-          </select>
-        </div>
-        <div class="col-md-4">
-          <label class="form-label" for="c-opening">موجودی شروع</label>
-          <input id="c-opening" v-model.number="opening.amount" class="form-control" type="number" min="0" step="0.01" required />
-        </div>
-        <div class="col-md-4"><button type="submit" class="btn btn-primary xr-field-height" :disabled="opening.saving">باز کردن صندوق</button></div>
+      <form v-else-if="auth.can('cash.create')" class="cash-bar__open" @submit.prevent="open">
+        <span class="xr-badge xr-badge--orange">صندوق بسته است</span>
+        <select v-model.number="opening.registerId" class="form-select" aria-label="صندوق" required>
+          <option v-for="r in registers" :key="r.id" :value="r.id">{{ r.name }}</option>
+        </select>
+        <label class="cash-bar__amount">موجودی شروع
+          <input v-model.number="opening.amount" class="form-control" type="number" min="0" step="0.01" required />
+        </label>
+        <button type="submit" class="btn btn-primary" :disabled="opening.saving">باز کردن صندوق</button>
       </form>
-    </UiCard>
+      <span v-else class="xr-badge xr-badge--orange">صندوق بسته است</span>
+
+      <div class="xr-figures cash-bar__figures">
+        <span class="xr-figure xr-figure--orange"><strong>{{ quantity(invoices.length) }}</strong> در انتظار پرداخت</span>
+        <span class="xr-figure xr-figure--red"><strong>{{ money(pendingTotal) }}</strong> مجموع مانده</span>
+        <span v-if="openSession" class="xr-figure xr-figure--green"><strong>{{ money(openSession.cashCollected) }}</strong> دریافت نقدی این صندوق</span>
+      </div>
+      <button v-if="openSession && auth.can('cash.edit')" type="button" class="btn btn-soft" @click="closing.open = true; closing.counted = 0; closing.error = ''">بستن صندوق</button>
+    </section>
 
     <UiCard title="فاکتورهای قابل دریافت">
       <template #actions>
@@ -221,6 +241,29 @@ onBeforeUnmount(() => clearTimeout(debounce))
         </table>
       </div>
     </UiCard>
+
+    <UiCard v-if="showReceipts" title="دریافت‌های این صندوق">
+      <p v-if="receiptList.rows.value.length === 0" class="xr-state">هنوز در این صندوق دریافتی ثبت نشده است.</p>
+      <div v-else class="xr-table-wrap">
+        <table class="xr-table">
+          <thead><tr><th>رسید</th><th>فاکتور</th><th>مبلغ</th><th>روش</th><th>زمان</th><th><span class="visually-hidden">چاپ</span></th></tr></thead>
+          <tbody>
+            <tr v-for="row in receiptList.rows.value" :key="row.id">
+              <td><span class="ltr-num">{{ row.receiptNumber }}</span></td>
+              <td><span class="ltr-num">{{ row.invoiceNumber }}</span></td>
+              <td>
+                {{ money(row.amount) }}
+                <span v-if="row.refunded" class="xr-note xr-note--red">برگشت {{ money(row.refunded) }}</span>
+              </td>
+              <td>{{ row.method === 'Cash' ? 'نقد' : 'غیرنقدی' }}</td>
+              <td class="text-nowrap">{{ formatDateTime(row.createdAt) }}</td>
+              <td class="text-end"><RouterLink v-if="auth.can('payments.print')" :to="`/print/receipt/${row.id}`" target="_blank" class="btn btn-quiet btn-sm">چاپ دوباره</RouterLink></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <UiPager :page="receiptList.page.value" :page-count="receiptList.pageCount.value" @go="receiptList.goTo($event).catch((cause) => (error = errorMessage(cause)))" />
+    </UiCard>
   </div>
 
   <UiModal v-if="pay.detail" :title="`فاکتور ${pay.detail.invoice.invoiceNumber}`" @close="pay.detail = null">
@@ -231,7 +274,8 @@ onBeforeUnmount(() => clearTimeout(debounce))
     <div v-if="pay.receipt" class="alert alert-success" role="status">
       دریافت ثبت شد. شماره رسید: <span class="ltr-num">{{ pay.receipt.receiptNumber }}</span>
       <template v-if="pay.receipt.queueNumber !== null">، شماره نوبت: <strong>{{ quantity(pay.receipt.queueNumber) }}</strong></template>
-      <RouterLink v-if="auth.can('payments.print')" :to="`/print/receipt/${pay.receipt.id}`" target="_blank" class="btn btn-soft btn-sm ms-2">چاپ رسید</RouterLink>
+      <!-- Printing is the last step of a payment, so it also puts the dialog away for the next patient. -->
+      <RouterLink v-if="auth.can('payments.print')" :to="`/print/receipt/${pay.receipt.id}`" target="_blank" class="btn btn-primary btn-sm ms-2" @click="pay.detail = null">چاپ رسید</RouterLink>
     </div>
     <form v-else @submit.prevent="submitPayment">
       <div class="row g-3 mb-3">
@@ -279,7 +323,7 @@ onBeforeUnmount(() => clearTimeout(debounce))
       <input id="v-reason" v-model="voiding.reason" class="form-control mb-3" maxlength="300" required />
       <div v-if="voiding.error" class="alert alert-danger" role="alert">{{ voiding.error }}</div>
       <div class="xr-form-actions">
-        <button type="submit" class="btn btn-primary" :disabled="voiding.saving">باطل کردن فاکتور</button>
+        <button type="submit" class="btn btn-danger" :disabled="voiding.saving">باطل کردن فاکتور</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>
@@ -288,9 +332,48 @@ onBeforeUnmount(() => clearTimeout(debounce))
 </template>
 
 <style scoped>
-.cash-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: var(--xr-gap);
+.cash-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 10px 16px;
+}
+
+.cash-bar__session,
+.cash-bar__open {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.cash-bar__open .form-select,
+.cash-bar__open .form-control {
+  width: auto;
+  min-height: 36px;
+  padding-block: 4px;
+}
+
+.cash-bar__amount {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--xr-text);
+  white-space: nowrap;
+}
+
+.cash-bar__amount .form-control {
+  max-width: 130px;
+}
+
+.cash-bar__figures {
+  margin-inline-start: auto;
+}
+
+.cash-bar__figures .xr-figure {
+  background: var(--xr-page-bg);
+  box-shadow: none;
 }
 </style>

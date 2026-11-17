@@ -59,7 +59,6 @@ public static class OpeningStockImport
 
     public static string DatasetId(StagingFile file) => $"opening-{file.PreparedOn}";
 
-    public static string ProductCode(StagingFile file, StagingRow row) => $"OS-{file.PreparedOn.Replace("-", "")}-{row.SourceRecordId}";
 
     /// <summary>Starts every movement's reason, so a second run finds the rows the first one recorded.</summary>
     public static string Key(StagingFile file, StagingRow row) => $"[{DatasetId(file)}/{row.SourceRecordId}]";
@@ -166,7 +165,14 @@ public static class OpeningStockImport
         // An item the clinic already has is matched only on the same name with strength, form and unit; a similar name stops the row.
         var products = await db.Products.AsNoTracking().Select(p => new { p.Id, p.Code, p.Name, p.Category, p.Unit }).ToListAsync(ct);
         var productFor = new Dictionary<string, int?>();
-        var ownCodes = $"OS-{file.PreparedOn.Replace("-", "")}-";
+
+        // Products this sheet made earlier, known by the row key in their creation audit, since their codes are plain numbers.
+        var made = (await db.AuditLogs.AsNoTracking()
+                .Where(a => a.Action == "ProductCreated" && a.Entity == nameof(Product) && a.Details!.StartsWith($"[{datasetId}/"))
+                .Select(a => new { a.EntityId, a.Details }).ToListAsync(ct))
+            .Select(a => (Key: a.Details![..(a.Details.IndexOf(']') + 1)], Id: int.Parse(a.EntityId!, System.Globalization.CultureInfo.InvariantCulture)))
+            .ToList();
+        var madeIds = made.Select(m => m.Id).ToHashSet();
         for (var i = 0; i < decisions.Count; i++)
         {
             var d = decisions[i];
@@ -181,11 +187,12 @@ public static class OpeningStockImport
                 continue;
             }
 
-            var code = ProductCode(file, d.Row);
+            var key = keys[d.Row.SourceRecordId];
             var name = ProductName(d.Row);
-            var own = products.SingleOrDefault(p => p.Code == code);
-            var same = products.Where(p => p.Code != code && Same(p.Name, name) && Same(p.Category, d.Row.FormRaw) && Same(p.Unit, d.Row.QuantityUnit)).ToList();
-            var similar = products.Where(p => !p.Code.StartsWith(ownCodes) && !same.Contains(p) && p.Name.Contains(d.Row.NameRaw.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+            var ownId = made.Where(m => m.Key == key).Select(m => (int?)m.Id).FirstOrDefault();
+            var own = products.SingleOrDefault(p => p.Id == ownId);
+            var same = products.Where(p => p.Id != ownId && Same(p.Name, name) && Same(p.Category, d.Row.FormRaw) && Same(p.Unit, d.Row.QuantityUnit)).ToList();
+            var similar = products.Where(p => !madeIds.Contains(p.Id) && !same.Contains(p) && p.Name.Contains(d.Row.NameRaw.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
             if (same.Count > 1 || similar.Count > 0)
             {
                 decisions[i] = d with { Outcome = Outcome.Held, Reason = $"جنس هم‌نام در سیستم؛ تطبیق دستی لازم: {string.Join("، ", same.Concat(similar).Select(p => $"{p.Code} {p.Name} ({p.Category}، {p.Unit})"))}" };
@@ -230,6 +237,7 @@ public static class OpeningStockImport
             var stock = services.GetRequiredService<StockService>();
             var audit = services.GetRequiredService<AuditService>();
             var outbox = services.GetRequiredService<Outbox>();
+            var numbers = services.GetRequiredService<NumberService>();
 
             await using var tx = await db.Database.BeginTransactionAsync(ct);
 
@@ -250,7 +258,7 @@ public static class OpeningStockImport
                 {
                     var product = new Product
                     {
-                        Code = ProductCode(file, row),
+                        Code = await InventoryEndpoints.NextProductCodeAsync(db, numbers, ct),
                         Name = ProductName(row),
                         Kind = ProductKind.Drug,
                         Category = row.FormRaw,

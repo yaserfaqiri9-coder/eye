@@ -20,9 +20,14 @@ interface OrderDetail {
   status: string
   version: number
   sale: {
-    items: { productId: number; productName: string; kind: string; unit: string; salePrice: number; onHand: number; isActive: boolean; quantity: number }[]
+    items: { productId: number; productName: string; kind: string; unit: string; salePrice: number; onHand: number; isActive: boolean; quantity: number; unitPrice: number }[]
     customLines: { description: string; amount: number }[]
   }
+}
+
+/** Frames and lenses have no fixed price: the seller types the agreed price; empty falls back to the product's price. */
+function blankItem() {
+  return { productId: null as number | null, productName: null as string | null, quantity: 1, unitPrice: null as number | null }
 }
 
 const rx = ref<OpticalRx | null>(null)
@@ -31,7 +36,7 @@ const correcting = ref<OrderDetail | null>(null)
 const correctId = Number(route.query.correct) || null
 const form = reactive({
   description: '',
-  items: [{ productId: null as number | null, productName: null as string | null, quantity: 1 }],
+  items: [blankItem()],
   custom: [] as { description: string; amount: number | null }[],
   reason: '',
 })
@@ -46,9 +51,13 @@ const search = productSearch(['Frame', 'Lens'], (rows) => rows.forEach((row) => 
 
 const lens = computed(() => parseOpticalNotes(rx.value?.notes).lens)
 
+function priceOf(item: { productId: number | null; unitPrice: number | null }) {
+  return typeof item.unitPrice === 'number' ? item.unitPrice : (known.get(item.productId ?? 0)?.salePrice ?? 0)
+}
+
 const total = computed(
   () =>
-    form.items.reduce((sum, item) => sum + (known.get(item.productId ?? 0)?.salePrice ?? 0) * (item.quantity || 0), 0) +
+    form.items.reduce((sum, item) => sum + priceOf(item) * (item.quantity || 0), 0) +
     form.custom.reduce((sum, line) => sum + (line.amount || 0), 0),
 )
 
@@ -79,7 +88,7 @@ async function loadCorrection() {
     for (const i of order.sale.items) known.set(i.productId, { id: i.productId, name: i.productName, kind: i.kind, salePrice: i.salePrice, onHand: i.onHand, unit: i.unit, isActive: i.isActive })
     applying(() => {
       form.description = order.description ?? ''
-      form.items = order.sale.items.length ? order.sale.items.map((i) => ({ productId: i.productId, productName: i.productName, quantity: i.quantity })) : [{ productId: null, productName: null, quantity: 1 }]
+      form.items = order.sale.items.length ? order.sale.items.map((i) => ({ productId: i.productId, productName: i.productName, quantity: i.quantity, unitPrice: i.unitPrice as number | null })) : [blankItem()]
       form.custom = order.sale.customLines.map((l) => ({ description: l.description, amount: l.amount }))
     })
   } catch (cause) {
@@ -90,10 +99,16 @@ async function loadCorrection() {
 }
 
 async function submit() {
-  const items = form.items.filter((item) => item.productId).map((item) => ({ productId: item.productId, quantity: item.quantity }))
+  const chosen = form.items.filter((item) => item.productId)
+  const items = chosen.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPrice: priceOf(item) }))
   const customLines = form.custom.filter((line) => line.description.trim() && line.amount)
   if (items.length === 0 && customLines.length === 0) {
     error.value = 'حداقل یک جنس یا یک قلم با مبلغ وارد کنید.'
+    return
+  }
+  const unpriced = chosen.find((item) => !(priceOf(item) > 0))
+  if (unpriced) {
+    error.value = `قیمت فروش «${unpriced.productName ?? known.get(unpriced.productId ?? 0)?.name ?? ''}» را وارد کنید.`
     return
   }
   saving.value = true
@@ -141,7 +156,7 @@ onMounted(() => {
     </template>
 
     <fieldset :disabled="loading">
-      <div v-if="correcting" class="alert alert-warning" role="status">سفارش فعلی با این دلیل لغو می‌شود و سفارش تازه با قیمت‌های امروز ثبت می‌شود. سفارشی که پرداخت شده باشد از اینجا اصلاح نمی‌شود.</div>
+      <div v-if="correcting" class="alert alert-warning" role="status">سفارش فعلی با این دلیل لغو می‌شود و سفارش تازه با قیمت‌های همین فرم ثبت می‌شود. سفارشی که پرداخت شده باشد از اینجا اصلاح نمی‌شود.</div>
       <div class="mb-4">
         <label class="form-label" for="oo-desc">شرح سفارش</label>
         <input id="oo-desc" v-model="form.description" class="form-control" maxlength="500" />
@@ -150,17 +165,18 @@ onMounted(() => {
       <div class="xr-group">
         <h2 class="xr-group__title">فریم و عدسی از گدام</h2>
         <table class="xr-lines">
-          <thead><tr><th>جنس</th><th class="line-qty">تعداد</th><th class="line-money">مبلغ</th><th></th></tr></thead>
+          <thead><tr><th>جنس</th><th class="line-qty">تعداد</th><th class="line-money">قیمت فروش واحد</th><th class="line-money">مبلغ</th><th></th></tr></thead>
           <tbody>
             <tr v-for="(item, i) in form.items" :key="i">
               <td><UiComboBox v-model="item.productId" :label="`جنس ردیف ${i + 1}`" hide-label :search="search" :selected-label="item.productName" chip placeholder="نام فریم یا عدسی را تایپ کنید" /></td>
               <td class="line-qty"><input v-model.number="item.quantity" class="form-control" type="number" min="1" step="1" :aria-label="`تعداد ردیف ${i + 1}`" /></td>
-              <td class="xr-lines__money">{{ money((known.get(item.productId ?? 0)?.salePrice ?? 0) * (item.quantity || 0)) }}</td>
+              <td class="line-money"><input v-model.number="item.unitPrice" class="form-control" type="number" min="0" step="0.01" :placeholder="known.get(item.productId ?? 0)?.salePrice ? String(known.get(item.productId ?? 0)?.salePrice) : 'قیمت'" :aria-label="`قیمت فروش واحد ردیف ${i + 1}`" /></td>
+              <td class="xr-lines__money">{{ money(priceOf(item) * (item.quantity || 0)) }}</td>
               <td><button type="button" class="btn btn-soft-danger btn-icon" :aria-label="`حذف ردیف ${i + 1}`" title="حذف ردیف" :disabled="form.items.length === 1" @click="form.items.splice(i, 1)"><i class="ri-close-line" aria-hidden="true"></i></button></td>
             </tr>
           </tbody>
         </table>
-        <button type="button" class="btn btn-soft btn-sm mt-2" @click="form.items.push({ productId: null, productName: null, quantity: 1 })">افزودن جنس</button>
+        <button type="button" class="btn btn-soft btn-sm mt-2" @click="form.items.push(blankItem())">افزودن جنس</button>
       </div>
 
       <div class="xr-group mb-0">

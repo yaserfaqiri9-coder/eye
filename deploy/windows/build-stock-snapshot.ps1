@@ -2,7 +2,11 @@
 # their opening-stock movements and the matching opening-stock ledger postings, on top of the seeded
 # reference data. Patients, visits, invoices, payments, expenses, cash sessions, accounts, audit and
 # sync history are left out. The result is restored with restore-transfer.ps1 like a full snapshot.
-param([Parameter(Mandatory)][string]$Destination)
+param(
+    [Parameter(Mandatory)][string]$Destination,
+    # Only products whose code matches this LIKE pattern travel (e.g. 'ASH2611-%'); test items and their stock stay behind.
+    [ValidatePattern('^[A-Za-z0-9_%-]+$')][string]$ProductCodeLike
+)
 . (Join-Path $PSScriptRoot 'transfer-common.ps1')
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $bin = Join-Path $repo '.tools\mysql-8.4.11-winx64\bin'
@@ -23,7 +27,13 @@ $created = @()
 $keep = @('__efmigrationshistory', 'aspnetroleclaims', 'aspnetroles', 'aspnetusers', 'cashregisters', 'departments',
     'diagnostictests', 'ledgeraccounts', 'ledgerentries', 'ledgertransactions', 'numbersequences', 'products',
     'services', 'stockbatches', 'stocklocations', 'stockmovements')
-$trim = @"
+$only = if ($ProductCodeLike) { @"
+-- Chosen products only: the rest of the catalogue and its stock is not copied.
+DELETE m FROM StockMovements m JOIN StockBatches b ON b.Id = m.BatchId JOIN Products p ON p.Id = b.ProductId WHERE p.Code NOT LIKE '$ProductCodeLike';
+DELETE b FROM StockBatches b JOIN Products p ON p.Id = b.ProductId WHERE p.Code NOT LIKE '$ProductCodeLike';
+DELETE FROM Products WHERE Code NOT LIKE '$ProductCodeLike';
+"@ } else { '' }
+$trim = $only + @"
 -- Opening stock only: no sale, purchase or transfer may have moved a batch.
 SELECT IF(COUNT(*) = 0, 'ok', 'other-movements') INTO @movements FROM StockMovements WHERE SourceType <> 'OpeningStock';
 DELETE e FROM LedgerEntries e JOIN LedgerTransactions t ON t.Id = e.TransactionId WHERE t.Kind <> 'OpeningStock';

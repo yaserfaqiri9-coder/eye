@@ -2,7 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, errorMessage } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
-import { faDigits, formatDateTime } from '@/utils/date'
+import { latinDigits, formatDateTime } from '@/utils/date'
 
 interface SyncStatus {
   mode: 'local' | 'mirror'
@@ -59,7 +59,7 @@ onBeforeUnmount(() => clearTimeout(timer))
       </div>
       <template v-else>
         <p class="form-hint">
-          تغییرات هر {{ faDigits(status.intervalMinutes) }} دقیقه یک‌طرفه از سرور شفاخانه به نسخه آنلاین فرستاده می‌شود.
+          تغییرات هر {{ latinDigits(status.intervalMinutes) }} دقیقه یک‌طرفه از سرور شفاخانه به نسخه آنلاین فرستاده می‌شود.
           اگر اینترنت قطع باشد، تغییرات نگه داشته می‌شوند و پس از وصل‌شدن خودکار فرستاده می‌شوند.
         </p>
         <div v-if="status.lastError" class="alert alert-warning" role="status">
@@ -68,7 +68,7 @@ onBeforeUnmount(() => clearTimeout(timer))
         <div class="row g-3 mb-3">
           <div class="col-sm-6 col-lg-3"><div class="xr-meta">آخرین همگام‌سازی موفق</div><strong>{{ formatDateTime(status.lastSuccessAt) }}</strong></div>
           <div class="col-sm-6 col-lg-3"><div class="xr-meta">آخرین تلاش</div><strong>{{ formatDateTime(status.lastAttemptAt) }}</strong></div>
-          <div class="col-sm-6 col-lg-3"><div class="xr-meta">تغییرات در انتظار</div><strong>{{ faDigits(status.pending ?? 0) }}</strong></div>
+          <div class="col-sm-6 col-lg-3"><div class="xr-meta">تغییرات در انتظار</div><strong>{{ latinDigits(status.pending ?? 0) }}</strong></div>
           <div class="col-sm-6 col-lg-3">
             <div class="xr-meta">ارتباط</div>
             <strong :class="status.connected ? 'text-success' : 'text-danger'">{{ status.connected === null ? '—' : status.connected ? 'وصل' : 'قطع' }}</strong>

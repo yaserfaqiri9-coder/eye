@@ -19,12 +19,11 @@
   align-items: center;
   justify-content: center;
   gap: 8px 24px;
-  min-height: 55px;
-  margin: var(--xr-gap-y) 3px 20px;
-  padding: 15px 27px;
-  border-radius: var(--xr-radius-card);
-  background: var(--xr-surface);
-  box-shadow: var(--xr-shadow-footer);
+  /* A quiet credit line, not a card: it must not cost a work screen its last rows. */
+  margin: 14px 0 10px;
+  padding: 0 16px;
+  color: var(--xr-text-soft);
+  font-size: 12.5px;
 }
 
 .footer__brand {

@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { api, errorMessage } from '@/api/http'
+import { usePagedList } from '@/api/paged'
 import { useLiveRefresh } from '@/api/realtime'
+import UiCard from '@/components/UiCard.vue'
+import UiListSkeleton from '@/components/UiListSkeleton.vue'
+import UiModal from '@/components/UiModal.vue'
 import UiPager from '@/components/UiPager.vue'
-import InventoryStockList from './InventoryStockList.vue'
-import type { InventoryListRow } from './stockPresentation'
+import StockActionModals from './StockActionModals.vue'
+import { expiryTone, stockCategory, stockIcon, stockSearchText, stockStatus, stockStatusLabels, stockStatusTones } from './stockPresentation'
+import { useAuthStore } from '@/stores/auth'
 import { formatDate, formatDateTime } from '@/utils/date'
 import { money, quantity } from '@/utils/money'
 import { movementLabels } from './labels'
@@ -29,6 +34,7 @@ interface StockRow {
   batchCount: number
   kind: string
   category: string | null
+  salePrice: number
 }
 
 interface MovementRow {
@@ -39,11 +45,17 @@ interface MovementRow {
   quantity: number
   reason: string | null
   createdAt: string
+  reversible: boolean
 }
 
 const props = defineProps<{ code: string }>()
+const auth = useAuthStore()
 
-const pageSize = 25
+const tab = ref('stock')
+const tabs = [
+  { key: 'stock', label: 'موجودی' },
+  { key: 'history', label: 'تاریخچه ورود و خروج' },
+]
 const directions = [
   { key: '', label: 'همه' },
   { key: 'in', label: 'ورود' },
@@ -52,39 +64,42 @@ const directions = [
 
 const location = ref<LocationSummary | null>(null)
 const stock = ref<StockRow[]>([])
-const movements = ref<MovementRow[]>([])
-const total = ref(0)
-const page = ref(1)
 const direction = ref('')
 const loading = ref(true)
-const loadingMovements = ref(true)
 const error = ref('')
+const actions = ref<InstanceType<typeof StockActionModals> | null>(null)
 
-const pageCount = computed(() => Math.ceil(total.value / pageSize))
-const listRows = computed<InventoryListRow[]>(() => stock.value.map(row => ({
-  id: row.productId, name: row.productName, code: row.productCode, kind: row.kind, category: row.category,
-  quantity: row.quantity, unit: row.unit,
-  locations: [{ code: props.code, name: location.value?.name ?? props.code }],
-})))
+const movementList = usePagedList<MovementRow>(() => {
+  const params = new URLSearchParams({ location: props.code })
+  if (direction.value) params.set('direction', direction.value)
+  return `/inventory/movements?${params}`
+})
 
-let movementRequest = 0
+/** Each product in this store: amount, average purchase price, sale price and nearest expiry. */
+const search = ref('')
+const stockRows = computed(() => {
+  const term = stockSearchText(search.value)
+  return stock.value
+    .map((row) => {
+      const shape = { kind: row.kind, category: row.category, name: row.productName, quantity: row.quantity }
+      return {
+        ...row,
+        form: stockCategory({ ...shape, id: row.productId, code: row.productCode, locations: [] }),
+        icon: stockIcon(shape),
+        status: stockStatus(shape),
+        purchasePrice: row.quantity > 0 ? row.value / row.quantity : null,
+      }
+    })
+    .filter((row) => !term || stockSearchText(`${row.productName} ${row.productCode} ${row.form}`).includes(term))
+})
 
-async function loadMovements() {
-  const request = ++movementRequest
-  error.value = ''
-  loadingMovements.value = true
-  try {
-    const params = new URLSearchParams({ location: props.code, page: String(page.value), pageSize: String(pageSize) })
-    if (direction.value) params.set('direction', direction.value)
-    const result = await api<{ items: MovementRow[]; total: number }>(`/inventory/movements?${params}`)
-    if (request !== movementRequest) return
-    movements.value = result.items
-    total.value = result.total
-  } catch (cause) {
-    if (request === movementRequest) error.value = errorMessage(cause)
-  } finally {
-    if (request === movementRequest) loadingMovements.value = false
-  }
+function run(task: Promise<void>) {
+  task.catch((cause) => (error.value = errorMessage(cause)))
+}
+
+function setDirection(key: string) {
+  direction.value = key
+  run(movementList.first())
 }
 
 async function loadLocation() {
@@ -99,19 +114,32 @@ async function loadLocation() {
   }
 }
 
-function setDirection(key: string) {
-  direction.value = key
-  page.value = 1
-  void loadMovements()
-}
-
-function goTo(next: number) {
-  page.value = next
-  void loadMovements()
-}
-
 async function load() {
-  await Promise.all([loadMovements(), loadLocation()])
+  error.value = ''
+  await Promise.all([
+    loadLocation(),
+    movementList.load().catch((cause) => (error.value = errorMessage(cause))),
+  ])
+}
+
+const reverse = reactive({ row: null as MovementRow | null, reason: '', saving: false, error: '' })
+
+function canReverse(row: MovementRow) {
+  return row.reversible && auth.can(row.kind === 'TransferOut' ? 'inventory.edit' : 'inventory.approve')
+}
+
+async function submitReverse() {
+  reverse.saving = true
+  reverse.error = ''
+  try {
+    await api(`/inventory/movements/${reverse.row!.id}/reverse`, { method: 'POST', body: { reason: reverse.reason } })
+    reverse.row = null
+    await load()
+  } catch (cause) {
+    reverse.error = errorMessage(cause)
+  } finally {
+    reverse.saving = false
+  }
 }
 
 useLiveRefresh(['InventoryChanged'], load)
@@ -119,77 +147,138 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
-    <h1 class="h4 mb-0">{{ location?.name ?? 'گدام' }}</h1>
-    <RouterLink :to="{ name: 'inventory' }" class="btn btn-soft">بازگشت به گدام</RouterLink>
-  </div>
-  <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
+  <div class="d-grid gap-4">
+  <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
 
-  <dl v-if="location" class="xr-card xr-location-stats">
-    <div><dt>اجناس موجود</dt><dd>{{ quantity(location.productCount) }}</dd></div>
-    <div><dt>بچ‌ها</dt><dd>{{ quantity(location.batchCount) }}</dd></div>
-    <div><dt>ارزش موجودی</dt><dd>{{ money(location.stockValue) }}</dd></div>
-    <div><dt>آخرین گردش</dt><dd>{{ location.lastMovementAt ? formatDateTime(location.lastMovementAt) : '—' }}</dd></div>
-  </dl>
+  <UiCard :title="location?.name ?? 'گدام'">
+    <template #actions>
+      <RouterLink :to="{ name: 'inventory' }" class="btn btn-soft">بازگشت به گدام</RouterLink>
+    </template>
+    <dl v-if="location" class="xr-facts mb-0">
+      <div><dt>اجناس موجود</dt><dd>{{ quantity(location.productCount) }}</dd></div>
+      <div><dt>بچ‌ها</dt><dd>{{ quantity(location.batchCount) }}</dd></div>
+      <div><dt>ارزش موجودی</dt><dd>{{ money(location.stockValue) }}</dd></div>
+      <div><dt>آخرین گردش</dt><dd>{{ formatDateTime(location.lastMovementAt) }}</dd></div>
+    </dl>
+  </UiCard>
 
-  <InventoryStockList :title="`موجودی ${location?.name ?? 'گدام'}`" :rows="listRows" :loading="loading" :location="code" />
-  <details class="location-stock-details">
-    <summary>جزئیات بچ‌ها، انقضا و ارزش موجودی</summary>
-    <div class="xr-table-wrap"><table class="xr-table"><thead><tr><th>جنس</th><th>بچ‌ها</th><th>نزدیک‌ترین انقضا</th><th>ارزش</th></tr></thead><tbody><tr v-for="row in stock" :key="row.productId"><td>{{ row.productName }}</td><td>{{ quantity(row.batchCount) }}</td><td>{{ row.nearestExpiry ? formatDate(row.nearestExpiry) : '—' }}</td><td>{{ money(row.value) }}</td></tr></tbody></table></div>
-  </details>
-
-  <section class="xr-card" aria-labelledby="location-history">
+  <section class="xr-card">
     <div class="xr-card__header flex-wrap">
-      <h2 id="location-history" class="h6 mb-0">تاریخچه ورود و خروج</h2>
-      <nav class="xr-tabs" aria-label="نوع گردش">
+      <nav class="xr-tabs" role="tablist" aria-label="بخش‌های گدام">
+        <button v-for="t in tabs" :key="t.key" type="button" role="tab" class="xr-tab" :class="{ 'xr-tab--active': tab === t.key }" :aria-selected="tab === t.key" @click="tab = t.key">{{ t.label }}</button>
+      </nav>
+      <input v-if="tab === 'stock'" v-model="search" type="search" class="form-control location-search" placeholder="جستجو با نام یا کد جنس" aria-label="جستجوی نام یا کد جنس" />
+      <nav v-else-if="tab === 'history'" class="xr-tabs" aria-label="نوع گردش">
         <button v-for="d in directions" :key="d.key" type="button" class="xr-tab" :class="{ 'xr-tab--active': direction === d.key }" :aria-pressed="direction === d.key" @click="setDirection(d.key)">{{ d.label }}</button>
       </nav>
     </div>
+
     <div class="xr-card__body">
-      <p v-if="loadingMovements && movements.length === 0" class="xr-state" role="status">در حال بارگذاری...</p>
-      <p v-else-if="movements.length === 0" class="xr-state">گردشی ثبت نشده است.</p>
-      <div v-else class="xr-table-wrap">
-        <table class="xr-table">
-          <thead><tr><th>زمان</th><th>جهت</th><th>نوع</th><th>جنس</th><th>بچ</th><th>مقدار</th><th>دلیل</th></tr></thead>
-          <tbody>
-            <tr v-for="row in movements" :key="row.id">
-              <td>{{ formatDateTime(row.createdAt) }}</td>
-              <td><span class="xr-badge" :class="row.quantity > 0 ? 'xr-badge--green' : 'xr-badge--red'">{{ row.quantity > 0 ? 'ورود' : 'خروج' }}</span></td>
-              <td>{{ movementLabels[row.kind] ?? row.kind }}</td>
-              <td>{{ row.productName }}</td>
-              <td><span class="ltr-num">{{ row.lotNumber || '—' }}</span></td>
-              <td>{{ quantity(Math.abs(row.quantity)) }}</td>
-              <td>{{ row.reason ?? '—' }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <UiPager :page="page" :page-count="pageCount" @go="goTo" />
+      <template v-if="tab === 'stock'">
+        <UiListSkeleton v-if="loading" />
+        <p v-else-if="stockRows.length === 0" class="xr-state">{{ stock.length ? 'هیچ جنسی با این جستجو پیدا نشد.' : 'در این گدام جنسی نیست.' }}</p>
+        <div v-else class="xr-table-wrap" role="region" aria-label="موجودی فعلی" tabindex="0">
+          <table class="xr-table">
+            <thead><tr><th>نام محصول</th><th>نوعیت</th><th>مقدار</th><th>قیمت خرید</th><th>قیمت فروش</th><th>تاریخ انقضا</th><th v-if="auth.can('inventory.edit') || auth.can('inventory.approve')"></th></tr></thead>
+            <tbody>
+              <tr v-for="row in stockRows" :key="row.productId">
+                <td>
+                  <div class="location-item">
+                    <i :class="row.icon" class="location-item__icon" aria-hidden="true"></i>
+                    <div class="d-grid"><strong>{{ row.productName }}</strong><small class="ltr-num text-muted">{{ row.productCode }}</small></div>
+                  </div>
+                </td>
+                <td>{{ row.form }}</td>
+                <td class="text-nowrap">
+                  <strong>{{ quantity(row.quantity) }}</strong> <span class="text-muted">{{ row.unit }}</span>
+                  <span v-if="row.status !== 'available'" class="xr-badge ms-1" :class="`xr-badge--${stockStatusTones[row.status]}`">{{ stockStatusLabels[row.status] }}</span>
+                </td>
+                <td class="text-nowrap" :title="row.batchCount > 1 ? 'میانگین قیمت خرید بچ‌های موجود' : undefined">{{ row.purchasePrice != null ? money(row.purchasePrice) : '—' }}</td>
+                <td class="text-nowrap">{{ row.salePrice ? money(row.salePrice) : '—' }}</td>
+                <td class="text-nowrap">
+                  <span v-if="row.nearestExpiry" :class="expiryTone(row.nearestExpiry)">{{ formatDate(row.nearestExpiry) }}</span>
+                  <span v-else class="text-muted">—</span>
+                  <small v-if="row.batchCount > 1" class="d-block text-muted">نزدیک‌ترین از {{ quantity(row.batchCount) }} بچ</small>
+                </td>
+                <td v-if="auth.can('inventory.edit') || auth.can('inventory.approve')" class="text-nowrap text-end">
+                  <div class="location-actions">
+                    <button v-if="auth.can('inventory.edit')" type="button" class="btn btn-soft btn-sm" @click="actions?.open('transfer', row.productId, row.productName, code)">انتقال</button>
+                    <button v-if="auth.can('inventory.approve')" type="button" class="btn btn-soft btn-sm" @click="actions?.open('adjust', row.productId, row.productName, code)">تعدیل</button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
+      <template v-else>
+        <p v-if="movementList.rows.value.length === 0" class="xr-state">گردشی ثبت نشده است.</p>
+        <div v-else class="xr-table-wrap">
+          <table class="xr-table">
+            <thead><tr><th>زمان</th><th>جهت</th><th>نوع</th><th>جنس</th><th>بچ</th><th>مقدار</th><th>دلیل</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="row in movementList.rows.value" :key="row.id">
+                <td>{{ formatDateTime(row.createdAt) }}</td>
+                <td><span class="xr-badge" :class="row.quantity > 0 ? 'xr-badge--green' : 'xr-badge--red'">{{ row.quantity > 0 ? 'ورود' : 'خروج' }}</span></td>
+                <td>{{ movementLabels[row.kind] ?? row.kind }}</td>
+                <td>{{ row.productName }}</td>
+                <td><span class="ltr-num">{{ row.lotNumber || '—' }}</span></td>
+                <td>{{ quantity(Math.abs(row.quantity)) }}</td>
+                <td>{{ row.reason ?? '—' }}</td>
+                <td><button v-if="canReverse(row)" type="button" class="btn btn-soft-danger btn-sm" @click="Object.assign(reverse, { row, reason: '', saving: false, error: '' })">برگشت</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <UiPager :page="movementList.page.value" :page-count="movementList.pageCount.value" @go="run(movementList.goTo($event))" />
+      </template>
     </div>
   </section>
+  </div>
+
+  <StockActionModals ref="actions" @done="load" />
+
+  <UiModal v-if="reverse.row" :title="`برگشت ${movementLabels[reverse.row.kind]}: ${reverse.row.productName}`" @close="reverse.row = null">
+    <form @submit.prevent="submitReverse">
+      <p>گردشی برعکس این مورد ثبت می‌شود و موجودی به حالت قبل برمی‌گردد. سابقه هر دو می‌ماند.</p>
+      <label class="form-label" for="rv-reason">دلیل</label>
+      <input id="rv-reason" v-model="reverse.reason" class="form-control mb-3" minlength="3" maxlength="300" required />
+      <div v-if="reverse.error" class="alert alert-danger" role="alert">{{ reverse.error }}</div>
+      <div class="xr-form-actions">
+        <button type="submit" class="btn btn-danger" :disabled="reverse.saving">ثبت برگشت</button>
+        <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+      </div>
+    </form>
+  </UiModal>
 </template>
 
 <style scoped>
-.location-stock-details { margin-block: 20px; padding: 16px; border: 1px solid #eef0f4; border-radius: 5px; background: #fff; }
-.location-stock-details summary { cursor: pointer; font-size: 12px; color: #5a6476; }
-.xr-location-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: 1rem;
-  padding: 1rem 1.25rem;
-  margin-bottom: 1rem;
+.location-search {
+  width: 260px;
+  max-width: 100%;
 }
 
-.xr-location-stats dt {
-  font-weight: 400;
-  font-size: 0.85rem;
-  color: var(--xr-text-soft);
+.location-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.xr-location-stats dd {
-  margin: 0.25rem 0 0;
-  font-weight: 600;
-  color: var(--xr-text);
+.location-item__icon {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--xr-tone-primary-bg);
+  color: var(--xr-primary);
+  font-size: 17px;
 }
 
+.location-actions {
+  display: inline-flex;
+  gap: 6px;
+}
 </style>

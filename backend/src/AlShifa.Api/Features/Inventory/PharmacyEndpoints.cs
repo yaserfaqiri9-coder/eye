@@ -80,19 +80,21 @@ public static class PharmacyEndpoints
         pharmacy.MapGet("/search", async (AppDbContext db, string? q, CancellationToken ct) =>
         {
             var folded = PharmacySearch.Fold(q ?? "");
-            if (folded.Length < 2)
+            // One letter finds too much, but one digit is a whole file or prescription number.
+            if (folded.Length == 0 || (folded.Length < 2 && !char.IsAsciiDigit(folded[0])))
             {
                 return Results.Ok(Array.Empty<PharmacyPatientHit>());
             }
 
             var ids = new HashSet<long>();
 
-            // Numbers people read off paper: P-000123, RX-0000045, V-..., INV-..., SL-..., or only their digits.
+            // Numbers people read off paper: plain file, prescription, visit, invoice or sale numbers, or older printed ones like P-000123.
             var digits = new string(folded.Where(char.IsAsciiDigit).ToArray());
-            var code = folded.ToUpperInvariant();
+            var code = OldNumbers.Plain(folded).ToUpperInvariant();
             if (folded.Any(char.IsAsciiDigit) && !folded.Contains(' '))
             {
-                var suffix = "%" + digits;
+                var number = digits.TrimStart('0');
+                var suffix = "%" + (number.Length > 0 ? number : digits);
                 ids.UnionWith(await db.Patients.Where(p => p.FileNumber == code || EF.Functions.Like(p.FileNumber, suffix) || (p.Phone != null && EF.Functions.Like(p.Phone, "%" + digits + "%"))).OrderByDescending(p => p.Id).Select(p => p.Id).Take(50).ToListAsync(ct));
                 ids.UnionWith(await db.MedicalPrescriptions.Where(p => p.RxNumber == code || EF.Functions.Like(p.RxNumber, suffix)).OrderByDescending(p => p.Id).Select(p => p.PatientId).Take(20).ToListAsync(ct));
                 ids.UnionWith(await db.Visits.Where(v => v.VisitNumber == code || EF.Functions.Like(v.VisitNumber, suffix)).OrderByDescending(v => v.Id).Select(v => v.PatientId).Take(20).ToListAsync(ct));
@@ -157,7 +159,10 @@ public static class PharmacyEndpoints
                     && (p.PharmacyStatus == PharmacyRxStatus.AwaitingVisit || p.PharmacyStatus == PharmacyRxStatus.AwaitingDecision)
                     && !db.Sales.Any(s => s.PrescriptionId == p.Id && !s.IsReturned && s.DeliveredAt == null))
                 .OrderByDescending(p => p.Id).Take(100), ct);
-            var partial = await RowsAsync(db, open.Where(p => p.Status == PrescriptionStatus.PartiallyDispensed).OrderByDescending(p => p.Id).Take(100), ct);
+            // A partly handed-over prescription whose rest the patient buys outside or leaves for now has left the pharmacy's work list.
+            // A new bill for it sets the decision back to AwaitingDecision, so it returns here on its own.
+            var partial = await RowsAsync(db, open.Where(p => p.Status == PrescriptionStatus.PartiallyDispensed
+                && p.PharmacyStatus != PharmacyRxStatus.BuyingOutside && p.PharmacyStatus != PharmacyRxStatus.NotNow).OrderByDescending(p => p.Id).Take(100), ct);
             var doctor = await RowsAsync(db, open.Where(p => p.PharmacyStatus == PharmacyRxStatus.NeedsDoctorReview).OrderByDescending(p => p.Id).Take(100), ct);
 
             var cutoff = DateTime.UtcNow - stock.ReservationWindow;
@@ -257,8 +262,11 @@ public static class PharmacyEndpoints
         : ready ? "ReadyToDeliver"
         : unpaid ? "AwaitingPayment"
         : decision == PharmacyRxStatus.NeedsDoctorReview || validUntil < KabulClock.Today ? "NeedsDoctorReview"
-        : status == PrescriptionStatus.PartiallyDispensed ? "Partial"
+        // Part handed over and the rest bought elsewhere or left for now: the pharmacy's work on it is done, so it is no longer "partial".
+        : status == PrescriptionStatus.PartiallyDispensed && !RestSettled(decision) ? "Partial"
         : decision.ToString();
+
+    private static bool RestSettled(PharmacyRxStatus decision) => decision is PharmacyRxStatus.BuyingOutside or PharmacyRxStatus.NotNow;
 
     private static async Task<PharmacyRxDetail> DetailAsync(AppDbContext db, StockService stock, long id, CancellationToken ct)
     {
@@ -280,6 +288,10 @@ public static class PharmacyEndpoints
             .Where(b => b.LocationId == pharmacyId && b.Quantity > 0 && (b.ExpiryDate == null || b.ExpiryDate >= today) && products.Select(p => p.Id).Contains(b.ProductId))
             .Select(b => new { b.Id, b.ProductId, b.Quantity }).ToListAsync(ct);
         var reserved = await stock.ReservedAsync(batches.Select(b => b.Id).ToList(), null, ct);
+        // Stock on the shelf past its date: never sold, but the pharmacist must be told why, not just "out".
+        var expiredIds = await db.StockBatches.AsNoTracking()
+            .Where(b => b.LocationId == pharmacyId && b.Quantity > 0 && b.ExpiryDate < today && products.Select(p => p.Id).Contains(b.ProductId))
+            .Select(b => b.ProductId).Distinct().ToListAsync(ct);
 
         var items = rx.Items.OrderBy(i => i.Id).Select(i =>
         {
@@ -287,7 +299,9 @@ public static class PharmacyEndpoints
             var pending = billed.GetValueOrDefault(i.Id);
             var remaining = Math.Max(0, i.Quantity - i.DispensedQuantity - pending);
             var available = product is null ? 0 : batches.Where(b => b.ProductId == product.Id).Sum(b => b.Quantity - reserved.GetValueOrDefault(b.Id));
-            var state = product is null ? "NotStocked" : available <= 0 ? "Out" : available < remaining ? "Short" : "Available";
+            var state = product is null ? "NotStocked"
+                : available <= 0 ? (expiredIds.Contains(product.Id) ? "Expired" : "Out")
+                : available < remaining ? "Short" : "Available";
             return new PharmacyRxItem(i.Id, i.DrugName, i.Dose, i.Route, i.Duration, i.Instructions, i.Quantity, i.DispensedQuantity, pending, remaining,
                 product?.Id, product?.Unit, product?.SalePrice, Math.Max(0, available), state);
         }).ToList();
@@ -296,7 +310,7 @@ public static class PharmacyEndpoints
         var bills = await db.Sales.AsNoTracking().Where(s => s.PrescriptionId == id).OrderByDescending(s => s.Id)
             .Select(s => new
             {
-                s.Id, s.SaleNumber, s.Invoice!.InvoiceNumber, Total = s.Invoice.Total - s.Invoice.Discount, Balance = s.Invoice.Total - s.Invoice.Discount - s.Invoice.Paid,
+                s.Id, s.SaleNumber, s.Invoice!.InvoiceNumber, Total = s.Invoice.Total - s.Invoice.Discount, Balance = s.Invoice.Status == InvoiceStatus.Void ? 0 : s.Invoice.Total - s.Invoice.Discount - s.Invoice.Paid,
                 Paid = s.Invoice.Status != InvoiceStatus.Void && s.Invoice.Total - s.Invoice.Discount <= s.Invoice.Paid - s.Invoice.Refunded,
                 s.IsReturned, s.CreatedAt, s.DeliveredAt, DeliveredBy = db.Users.Where(u => u.Id == s.DeliveredByUserId).Select(u => u.FullName).FirstOrDefault(),
                 s.UnpaidDeliveryReason, s.Version,

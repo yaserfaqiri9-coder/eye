@@ -2,7 +2,7 @@ import { computed, onMounted, ref } from 'vue'
 import { api, errorMessage } from '@/api/http'
 import { useLiveRefresh } from '@/api/realtime'
 import { useAuthStore } from '@/stores/auth'
-import { MissingClipError, sharedPlayer } from './clipPlayer'
+import { sharedPlayer } from './clipPlayer'
 
 export type CallDeskName = 'Reception' | 'Vision' | 'Doctor' | 'Refraction' | 'Imaging' | 'Lab' | 'Pharmacy' | 'Optical'
 
@@ -90,12 +90,12 @@ export function useCallDesk(desk: CallDeskName) {
   async function playHere(call: CallRow, clips: string[]) {
     let reason: string | null = null
     try {
-      await sharedPlayer.play(clips)
+      await sharedPlayer.play(clips, call.id)
     } catch (cause) {
-      reason = cause instanceof MissingClipError ? cause.message : 'پخش صدا در این رایانه ناموفق بود. بلندگوی رایانه را بررسی کنید.'
+      reason = cause instanceof Error ? cause.message : 'پخش صدا در این رایانه ناموفق بود. بلندگوی رایانه را بررسی کنید.'
       error.value = reason
     }
-    await api(`/calls/${call.id}/local-result`, { method: 'POST', body: { played: reason === null, reason } })
+    await api(`/calls/${call.id}/local-result`, { method: 'POST', body: { played: reason === null, reason: reason?.slice(0, 200) ?? null } })
   }
 
   async function act(row: CallQueueRow, path: string, body: unknown) {
@@ -103,7 +103,7 @@ export function useCallDesk(desk: CallDeskName) {
     error.value = ''
     try {
       const result = await api<CallRow | undefined>(path, { method: 'POST', body })
-      if (result?.localClips?.length) await playHere(result, result.localClips)
+      if (result?.localClips) await playHere(result, [...result.localClips])
     } catch (cause) {
       error.value = errorMessage(cause)
     } finally {

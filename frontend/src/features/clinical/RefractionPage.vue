@@ -250,7 +250,7 @@ onMounted(load)
         </div>
 
         <h3 class="section-title">Visual Acuity (دید بدون عینک)</h3>
-        <div class="xr-table-wrap mb-4">
+        <div class="xr-table-wrap mb-3">
           <table class="xr-clinical-table">
             <thead>
               <tr>
@@ -279,19 +279,22 @@ onMounted(load)
           </div>
         </details>
 
-        <details class="xr-section" open>
-          <summary>{{ refractionStageLabels.Auto }}</summary>
-          <div class="xr-section__body">
-            <RxGrid :od="form.lines.Auto.od" :os="form.lines.Auto.os" label="Auto Refraction" :readonly="!canEdit" />
-          </div>
-        </details>
+        <!-- The device reading and the examiner's result side by side: they are compared, so they belong in one look. -->
+        <div class="stage-pair">
+          <details class="xr-section" open>
+            <summary>{{ refractionStageLabels.Auto }}</summary>
+            <div class="xr-section__body">
+              <RxGrid :od="form.lines.Auto.od" :os="form.lines.Auto.os" label="Auto Refraction" :readonly="!canEdit" />
+            </div>
+          </details>
 
-        <details class="xr-section" open>
-          <summary>{{ refractionStageLabels.Subjective }}</summary>
-          <div class="xr-section__body">
-            <RxGrid :od="form.lines.Subjective.od" :os="form.lines.Subjective.os" label="Subjective Refraction" show-add show-va :readonly="!canEdit" />
-          </div>
-        </details>
+          <details class="xr-section" open>
+            <summary>{{ refractionStageLabels.Subjective }}</summary>
+            <div class="xr-section__body">
+              <RxGrid :od="form.lines.Subjective.od" :os="form.lines.Subjective.os" label="Subjective Refraction" show-add show-va :readonly="!canEdit" />
+            </div>
+          </details>
+        </div>
 
         <section class="final mt-3" aria-label="نسخه نهایی">
           <h3 class="section-title final__title"><i class="ri-checkbox-circle-fill" aria-hidden="true"></i> {{ refractionStageLabels.Final }}</h3>
@@ -408,6 +411,33 @@ onMounted(load)
   align-items: center;
   gap: 6px;
   margin-inline-start: 12px;
+}
+
+.stage-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+}
+
+/* Inside the pair the eye's name is dropped: its OD/OS tag already says it, and the grid stays narrow enough for two. */
+@media (min-width: 1200px) {
+  .stage-pair {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    align-items: start;
+  }
+
+  .stage-pair :deep(.rx-grid__eye-name) {
+    display: none;
+  }
+
+  .stage-pair :deep(.rx-grid__eye) {
+    width: 50px;
+  }
+}
+
+.stage-pair > .xr-section + .xr-section {
+  margin-top: 0;
 }
 
 /* The final values are what leave this page, so they stand apart from device and examiner rows. */

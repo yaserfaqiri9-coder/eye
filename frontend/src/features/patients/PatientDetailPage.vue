@@ -189,6 +189,10 @@ const followUp = computed(() => chart.value?.followUps[0] ?? null)
               <dt>تاریخ تولد</dt>
               <dd>{{ formatDate(patient.birthDate) }}</dd>
             </div>
+            <div>
+              <dt>شغل</dt>
+              <dd>{{ patient.occupation ?? '—' }}</dd>
+            </div>
             <div class="identity__wide">
               <dt>آدرس</dt>
               <dd>{{ patient.address ?? '—' }}</dd>
@@ -462,8 +466,12 @@ const followUp = computed(() => chart.value?.followUps[0] ?? null)
   grid-template-columns: repeat(2, 1fr);
   gap: 8px;
 }
+/* Set apart from the everyday buttons, so a hurried click on «ویرایش» never lands on it. */
 .identity__delete {
-  justify-self: center;
+  justify-self: stretch;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--xr-row-border) !important;
   border: 0;
   background: transparent;
   color: var(--xr-red);

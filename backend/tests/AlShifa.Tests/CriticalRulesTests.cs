@@ -192,7 +192,6 @@ public sealed class CriticalRulesTests(ApiFixture api)
         var (inventory, _) = await UserAsync(Roles.Inventory);
         var cashier = await CashierAsync();
         var (_, visit) = await VisitAsync();
-        var serviceId = await NewServiceAsync(5000);
 
         async Task<int> SupplyAsync(decimal stock, decimal cost)
         {
@@ -205,12 +204,15 @@ public sealed class CriticalRulesTests(ApiFixture api)
 
         Task<decimal> OnHandAsync(int productId) => InDbAsync(db => db.StockBatches.Where(b => b.ProductId == productId).SumAsync(b => b.Quantity));
 
-        var lens = await SupplyAsync(5, 800);
+        // A package is entered whole: name, buying and selling price, and how many are on the shelf.
         var drops = await SupplyAsync(1, 50);
         var package = await Read<PackageRow>(await team.PostAsJsonAsync("/api/surgery-packages",
-            new SavePackageRequest(Name("آب مروارید"), serviceId, "surgery", [new PackageItemInput(lens, 1), new PackageItemInput(drops, 2)])), HttpStatusCode.Created);
+            new SavePackageRequest(Name("آب مروارید"), 5000, 800, 5, "surgery")), HttpStatusCode.Created);
         Assert.Equal(5000m, package.Price);
-        Assert.Equal(2, package.Items.Count);
+        Assert.Equal(5m, package.OnHand);
+        Assert.Equal(800m, package.CostPrice);
+        var lens = Assert.Single(package.Items).ProductId;
+        Assert.Equal(5m, await OnHandAsync(lens));
 
         var surgery = await Read<SurgeryRow>(await doctor.SendAsync(ApiFixture.Keyed("/api/surgeries", new CreateSurgeryRequest(visit.Id, package.Name, EyeSide.OD, null, package.Id))), HttpStatusCode.Created);
         var invoiceId = await InvoiceOfAsync(nameof(SurgeryCase), surgery.Id);
@@ -239,6 +241,14 @@ public sealed class CriticalRulesTests(ApiFixture api)
 
         await AssertRefused(await team.PostAsJsonAsync($"/api/surgeries/{surgery.Id}/supplies", new RecordSuppliesRequest("surgery", [new PackageItemInput(lens, 1)], surgery.Version + 4)), "supplies_recorded");
         await AssertStatus(await team.PostAsJsonAsync($"/api/surgeries/{surgery.Id}/status", new ChangeSurgeryStatusRequest(SurgeryStatus.Completed, surgery.Version + 4)), HttpStatusCode.NoContent);
+
+        // An edit adds more to the shelf at the new cost and charges later operations the new price.
+        var edited = await Read<PackageRow>(await team.PutAsJsonAsync($"/api/surgery-packages/{package.Id}",
+            new SavePackageRequest(package.Name, 6000, 900, 3, "surgery", true, package.Version)));
+        Assert.Equal(6000m, edited.Price);
+        Assert.Equal(7m, edited.OnHand);
+        Assert.Equal(lens, Assert.Single(edited.Items).ProductId);
+        Assert.Equal(5000m, await InDbAsync(db => db.Invoices.Where(i => i.Id == invoiceId).Select(i => i.Total).SingleAsync()));
         await AssertLedgerReconciles();
     }
 

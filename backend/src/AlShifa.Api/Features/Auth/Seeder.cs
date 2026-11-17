@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using AlShifa.Api.Features.Clinical;
 using AlShifa.Api.Features.Finance;
 using AlShifa.Api.Features.Inventory;
@@ -73,32 +72,32 @@ public static class Seeder
                 await roles.CreateAsync(role);
             }
 
-            var existing = (await roles.GetClaimsAsync(role))
-                .Where(c => c.Type == RolePermissions.ClaimType)
-                .Select(c => c.Value)
-                .ToHashSet();
+            var claims = await db.RoleClaims.Where(c => c.RoleId == role.Id && c.ClaimType == RolePermissions.ClaimType).ToListAsync();
+            var existing = claims.Select(c => c.ClaimValue).ToHashSet();
 
-            foreach (var permission in RolePermissions.For(name).Where(p => !existing.Contains(p)))
-            {
-                await roles.AddClaimAsync(role, new Claim(RolePermissions.ClaimType, permission));
-            }
+            // Added through the context and saved once below: one save per claim made a fresh database's startup wait for hundreds of commits.
+            db.RoleClaims.AddRange(RolePermissions.For(name).Where(p => !existing.Contains(p))
+                .Select(p => new IdentityRoleClaim<long> { RoleId = role.Id, ClaimType = RolePermissions.ClaimType, ClaimValue = p }));
 
             // New permissions are added above, and a database already in use keeps the ones a role has since lost unless they are taken here.
-            foreach (var retired in RetiredPermissions.Where(r => r.Role == name && existing.Contains(r.Permission)))
-            {
-                await roles.RemoveClaimAsync(role, new Claim(RolePermissions.ClaimType, retired.Permission));
-            }
+            var retired = RetiredPermissions.Where(r => r.Role == name).Select(r => r.Permission).ToHashSet();
+            db.RoleClaims.RemoveRange(claims.Where(c => c.ClaimValue is not null && retired.Contains(c.ClaimValue)));
         }
+
+        await db.SaveChangesAsync();
 
         var codes = await db.Departments.Select(d => d.Code).ToListAsync();
         db.Departments.AddRange(Departments
             .Where(d => !codes.Contains(d.Code))
             .Select(d => new Department { Code = d.Code, Name = d.Name }));
 
-        var accounts = await db.LedgerAccounts.Select(a => a.Code).ToListAsync();
-        db.LedgerAccounts.AddRange(Accounts.All
-            .Where(a => !accounts.Contains(a.Code))
-            .Select(a => new LedgerAccount { Code = a.Code, Name = a.Name }));
+        // Names follow the list, so a renamed account (plain Afghan Dari wording) reaches databases already installed.
+        var accounts = await db.LedgerAccounts.ToDictionaryAsync(a => a.Code);
+        foreach (var (code, name) in Accounts.All)
+        {
+            if (!accounts.TryGetValue(code, out var account)) db.LedgerAccounts.Add(new LedgerAccount { Code = code, Name = name });
+            else if (account.Name != name) account.Name = name;
+        }
 
         var locations = await db.StockLocations.Select(l => l.Code).ToListAsync();
         db.StockLocations.AddRange(StockLocations

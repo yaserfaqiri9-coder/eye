@@ -5,8 +5,11 @@ import { api, ApiError, errorMessage, newIdempotencyKey } from '@/api/http'
 import { departmentOptions, doctorOptions } from '@/api/lookups'
 import UiComboBox, { type ComboOption } from '@/components/UiComboBox.vue'
 import PatientPicker from '@/features/patients/PatientPicker.vue'
+import PatientQuickModal from '@/features/patients/PatientQuickModal.vue'
 import { patientName, type Patient } from '@/features/patients/types'
 import { useAuthStore } from '@/stores/auth'
+import { prepareVisitReceipt } from '@/features/print/visitReceipt'
+import VisitReceiptButton from '@/features/print/VisitReceiptButton.vue'
 import { todayIso } from '@/utils/date'
 import { money, quantity } from '@/utils/money'
 import { visitStatusLabels, type Admission, type VisitRow } from './types'
@@ -20,7 +23,7 @@ const steps: { key: Step; label: string }[] = [
   { key: 'patient', label: 'پیدا کردن مریض' },
   { key: 'visit', label: 'بخش و داکتر' },
   { key: 'pay', label: 'پرداخت در صندوق' },
-  { key: 'done', label: 'شماره نوبت' },
+  { key: 'done', label: 'تأیید پرداخت' },
 ]
 
 const auth = useAuthStore()
@@ -85,6 +88,8 @@ function onPatient(option: ComboOption | null) {
 }
 
 async function createVisit() {
+  if (saving.value) return
+  const receipt = prepareVisitReceipt(auth.can('visits.print'))
   saving.value = true
   error.value = ''
   try {
@@ -94,8 +99,10 @@ async function createVisit() {
       body: { patientId: patient.id, departmentId: form.departmentId, doctorStaffId: form.doctorStaffId, serviceId: form.serviceId, reason: form.reason },
     })
     show(row)
+    if (!receipt.open(row.visitId, row.queueNumber) && auth.can('visits.print')) notice.value = 'مراجعه ثبت شد. برای چاپ رسید نوبت، دکمه «چاپ رسید نوبت» را بزنید.'
     emit('changed')
   } catch (cause) {
+    receipt.close()
     error.value = errorMessage(cause)
     // A refusal may be retried with new values; an unknown outcome keeps the key so a retry opens one visit.
     if (cause instanceof ApiError && !cause.outcomeUnknown) visitKey.value = newIdempotencyKey()
@@ -178,6 +185,14 @@ async function startWith(id: number | null | undefined) {
 
 watch(() => props.patientId, startWith)
 
+/** A new patient is registered in a dialog over this flow, which then carries on with them chosen. */
+const registering = ref(false)
+
+function onRegistered(id: number) {
+  registering.value = false
+  void startWith(id)
+}
+
 onMounted(async () => {
   try {
     const [loadedDepartments, loadedDoctors, loadedServices, loadedFee] = await Promise.all([
@@ -217,11 +232,10 @@ onMounted(async () => {
   <div v-if="step === 'patient'" class="admission-pane">
     <div class="admission-find">
       <div class="admission-find__field"><PatientPicker v-model="patient.id" :selected-label="patient.label" required @select="onPatient" /></div>
-      <RouterLink v-if="auth.can('patients.create')" :to="{ name: 'patient-new', query: { admit: '1' } }" class="btn btn-primary text-nowrap">
+      <button v-if="auth.can('patients.create')" type="button" class="btn btn-primary text-nowrap" @click="registering = true">
         <i class="ri-user-add-line" aria-hidden="true"></i> مریض جدید
-      </RouterLink>
+      </button>
     </div>
-    <p class="form-hint mt-2 mb-0">مریض قبلاً آمده؟ نامش را جستجو کنید. بار اول است؟ «مریض جدید» را بزنید.</p>
     <p v-if="checking" class="form-hint mt-3 mb-0" role="status">در حال بررسی مراجعه‌های امروز…</p>
     <div v-if="openVisit" class="alert alert-warning mt-3 mb-0" role="alert">
       این مریض امروز مراجعه فعال دارد ({{ visitStatusLabels[openVisit.status] }}، نوبت {{ openVisit.queueNumber === null ? '—' : quantity(openVisit.queueNumber) }}). کار در همان مراجعه ادامه می‌یابد و فیس دوباره گرفته نمی‌شود.
@@ -244,7 +258,7 @@ onMounted(async () => {
       </div>
     </div>
     <div class="xr-form-actions align-items-center">
-      <button type="submit" class="btn btn-primary" :disabled="saving || !form.departmentId">{{ saving ? 'در حال ثبت…' : 'ثبت مراجعه و ارسال به صندوق' }}</button>
+      <button type="submit" class="btn btn-primary" :disabled="saving || !form.departmentId">{{ saving ? 'در حال ثبت…' : 'ثبت مراجعه و چاپ نوبت' }}</button>
       <button type="button" class="btn btn-soft" @click="reset">بازگشت</button>
       <span v-if="fee !== null" class="ms-auto">فیس معاینه: <strong>{{ money(fee) }}</strong></span>
     </div>
@@ -254,6 +268,7 @@ onMounted(async () => {
     <p class="admission-who">{{ admission.patientName }} <span class="ltr-num">{{ admission.patientFileNumber }}</span></p>
     <dl class="xr-facts mb-3">
       <div><dt>بخش</dt><dd>{{ admission.departmentName }}</dd></div>
+      <div v-if="admission.queueNumber !== null"><dt>شماره نوبت</dt><dd><strong>{{ quantity(admission.queueNumber) }}</strong></dd></div>
       <div><dt>فاکتور</dt><dd><span class="ltr-num">{{ admission.invoiceNumber }}</span></dd></div>
       <div v-if="admission.discount"><dt>تخفیف</dt><dd>{{ money(admission.discount) }}</dd></div>
       <div><dt>قابل پرداخت</dt><dd><strong class="admission-amount">{{ money(admission.balance) }}</strong></dd></div>
@@ -267,7 +282,7 @@ onMounted(async () => {
       <div v-if="admission.visitDate !== todayIso()" class="alert alert-warning" role="alert">این مراجعه از روز گذشته مانده و پرداخت نمی‌شود. آن را در «صف امروز» لغو کنید و دوباره ثبت نمایید.</div>
       <div v-else class="alert alert-info admission-next" role="status">
         <i class="ri-arrow-left-circle-line" aria-hidden="true"></i>
-        <span><strong>مریض را به صندوق بفرستید.</strong> پس از پرداخت، نوبت او خودکار همین‌جا نشان داده می‌شود. می‌توانید تا آن وقت مریض بعدی را پذیرش کنید.</span>
+        <span><strong>رسید نوبت را به مریض بدهید تا فیس را در صندوق بپردازد.</strong> شماره نوبت حفظ می‌شود و پس از پرداخت، مراجعه وارد صف بخش می‌شود.</span>
       </div>
 
       <form v-if="discount.open" class="row g-3 align-items-end mb-3" @submit.prevent="applyDiscount">
@@ -286,6 +301,7 @@ onMounted(async () => {
       </form>
 
       <div class="xr-form-actions">
+        <VisitReceiptButton :visit-id="admission.visitId" :queue-number="admission.queueNumber" @issued="show" />
         <button type="button" class="btn btn-primary" @click="reset">مریض بعدی</button>
         <button v-if="canDiscount && !discount.open" type="button" class="btn btn-soft" @click="discount.open = true">تخفیف</button>
       </div>
@@ -302,27 +318,29 @@ onMounted(async () => {
       <div><dt>پرداخت</dt><dd><span class="xr-badge xr-badge--green">پرداخت‌شده</span></dd></div>
     </dl>
     <div class="xr-form-actions justify-content-center">
-      <RouterLink v-if="auth.can('visits.print')" :to="`/print/visit/${admission.visitId}`" target="_blank" class="btn btn-soft">چاپ رسید نوبت</RouterLink>
+      <VisitReceiptButton :visit-id="admission.visitId" :queue-number="admission.queueNumber" @issued="show" />
       <button type="button" class="btn btn-primary" @click="reset">مریض بعدی</button>
     </div>
   </div>
+
+  <PatientQuickModal v-if="registering" @close="registering = false" @chosen="onRegistered" />
 </template>
 
 <style scoped>
 .admission-steps {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--xr-gap);
+  gap: 12px;
   list-style: none;
   padding: 0;
-  margin: 0 0 1.25rem;
+  margin: 0 0 12px;
 }
 
 .admission-steps__item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-bottom: 8px;
+  padding-bottom: 6px;
   border-bottom: 3px solid var(--xr-border, #e5e7eb);
   color: var(--xr-text-muted, #6b7280);
   font-size: 0.9rem;

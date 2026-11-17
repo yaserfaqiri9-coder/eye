@@ -189,7 +189,7 @@ test('management parents still filter permissions and flatten one authorized chi
   await expect(page.locator('.sidebar__link[href="/users"]')).toHaveCount(0)
 })
 
-test('a logo header, grouped compact rows and a user footer frame the menu', async ({ page }) => {
+test('a logo header and grouped compact rows frame the menu, with no user card in the footer', async ({ page }) => {
   await openAs(page, '/patients', allPermissions)
   const brand = page.locator('.sidebar__brand')
   await expect(brand.getByRole('img', { name: 'لوگوی شفاخانه تخصصی چشم الشفا' })).toBeVisible()
@@ -204,7 +204,7 @@ test('a logo header, grouped compact rows and a user footer frame the menu', asy
   await expect(brand).not.toContainText('سیستم مدیریت شفاخانه')
   await expect(page.locator('.sidebar__title')).toHaveCount(0)
   await expect(page.locator('.sidebar__menu')).toHaveCount(4)
-  await expect(page.locator('.sidebar__footer .sidebar__user')).toContainText('مدیر')
+  await expect(page.locator('.sidebar__footer .sidebar__user')).toHaveCount(0)
 
   const link = page.getByRole('link', { name: 'گزارش‌ها' })
   await expect(link).toHaveCSS('height', '48px')
@@ -304,7 +304,6 @@ test('collapsed sidebar keeps the logo and accessible route icons without labels
 
   await expect(page.locator('.sidebar__logo img')).toBeVisible()
   await expect(page.locator('.sidebar__brand-text')).toBeHidden()
-  await expect(page.locator('.sidebar__user-text')).toBeHidden()
   await expect(page.locator('.sidebar__title')).toHaveCount(0)
 
   const activeChild = page.getByRole('link', { name: 'آزمایشگاه' })

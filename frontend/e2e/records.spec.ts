@@ -41,7 +41,8 @@ test('directory lists edit and delete, and a used record is deactivated instead'
   await page.getByRole('button', { name: 'بخش جدید' }).click()
   let dialog = page.getByRole('dialog')
   await dialog.getByLabel('نام', { exact: true }).fill(`بخش ${stamp}`)
-  await dialog.getByLabel('کد بخش').fill(`d${stamp}`)
+  // The code is given by the system.
+  await expect(dialog.getByLabel('کد بخش')).toHaveAttribute('readonly', '')
   await dialog.getByRole('button', { name: 'ذخیره' }).click()
   const department = page.getByRole('row', { name: new RegExp(`بخش ${stamp}`) })
   await department.getByRole('button', { name: 'حذف' }).click()
@@ -57,11 +58,12 @@ test('directory lists edit and delete, and a used record is deactivated instead'
   await page.getByRole('tab', { name: 'خدمات و تعرفه‌ها' }).click()
   await page.getByRole('button', { name: 'خدمت جدید' }).click()
   dialog = page.getByRole('dialog')
-  await dialog.getByLabel('کد').fill(`S${stamp}`)
+  await expect(dialog.getByLabel('کد')).toHaveValue('خودکار')
   await dialog.getByLabel('نام خدمت').fill(`خدمت ${stamp}`)
   await dialog.getByLabel('قیمت').fill('100')
   await dialog.getByRole('button', { name: 'ذخیره' }).click()
-  const service = page.getByRole('row', { name: new RegExp(`S${stamp}`) })
+  // Found by the stamp, which stays in the name through the rename below.
+  const service = page.getByRole('row', { name: new RegExp(String(stamp)) })
   await service.getByRole('button', { name: 'ویرایش' }).click()
   dialog = page.getByRole('dialog', { name: 'ویرایش خدمت' })
   await dialog.getByLabel('نام خدمت').fill(`خدمت تازه ${stamp}`)
@@ -125,8 +127,10 @@ test('a purchase is corrected and cancelled from the inventory list, and a trans
   const stamp = Date.now()
   await login(page, adminUser, adminPassword)
   const inventory = await staffPage(page, browser, 'Inventory', errors)
-  const openHistory = async (view: 'خریدها' | 'گردش موجودی') => {
-    await inventory.getByRole('tab', { name: 'سوابق', exact: true }).click()
+  // Purchases have their own page; stock history lives in the store's own page.
+  const openHistory = async (view: 'خریدها' | 'تاریخچه ورود و خروج') => {
+    if (view === 'خریدها') return void (await inventory.goto('/purchases'))
+    await inventory.goto('/inventory/locations/central')
     await inventory.getByRole('tab', { name: view, exact: true }).click()
   }
 
@@ -138,11 +142,12 @@ test('a purchase is corrected and cancelled from the inventory list, and a trans
 
   const first = await buy(10)
   await inventory.goto('/inventory')
-  await inventory.getByRole('link', { name: /گدام مرکزی/ }).click()
+  await inventory.getByRole('tab', { name: 'گدام‌ها', exact: true }).click()
+  await inventory.getByRole('link', { name: 'گدام مرکزی', exact: true }).click()
   await expect(inventory).toHaveURL(/\/inventory\/locations\/central$/)
-  await expect(inventory.getByRole('region', { name: 'موجودی فعلی' }).getByRole('row', { name: new RegExp(name) })).toContainText('۱۰')
-  await expect(inventory.getByRole('region', { name: 'تاریخچه ورود و خروج' }).getByRole('row', { name: new RegExp(name) }).first()).toContainText('ورود')
-  await inventory.getByRole('link', { name: 'بازگشت به گدام' }).click()
+  await expect(inventory.getByRole('region', { name: 'موجودی فعلی' }).getByRole('row', { name: new RegExp(name) })).toContainText('10')
+  await inventory.getByRole('tab', { name: 'تاریخچه ورود و خروج', exact: true }).click()
+  await expect(inventory.getByRole('row', { name: new RegExp(name) }).first()).toContainText('ورود')
   await openHistory('خریدها')
   const row = inventory.getByRole('row', { name: new RegExp(first.purchaseNumber) })
   await row.getByRole('link', { name: 'اصلاح' }).click()
@@ -153,7 +158,7 @@ test('a purchase is corrected and cancelled from the inventory list, and a trans
   await inventory.getByLabel('مقدار ردیف 1').fill('7')
   await inventory.getByLabel('دلیل اصلاح').fill('مقدار اشتباه بود')
   await inventory.getByRole('button', { name: 'لغو و ثبت خرید تازه' }).click()
-  await expect(inventory).toHaveURL(/\/inventory$/)
+  await expect(inventory).toHaveURL(/\/purchases$/)
   expect(await onHand()).toBe(7)
 
   await openHistory('خریدها')
@@ -162,9 +167,8 @@ test('a purchase is corrected and cancelled from the inventory list, and a trans
   // Moved to the wrong place, then moved back from the movements list.
   const batch = (await call<{ id: number }[]>(inventory, 'GET', `/inventory/batches?productId=${product.id}`))[0]
   await call(inventory, 'POST', '/inventory/transfers', { batchId: batch.id, toLocationCode: 'pharmacy', quantity: 2 })
-  await inventory.reload()
-  await openHistory('گردش موجودی')
-  await inventory.getByRole('row', { name: new RegExp(`${name}.*انتقال خروجی`) }).getByRole('button', { name: 'برگشت' }).click()
+  await openHistory('تاریخچه ورود و خروج')
+  await inventory.getByRole('row', { name: new RegExp(`انتقال خروجی.*${name}`) }).getByRole('button', { name: 'برگشت' }).click()
   let dialog = inventory.getByRole('dialog')
   await dialog.getByLabel('دلیل').fill('مقصد اشتباه بود')
   await dialog.getByRole('button', { name: 'ثبت برگشت' }).click()
@@ -175,7 +179,6 @@ test('a purchase is corrected and cancelled from the inventory list, and a trans
 
   // Cancelled outright: the stock leaves again.
   const second = await buy(3)
-  await inventory.reload()
   await openHistory('خریدها')
   await inventory.getByRole('row', { name: new RegExp(second.purchaseNumber) }).getByRole('button', { name: 'لغو' }).click()
   dialog = inventory.getByRole('dialog')
@@ -185,8 +188,12 @@ test('a purchase is corrected and cancelled from the inventory list, and a trans
   expect(await onHand()).toBe(7)
 
   // A deleted product with this history is only deactivated, and leaves the pickers.
-  await inventory.getByRole('tab', { name: 'اجناس' }).click()
-  await inventory.getByRole('row', { name: new RegExp(name) }).getByRole('button', { name: 'حذف' }).click()
+  await inventory.goto('/inventory')
+  await inventory.getByRole('tab', { name: 'محصولات' }).click()
+  // The list is paged; searching keeps the product in view however many others earlier runs left.
+  await inventory.getByLabel('جستجوی نام یا کد جنس').fill(name)
+  await inventory.getByRole('row', { name: new RegExp(name) }).getByRole('button', { name: `عملیات ${name}` }).click()
+  await inventory.getByRole('menuitem', { name: 'حذف جنس' }).click()
   await expect(inventory.getByRole('status').filter({ hasText: 'غیرفعال شد' })).toBeVisible()
   await expect(inventory.getByRole('row', { name: new RegExp(name) })).toContainText('غیرفعال')
 
@@ -302,19 +309,6 @@ test('clinical records change freely until final, and with a visible reason afte
   await doctor.getByRole('button', { name: 'ذخیره', exact: true }).click()
   await expect(doctor.getByRole('status').filter({ hasText: 'ذخیره شد و نسخه دوا برای دواخانه ارسال شد' })).toBeVisible()
   await expect(doctor.getByLabel('تعداد 1')).toHaveValue('5')
-
-  // A follow-up goes through the same screen, and can be removed.
-  const date = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10)
-  await call(doctor, 'POST', '/follow-ups', { visitId: visit.id, dueDate: date, note: `یادداشت ${stamp}` })
-  await doctor.reload()
-  const followUp = doctor.getByRole('listitem').filter({ hasText: `یادداشت ${stamp}` })
-  await followUp.getByRole('button', { name: 'ویرایش' }).click()
-  await doctor.getByLabel('یادداشت پیگیری').fill(`یادداشت تازه ${stamp}`)
-  await doctor.getByRole('button', { name: 'ذخیره', exact: true }).click()
-  const changed = doctor.getByRole('listitem').filter({ hasText: `یادداشت تازه ${stamp}` })
-  await expect(changed).toBeVisible()
-  await changed.getByRole('button', { name: 'حذف' }).click()
-  await expect(changed).toHaveCount(0)
 
   // Final: the same edit now asks why, and the history shows old, new and reason.
   const chart = await call<{ consultation: { version: number } | null }>(doctor, 'GET', `/consultations/${visit.id}/chart`)

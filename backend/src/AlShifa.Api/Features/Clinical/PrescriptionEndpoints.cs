@@ -5,8 +5,65 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AlShifa.Api.Features.Clinical;
 
+/// <param name="Form">Drop, tablet, ointment and so on, so two drugs of one name are told apart. Null when not recorded.</param>
+/// <param name="Generic">The active ingredients, shown in brackets after the brand as on the old prescriptions.</param>
+/// <param name="DefaultDose">The dose usually written for the drug ("1x3"), filled in when it is added.</param>
+public sealed record DrugOption(string Name, string? Form, string? Generic = null, string? DefaultDose = null);
+
 public static class PrescriptionEndpoints
 {
+    /// <summary>A drug's form is its Category in the stock list; the unit stands in when it says more than "a piece".</summary>
+    private static string? FormOf(string? category, string unit) =>
+        !string.IsNullOrWhiteSpace(category) ? category.Trim()
+        : !string.IsNullOrWhiteSpace(unit) && unit.Trim() != "عدد" ? unit.Trim()
+        : null;
+
+    /// <summary>The English word the old prescriptions put before a drug: "Eye drop", "Tablet"… Null for a form it had no word for.</summary>
+    public static string? PrescriptionFormOf(string? category) => category?.Trim() switch
+    {
+        "قطره چشمی" => "Eye drop",
+        "پماد" or "پماد چشمی" => "Eye ointment",
+        "تابلیت" or "قرص" => "Tablet",
+        "کپسول" => "Capsule",
+        "شربت" or "شربت/سوسپانسیون خوراکی" => "Syrup",
+        "قطره خوراکی" => "Oral drop",
+        "ویال" => "Vial",
+        "آمپول/تزریقی" => "Injection",
+        "قرص جوشان" => "Effervescent tablet",
+        "لوشن" => "Lotion",
+        "شامپو" => "Shampoo",
+        "سرم" or "سیروم" => "Infusion",
+        _ => null,
+    };
+
+    /// <summary>
+    /// A prescription line as the old system wrote it: "Eye drop Tobradex (Tobramycin + Dexamethasone)".
+    /// The stored drug name is never changed; the form word and the generic are added around it when known.
+    /// </summary>
+    public static string PrescriptionLine(string drugName, string? category, string? generic)
+    {
+        var form = PrescriptionFormOf(category);
+        // "Exocin (قطره چشمی)" tells the drop from the ointment in the pharmacy; on the line the form word already does.
+        var shown = form is not null && drugName.EndsWith($"({category!.Trim()})", StringComparison.Ordinal)
+            ? drugName[..^(category.Trim().Length + 2)].TrimEnd()
+            : drugName;
+        var line = form is null || shown.StartsWith(form, StringComparison.OrdinalIgnoreCase) ? shown : $"{form} {shown}";
+        return string.IsNullOrWhiteSpace(generic) || drugName.Contains(generic.Trim(), StringComparison.OrdinalIgnoreCase) ? line : $"{line} ({generic.Trim()})";
+    }
+
+    /// <summary>The drugs of these names, the active one first when a name is used twice.</summary>
+    public static async Task<Dictionary<string, DrugOption>> DrugDetailsAsync(AppDbContext db, IReadOnlyCollection<string> names, CancellationToken ct)
+    {
+        var rows = await db.Products.AsNoTracking()
+            .Where(p => p.Kind == ProductKind.Drug && names.Contains(p.Name))
+            .OrderByDescending(p => p.IsActive)
+            .Select(p => new { p.Name, p.Category, p.Unit, p.GenericName, p.DefaultDose })
+            .ToListAsync(ct);
+        return rows
+            .GroupBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => new DrugOption(g.Key, FormOf(g.First().Category, g.First().Unit), g.First().GenericName, g.First().DefaultDose), StringComparer.OrdinalIgnoreCase);
+    }
+
     public static void MapPrescriptions(this IEndpointRouteBuilder app)
     {
         var medical = app.MapGroup("/api/prescriptions").WithTags("Prescriptions");
@@ -21,19 +78,20 @@ public static class PrescriptionEndpoints
 
             if (!string.IsNullOrWhiteSpace(q))
             {
+                q = OldNumbers.Plain(q);
                 query = query.Where(p => p.RxNumber.StartsWith(q) || p.Patient!.FileNumber.StartsWith(q) || p.Patient.FirstName.StartsWith(q));
             }
 
             return Results.Ok(await QueryAsync(db, query.OrderByDescending(p => p.Id).Take(100), ct));
         }).RequirePermission("prescriptions.view");
 
-        // Doctors have no inventory access, so this exposes drug names only: no stock, cost or price.
+        // Doctors have no inventory access, so this exposes drug names and forms only: no stock, cost or price.
         medical.MapGet("/drugs", async (AppDbContext db, string? q, CancellationToken ct) =>
         {
             var term = q?.Trim();
             if (string.IsNullOrEmpty(term))
             {
-                return Results.Ok(Array.Empty<string>());
+                return Results.Ok(Array.Empty<DrugOption>());
             }
 
             // Persian and Arabic keyboards type these letters differently, and either form may be stored.
@@ -43,19 +101,53 @@ public static class PrescriptionEndpoints
 
             // Any part of the name matches, as on the old paper-form system: "moxi" finds "Vigamox (Moxifloxacin)".
             // Both sides lower-cased, so the match does not depend on the column collation.
-            var names = await db.Products.AsNoTracking()
-                .Where(p => p.IsActive && p.Kind == ProductKind.Drug && (EF.Functions.Like(p.Name.ToLower(), persian, "|") || EF.Functions.Like(p.Name.ToLower(), arabic, "|")))
-                .Select(p => p.Name)
-                .Distinct()
-                .OrderBy(name => name)
+            // The generic matches too, as on the old list: "nepafenac" finds Nevanac, Nepac and Curanep.
+            var found = await db.Products.AsNoTracking()
+                .Where(p => p.IsActive && p.Kind == ProductKind.Drug && (EF.Functions.Like(p.Name.ToLower(), persian, "|") || EF.Functions.Like(p.Name.ToLower(), arabic, "|")
+                    || (p.GenericName != null && EF.Functions.Like(p.GenericName.ToLower(), persian, "|"))))
+                .OrderBy(p => p.Name)
                 .Take(200)
+                .Select(p => new { p.Name, p.Category, p.Unit, p.GenericName, p.DefaultDose })
                 .ToListAsync(ct);
 
             // Names that start with the typed text come first; the rest follow in order.
             static string Fold(string s) => s.ToLowerInvariant().Replace('ي', 'ی').Replace('ك', 'ک');
             var folded = Fold(term);
-            return Results.Ok(names.OrderBy(name => Fold(name).StartsWith(folded, StringComparison.Ordinal) ? 0 : 1).ThenBy(name => name, StringComparer.OrdinalIgnoreCase).Take(30).ToList());
+            return Results.Ok(found
+                .GroupBy(p => p.Name)
+                .Select(g => new DrugOption(g.Key, FormOf(g.First().Category, g.First().Unit), g.First().GenericName, g.First().DefaultDose))
+                .OrderBy(d => Fold(d.Name).StartsWith(folded, StringComparison.Ordinal) ? 0 : 1).ThenBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
+                .Take(30)
+                .ToList());
         }).RequirePermission("prescriptions.create");
+
+        // The form of drugs already on a prescription, so a saved line shows drop, tablet and so on as when it was picked.
+        medical.MapGet("/drug-forms", async (AppDbContext db, string[]? names, CancellationToken ct) =>
+        {
+            var wanted = (names ?? []).Select(n => n.Trim()).Where(n => n.Length > 0).Distinct().Take(100).ToList();
+            if (wanted.Count == 0)
+            {
+                return Results.Ok(new Dictionary<string, string>());
+            }
+
+            var rows = await db.Products.AsNoTracking()
+                .Where(p => p.Kind == ProductKind.Drug && wanted.Contains(p.Name))
+                .OrderByDescending(p => p.IsActive)
+                .Select(p => new { p.Name, p.Category, p.Unit })
+                .ToListAsync(ct);
+            return Results.Ok(rows
+                .Select(r => (r.Name, Form: FormOf(r.Category, r.Unit)))
+                .Where(r => r.Form is not null)
+                .GroupBy(r => r.Name)
+                .ToDictionary(g => g.Key, g => g.First().Form!));
+        }).RequirePermission("prescriptions.view");
+
+        // Form, generic and usual dose of drugs already on a prescription, so a saved line reads as the old system wrote it.
+        medical.MapGet("/drug-details", async (AppDbContext db, string[]? names, CancellationToken ct) =>
+        {
+            var wanted = (names ?? []).Select(n => n.Trim()).Where(n => n.Length > 0).Distinct().Take(100).ToList();
+            return Results.Ok(wanted.Count == 0 ? new Dictionary<string, DrugOption>() : await DrugDetailsAsync(db, wanted, ct));
+        }).RequirePermission("prescriptions.view");
 
         medical.MapPost("/", async (CreatePrescriptionRequest request, AppDbContext db, ClinicalAccess access, Idempotency idempotency, NumberService numbers, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
             await idempotency.RunAsync(request, async () =>
@@ -65,7 +157,7 @@ public static class PrescriptionEndpoints
                 EnsureFuture(request.ValidUntil);
                 var rx = new MedicalPrescription
                 {
-                    RxNumber = $"RX-{await numbers.NextAsync("rx", ct: ct):D7}",
+                    RxNumber = await numbers.NextNumberAsync("rx", ct),
                     PatientId = patientId,
                     VisitId = request.VisitId,
                     DoctorUserId = user.Id,
@@ -188,6 +280,7 @@ public static class PrescriptionEndpoints
             var query = db.OpticalPrescriptions.AsNoTracking().Where(p => !p.IsCancelled);
             if (!string.IsNullOrWhiteSpace(q))
             {
+                q = OldNumbers.Plain(q);
                 query = query.Where(p => p.RxNumber.StartsWith(q) || p.Patient!.FileNumber.StartsWith(q) || p.Patient.FirstName.StartsWith(q));
             }
 
@@ -201,7 +294,7 @@ public static class PrescriptionEndpoints
                 await access.EnsureResponsibleAsync(request.VisitId, ct);
                 var rx = new OpticalPrescription
                 {
-                    RxNumber = $"OP-{await numbers.NextAsync("optical-rx", ct: ct):D7}",
+                    RxNumber = await numbers.NextNumberAsync("optical-rx", ct),
                     PatientId = patientId,
                     VisitId = request.VisitId,
                     DoctorUserId = user.Id,
@@ -220,7 +313,7 @@ public static class PrescriptionEndpoints
                 await db.SaveChangesAsync(ct);
 
                 audit.Add("OpticalPrescriptionCreated", "OpticalPrescription", rx.Id.ToString());
-                outbox.Add("OpticalPrescriptionCreated", new { prescriptionId = rx.Id }, Groups.Optical, Groups.Doctor);
+                outbox.Add("OpticalPrescriptionCreated", new { prescriptionId = rx.Id, visitId = rx.VisitId }, Groups.Optical, Groups.Doctor);
                 await db.SaveChangesAsync(ct);
 
                 var dto = await QueryOpticalAsync(db.OpticalPrescriptions.Where(p => p.Id == rx.Id), ct);
@@ -266,7 +359,7 @@ public static class PrescriptionEndpoints
             rx.Pd = Text.Clean(request.Pd);
             rx.Notes = Text.Clean(request.Notes);
             audit.Add("OpticalPrescriptionEdited", "OpticalPrescription", id.ToString(), reason);
-            outbox.Add("OpticalPrescriptionCreated", new { prescriptionId = id }, Groups.Optical, Groups.Doctor);
+            outbox.Add("OpticalPrescriptionCreated", new { prescriptionId = id, visitId = rx.VisitId }, Groups.Optical, Groups.Doctor);
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
             return Results.Ok((await QueryOpticalAsync(db.OpticalPrescriptions.Where(p => p.Id == id), ct)).Single());

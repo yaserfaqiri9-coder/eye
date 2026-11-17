@@ -6,6 +6,7 @@ using AlShifa.Api.Features.Clinical;
 using AlShifa.Api.Features.Finance;
 using AlShifa.Api.Features.Inventory;
 using AlShifa.Api.Features.Patients;
+using AlShifa.Api.Features.Reports;
 using AlShifa.Api.Features.Users;
 using AlShifa.Api.Features.Visits;
 using AlShifa.Api.Infrastructure;
@@ -135,7 +136,8 @@ public sealed class FinanceTests(ApiFixture api)
 
         var cashier = await UserAsync(Roles.Cashier);
         var unpaid = await cashier.GetFromJsonAsync<PagedResult<InvoiceRow>>($"/api/invoices?unpaid=true&q={patient.FileNumber}", JsonOptions);
-        var invoice = Assert.Single(unpaid!.Items);
+        // Search also matches invoice numbers, so unrelated invoices can share a numeric file-number fragment.
+        var invoice = Assert.Single(unpaid!.Items, i => i.VisitId == visit.Id);
         Assert.Equal(visit.Id, invoice.VisitId);
         Assert.Equal(500, invoice.Balance);
 
@@ -341,19 +343,19 @@ public sealed class FinanceTests(ApiFixture api)
         Assert.Contains("over_dispense", await over.Content.ReadAsStringAsync());
 
         var first = await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(patient.Id, rx.Id, [new SaleLineInput(productId, 1, itemId)]))));
-        Assert.Equal(nameof(PrescriptionStatus.Issued), (await pharmacist.GetFromJsonAsync<List<PrescriptionDto>>("/api/prescriptions?q=" + rx.RxNumber, JsonOptions))!.Single().Status);
+        Assert.Equal(nameof(PrescriptionStatus.Issued), (await pharmacist.GetFromJsonAsync<List<PrescriptionDto>>("/api/prescriptions?q=" + rx.RxNumber, JsonOptions))!.Single(r => r.Id == rx.Id).Status);
         await api.PayAndDeliverAsync(pharmacist, first.Id);
-        var partial = (await pharmacist.GetFromJsonAsync<List<PrescriptionDto>>("/api/prescriptions?q=" + rx.RxNumber, JsonOptions))!.Single();
+        var partial = (await pharmacist.GetFromJsonAsync<List<PrescriptionDto>>("/api/prescriptions?q=" + rx.RxNumber, JsonOptions))!.Single(r => r.Id == rx.Id);
         Assert.Equal(nameof(PrescriptionStatus.PartiallyDispensed), partial.Status);
 
         var second = await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(patient.Id, rx.Id, [new SaleLineInput(productId, 1, itemId)]))));
         await api.PayAndDeliverAsync(pharmacist, second.Id);
-        var full = (await pharmacist.GetFromJsonAsync<List<PrescriptionDto>>("/api/prescriptions?q=" + rx.RxNumber, JsonOptions))!.Single();
+        var full = (await pharmacist.GetFromJsonAsync<List<PrescriptionDto>>("/api/prescriptions?q=" + rx.RxNumber, JsonOptions))!.Single(r => r.Id == rx.Id);
         Assert.Equal(nameof(PrescriptionStatus.Dispensed), full.Status);
     }
 
     [Fact]
-    public async Task Standalone_pharmacy_sale_reaches_the_cashier_and_a_paid_sale_cannot_be_returned()
+    public async Task Standalone_paid_pharmacy_sale_can_be_cancelled_and_refunded_without_delivery()
     {
         var productId = await NewProductAsync(salePrice: 250);
         await StockAsync(productId, 4);
@@ -366,8 +368,68 @@ public sealed class FinanceTests(ApiFixture api)
         var cashier = await CashierWithOpenSessionAsync();
         await Created<PaymentRow>(await cashier.SendAsync(Post("/api/payments", new PaymentRequest(sale.InvoiceId, 500, PaymentMethod.Cash, null))));
 
-        var denied = await pharmacist.PostAsJsonAsync($"/api/pharmacy/sales/{sale.Id}/return", new ReturnSaleRequest(sale.Version, "برگشت"));
-        Assert.Contains("sale_is_paid", await denied.Content.ReadAsStringAsync());
+        var returned = await pharmacist.PostAsJsonAsync($"/api/pharmacy/sales/{sale.Id}/return", new ReturnSaleRequest(sale.Version, "برگشت"));
+        Assert.Equal(HttpStatusCode.NoContent, returned.StatusCode);
+        Assert.Equal(500, await api.InDbAsync(db => db.Invoices.Where(i => i.Id == sale.InvoiceId).Select(i => i.Refunded).SingleAsync()));
+        Assert.Equal(4, await api.InDbAsync(db => db.StockBatches.Where(b => b.ProductId == productId).SumAsync(b => b.Quantity)));
+        await AssertLedgerReconciles();
+    }
+
+    [Theory]
+    [InlineData(false, 0, 80, 0)]
+    [InlineData(false, 20, 180, 0)]
+    [InlineData(true, 20, 180, 50)]
+    [InlineData(true, 0, 200, 200)]
+    public async Task Pharmacy_return_refunds_only_money_still_held_and_reconciles(bool delivered, decimal discount, decimal paid, decimal earlierRefund)
+    {
+        var productId = await NewProductAsync();
+        await StockAsync(productId, 3);
+        var pharmacist = await UserAsync(Roles.Pharmacist);
+        var accountant = await UserAsync(Roles.Accountant);
+        var cashier = await CashierWithOpenSessionAsync();
+        var sale = await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(null, null, [new SaleLineInput(productId, 2)]))));
+        if (discount > 0)
+        {
+            var version = await api.InDbAsync(db => db.Invoices.Where(i => i.Id == sale.InvoiceId).Select(i => i.Version).SingleAsync());
+            Assert.Equal(HttpStatusCode.NoContent, (await accountant.PostAsJsonAsync($"/api/invoices/{sale.InvoiceId}/discount", new DiscountRequest(discount, "تخفیف آزمایشی", version))).StatusCode);
+        }
+        var payment = await Created<PaymentRow>(await cashier.SendAsync(Post("/api/payments", new PaymentRequest(sale.InvoiceId, paid, PaymentMethod.Cash, null))));
+        if (delivered)
+            Assert.Equal(HttpStatusCode.NoContent, (await pharmacist.PostAsJsonAsync($"/api/pharmacy/sales/{sale.Id}/deliver", new DeliverSaleRequest(sale.Version))).StatusCode);
+        if (earlierRefund > 0)
+            await Created<JsonElement>(await accountant.SendAsync(Post("/api/refunds", new RefundRequest(payment.Id, earlierRefund, "برگشت قبلی"))));
+
+        var saleVersion = await api.InDbAsync(db => db.Sales.Where(s => s.Id == sale.Id).Select(s => s.Version).SingleAsync());
+        var url = $"/api/pharmacy/sales/{sale.Id}/return";
+        var response = await pharmacist.PostAsJsonAsync(url, new ReturnSaleRequest(saleVersion, "برگشت دوا و وجه"));
+        Assert.True(response.StatusCode == HttpStatusCode.NoContent, await response.Content.ReadAsStringAsync());
+        var detail = await cashier.GetFromJsonAsync<InvoiceDetail>($"/api/invoices/{sale.InvoiceId}", JsonOptions);
+        Assert.Equal(("Void", paid, paid, 0m), (detail!.Invoice.Status, detail.Invoice.Paid, detail.Invoice.Refunded, detail.Invoice.Balance));
+        Assert.Equal(payment.ReceiptNumber, Assert.Single(detail.Payments).ReceiptNumber);
+        var receiptPrint = (await cashier.GetFromJsonAsync<PrintDocument>($"/api/print/receipt/{payment.Id}", JsonOptions))!;
+        Assert.DoesNotContain(receiptPrint.Fields, f => f.Label == "مانده فاکتور" && f.Value is not null);
+        var invoicePrint = (await cashier.GetFromJsonAsync<PrintDocument>($"/api/print/invoice/{sale.InvoiceId}", JsonOptions))!;
+        Assert.DoesNotContain(invoicePrint.Fields, f => f.Label == "مانده" && f.Value is not null);
+        Assert.Equal(paid, await api.InDbAsync(db => db.Refunds.Where(r => r.PaymentId == payment.Id).SumAsync(r => r.Amount)));
+        Assert.Equal(3, await api.InDbAsync(db => db.StockBatches.Where(b => b.ProductId == productId).SumAsync(b => b.Quantity)));
+        Assert.Equal(HttpStatusCode.Conflict, (await pharmacist.PostAsJsonAsync(url, new ReturnSaleRequest(saleVersion, "تلاش دوباره"))).StatusCode);
+        Assert.Equal(paid, await api.InDbAsync(db => db.Refunds.Where(r => r.PaymentId == payment.Id).SumAsync(r => r.Amount)));
+        await AssertLedgerReconciles();
+    }
+
+    [Fact]
+    public async Task Returning_a_fully_discounted_pharmacy_bill_closes_it_without_a_refund()
+    {
+        var productId = await NewProductAsync();
+        await StockAsync(productId, 3);
+        var pharmacist = await UserAsync(Roles.Pharmacist);
+        var accountant = await UserAsync(Roles.Accountant);
+        var sale = await Created<SaleRow>(await pharmacist.SendAsync(Post("/api/pharmacy/sales", new CreateSaleRequest(null, null, [new SaleLineInput(productId, 2)]))));
+        var version = await api.InDbAsync(db => db.Invoices.Where(i => i.Id == sale.InvoiceId).Select(i => i.Version).SingleAsync());
+        Assert.Equal(HttpStatusCode.NoContent, (await accountant.PostAsJsonAsync($"/api/invoices/{sale.InvoiceId}/discount", new DiscountRequest(200, "تخفیف کامل", version))).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await pharmacist.PostAsJsonAsync($"/api/pharmacy/sales/{sale.Id}/return", new ReturnSaleRequest(sale.Version, "انصراف مریض"))).StatusCode);
+        var invoice = await api.InDbAsync(db => db.Invoices.SingleAsync(i => i.Id == sale.InvoiceId));
+        Assert.Equal((InvoiceStatus.Void, 200m, 200m, 0m), (invoice.Status, invoice.Total, invoice.Discount, invoice.Refunded));
         await AssertLedgerReconciles();
     }
 
@@ -515,5 +577,33 @@ public sealed class FinanceTests(ApiFixture api)
 
         var lab = await UserAsync(Roles.Lab);
         Assert.Equal(HttpStatusCode.Forbidden, (await lab.GetAsync("/api/expenses")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Payments_and_expenses_can_be_listed_for_a_range_of_Kabul_days()
+    {
+        var serviceId = await NewServiceAsync(100);
+        var patient = await NewPatientAsync();
+        var invoice = await NewInvoiceAsync(patient.Id, serviceId);
+        var cashier = await CashierWithOpenSessionAsync();
+        var payment = await Created<PaymentRow>(await cashier.SendAsync(Post("/api/payments", new PaymentRequest(invoice.Id, 100, PaymentMethod.Cash, null))));
+
+        var today = KabulClock.Today;
+        var accountant = await UserAsync(Roles.Accountant);
+        var todays = await accountant.GetFromJsonAsync<PagedResult<PaymentRow>>($"/api/payments?from={today:yyyy-MM-dd}&to={today:yyyy-MM-dd}&pageSize=100", JsonOptions);
+        Assert.Contains(todays!.Items, p => p.Id == payment.Id);
+        var yesterdays = await accountant.GetFromJsonAsync<PagedResult<PaymentRow>>($"/api/payments?from={today.AddDays(-1):yyyy-MM-dd}&to={today.AddDays(-1):yyyy-MM-dd}&pageSize=100", JsonOptions);
+        Assert.DoesNotContain(yesterdays!.Items, p => p.Id == payment.Id);
+
+        var category = Name("دسته");
+        var lastWeek = today.AddDays(-7);
+        Assert.Equal(HttpStatusCode.Created, (await accountant.SendAsync(Post("/api/expenses", new CreateExpenseRequest(category, null, 10, lastWeek)))).StatusCode);
+        var week = await accountant.GetFromJsonAsync<JsonElement>($"/api/expenses?from={lastWeek:yyyy-MM-dd}&to={lastWeek:yyyy-MM-dd}&pageSize=100", JsonOptions);
+        Assert.Contains(week.GetProperty("items").EnumerateArray(), e => e.GetProperty("category").GetString() == category);
+        var todayOnly = await accountant.GetFromJsonAsync<JsonElement>($"/api/expenses?from={today:yyyy-MM-dd}&to={today:yyyy-MM-dd}&pageSize=100", JsonOptions);
+        Assert.DoesNotContain(todayOnly.GetProperty("items").EnumerateArray(), e => e.GetProperty("category").GetString() == category);
+
+        // A reversed range is refused, as in the reports.
+        Assert.Equal(HttpStatusCode.BadRequest, (await accountant.GetAsync($"/api/expenses?from={today:yyyy-MM-dd}&to={lastWeek:yyyy-MM-dd}")).StatusCode);
     }
 }

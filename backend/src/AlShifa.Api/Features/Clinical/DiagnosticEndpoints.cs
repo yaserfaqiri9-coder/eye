@@ -295,7 +295,7 @@ public static class DiagnosticEndpoints
 
                 var order = new DiagnosticOrder
                 {
-                    OrderNumber = $"LAB-{await numbers.NextAsync("lab", ct: ct):D7}",
+                    OrderNumber = await numbers.NextNumberAsync("lab", ct),
                     PatientId = request.PatientId,
                     VisitId = request.VisitId,
                     TestId = request.TestId,

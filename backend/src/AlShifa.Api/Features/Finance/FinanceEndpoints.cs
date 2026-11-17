@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using AlShifa.Api.Features.Auth;
+using AlShifa.Api.Features.Reports;
 using AlShifa.Api.Features.Visits;
 using AlShifa.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -198,6 +199,7 @@ public static class FinanceEndpoints
 
             if (!string.IsNullOrWhiteSpace(q))
             {
+                q = OldNumbers.Plain(q);
                 query = query.Where(i => i.InvoiceNumber.StartsWith(q) || (i.Patient != null && (i.Patient.FileNumber.StartsWith(q) || i.Patient.FirstName.StartsWith(q))));
             }
 
@@ -422,7 +424,7 @@ public static class FinanceEndpoints
     {
         var group = app.MapGroup("/api/payments").WithTags("Finance");
 
-        group.MapGet("/", async (AppDbContext db, long? sessionId, int page = 1, int pageSize = 50, CancellationToken ct = default) =>
+        group.MapGet("/", async (AppDbContext db, long? sessionId, DateOnly? from, DateOnly? to, int page = 1, int pageSize = 50, CancellationToken ct = default) =>
         {
             pageSize = Math.Clamp(pageSize, 1, 100);
             page = Math.Max(page, 1);
@@ -431,6 +433,14 @@ public static class FinanceEndpoints
             if (sessionId is { } s)
             {
                 query = query.Where(p => p.CashSessionId == s);
+            }
+
+            // Days are Kabul calendar days, the same as in the reports.
+            if (from is not null || to is not null)
+            {
+                var (start, end) = ReportEndpoints.Range(from ?? to, to ?? from);
+                var (startUtc, endUtc) = ReportEndpoints.UtcRange(start, end);
+                query = query.Where(p => p.CreatedAt >= startUtc && p.CreatedAt < endUtc);
             }
 
             var total = await query.CountAsync(ct);
@@ -467,7 +477,7 @@ public static class FinanceEndpoints
 
                 var refund = new Refund
                 {
-                    RefundNumber = $"RF-{await numbers.NextAsync("refund", ct: ct):D7}",
+                    RefundNumber = await numbers.NextNumberAsync("refund", ct),
                     PaymentId = payment.Id,
                     Amount = request.Amount,
                     Reason = request.Reason.Trim(),
@@ -601,12 +611,19 @@ public static class FinanceEndpoints
     {
         var group = app.MapGroup("/api/expenses").WithTags("Finance");
 
-        group.MapGet("/", async (AppDbContext db, int page = 1, int pageSize = 50, CancellationToken ct = default) =>
+        group.MapGet("/", async (AppDbContext db, DateOnly? from, DateOnly? to, int page = 1, int pageSize = 50, CancellationToken ct = default) =>
         {
             pageSize = Math.Clamp(pageSize, 1, 100);
             page = Math.Max(page, 1);
-            var total = await db.Expenses.CountAsync(ct);
-            var rows = await db.Expenses.AsNoTracking().OrderByDescending(e => e.Id).Skip((page - 1) * pageSize).Take(pageSize)
+            var query = db.Expenses.AsNoTracking();
+            if (from is not null || to is not null)
+            {
+                var (start, end) = ReportEndpoints.Range(from ?? to, to ?? from);
+                query = query.Where(e => e.ExpenseDate >= start && e.ExpenseDate <= end);
+            }
+
+            var total = await query.CountAsync(ct);
+            var rows = await query.OrderByDescending(e => e.Id).Skip((page - 1) * pageSize).Take(pageSize)
                 .Select(e => new { e.Id, e.ExpenseNumber, e.Category, e.Description, e.Amount, e.ExpenseDate, Status = e.Status.ToString(), e.Version })
                 .ToListAsync(ct);
             return Results.Ok(new { items = rows, total, page, pageSize });
@@ -646,7 +663,7 @@ public static class FinanceEndpoints
         Money.EnsureCents(amount);
         var expense = new Expense
         {
-            ExpenseNumber = $"EX-{await numbers.NextAsync("expense", ct: ct):D6}",
+            ExpenseNumber = await numbers.NextNumberAsync("expense", ct),
             Category = category.Trim(),
             Description = Text.Clean(description),
             Amount = amount,
@@ -682,7 +699,7 @@ public static class FinanceEndpoints
     private static IQueryable<InvoiceRow> Project(IQueryable<Invoice> invoices) => invoices.Select(i => new InvoiceRow(
         i.Id, i.InvoiceNumber, i.PatientId, i.Patient != null ? i.Patient.FileNumber : null,
         i.Patient != null ? (i.Patient.FirstName + " " + (i.Patient.LastName ?? "")).Trim() : null,
-        i.VisitId, i.Status.ToString(), i.Total, i.Discount, i.Paid, i.Refunded, i.Total - i.Discount - i.Paid, i.CreatedAt, i.Version,
+        i.VisitId, i.Status.ToString(), i.Total, i.Discount, i.Paid, i.Refunded, i.Status == InvoiceStatus.Void ? 0 : i.Total - i.Discount - i.Paid, i.CreatedAt, i.Version,
         i.Items.Where(x => !x.IsVoid).OrderBy(x => x.Id).Select(x => x.Description).FirstOrDefault(),
         i.Items.Count(x => !x.IsVoid)));
 

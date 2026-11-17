@@ -18,8 +18,8 @@ public sealed class ReportDocumentTests(ApiFixture api)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    private static readonly string[] Everyday = ["overview", "patients", "doctors", "diagnostics", "surgeries", "diseases"];
-    private static readonly string[] Finance = ["income", "cash", "outstanding", "adjustments", "expenses"];
+    private static readonly string[] Everyday = ["patients", "doctors", "surgeries", "diagnostics", "diseases"];
+    private static readonly string[] Finance = ["cash", "outstanding", "expenses", "profit-loss", "revenue-sources", "expense-summary", "daily-finance", "cash-flow"];
 
     private static string Name(string prefix) => $"{prefix}_{Guid.NewGuid():N}"[..20];
 
@@ -74,7 +74,7 @@ public sealed class ReportDocumentTests(ApiFixture api)
     }
 
     [Fact]
-    public async Task Every_report_answers_over_one_day_and_a_long_period()
+    public async Task Every_report_answers_over_one_day_and_a_long_period_with_one_list_and_at_most_four_figures()
     {
         var manager = await UserAsync(Roles.Manager);
         await NewVisitAsync();
@@ -84,6 +84,10 @@ public sealed class ReportDocumentTests(ApiFixture api)
             var report = await ReportAsync(manager, key);
             Assert.False(string.IsNullOrEmpty(report.GetProperty("title").GetString()));
             Assert.False(string.IsNullOrEmpty(report.GetProperty("description").GetString()));
+            // One clear list and one row of figures, so no report opens crowded.
+            Assert.Equal(1, report.GetProperty("tables").GetArrayLength());
+            Assert.True(report.GetProperty("tiles").GetArrayLength() <= 4, $"{key} has more than four tiles");
+            Assert.Equal(JsonValueKind.Null, report.GetProperty("trend").ValueKind);
 
             var longer = await ReportAsync(manager, key, $"?from={KabulClock.Today.AddDays(-400):yyyy-MM-dd}&to={Today}");
             Assert.Equal(JsonValueKind.Array, longer.GetProperty("tiles").ValueKind);
@@ -116,47 +120,51 @@ public sealed class ReportDocumentTests(ApiFixture api)
             Assert.Equal(HttpStatusCode.Forbidden, (await triage.GetAsync($"/api/reports/{key}")).StatusCode);
         }
 
-        // The Super Admin holds every role's permissions: every report opens, money included.
+        // Counts only for the reports viewer: a list that names patients needs the right to see them.
+        var viewer = await UserAsync(Roles.DoctorReportsViewer);
+        Assert.Equal(HttpStatusCode.OK, (await viewer.GetAsync("/api/reports/doctors")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await viewer.GetAsync("/api/reports/diseases")).StatusCode);
+        foreach (var key in new[] { "patients", "surgeries", "diagnostics" })
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, (await viewer.GetAsync($"/api/reports/{key}")).StatusCode);
+        }
+
         var admin = await UserAsync(Roles.SuperAdmin);
         foreach (var key in Everyday.Concat(Finance).Concat(["sales", "stock"]))
         {
             Assert.Equal(HttpStatusCode.OK, (await admin.GetAsync($"/api/reports/{key}")).StatusCode);
         }
 
-        Assert.Contains((await ReportAsync(admin, "overview")).GetProperty("tiles").EnumerateArray(), t => t.GetProperty("kind").GetString() == "money");
-
-        // The money on the overview is only for those who may read the books.
-        Assert.DoesNotContain((await ReportAsync(doctor, "overview")).GetProperty("tiles").EnumerateArray(), t => t.GetProperty("kind").GetString() == "money");
-        Assert.Contains((await ReportAsync(accountant, "overview")).GetProperty("tiles").EnumerateArray(), t => t.GetProperty("kind").GetString() == "money");
+        // The reports that were merged away answer no more.
+        foreach (var key in new[] { "overview", "income", "adjustments" })
+        {
+            Assert.Equal(HttpStatusCode.NotFound, (await admin.GetAsync($"/api/reports/{key}")).StatusCode);
+        }
     }
 
     [Fact]
-    public async Task Patients_report_counts_each_person_once_with_their_gender_and_age()
+    public async Task Patients_report_lists_each_visit_with_who_came_and_how_it_ended()
     {
         var reception = await api.FeeDeskAsync();
         var query = $"?from={KabulClock.Today.AddDays(-1):yyyy-MM-dd}&to={Today}";
         var before = await ReportAsync(reception, "patients", query);
 
-        await NewVisitAsync(Gender.Male, 70);
+        var (old, _) = await NewVisitAsync(Gender.Male, 70);
         await NewVisitAsync(Gender.Female, 10);
-        var (_, cancelled) = await NewVisitAsync(Gender.Female, 45);
+        var (gone, cancelled) = await NewVisitAsync(Gender.Female, 45);
         Assert.Equal(HttpStatusCode.OK, (await reception.PostAsJsonAsync($"/api/visits/{cancelled.Id}/status", new ChangeVisitStatusRequest(VisitStatus.Cancelled, cancelled.Version))).StatusCode);
 
         var after = await ReportAsync(reception, "patients", query);
         Assert.Equal(2, Tile(after, "مراجعات") - Tile(before, "مراجعات"));
-        Assert.Equal(2, Tile(after, "تعداد مریضان") - Tile(before, "تعداد مریضان"));
+        Assert.Equal(2, Tile(after, "مریضان") - Tile(before, "مریضان"));
         Assert.Equal(3, Tile(after, "مریضان جدید") - Tile(before, "مریضان جدید"));
-        Assert.Equal(1, Tile(after, "مراجعات لغو شده") - Tile(before, "مراجعات لغو شده"));
+        Assert.Equal(1, Tile(after, "لغو شده") - Tile(before, "لغو شده"));
 
-        static int Count(JsonElement report, string table, string row) =>
-            Rows(Table(report, table)).Single(r => r[0].GetString() == row)[1].GetInt32();
-        Assert.Equal(1, Count(after, "مریضان به تفکیک جنسیت", "مرد") - Count(before, "مریضان به تفکیک جنسیت", "مرد"));
-        Assert.Equal(1, Count(after, "مریضان به تفکیک جنسیت", "زن") - Count(before, "مریضان به تفکیک جنسیت", "زن"));
-        Assert.Equal(1, Count(after, "مریضان به تفکیک سن", "۶۰ سال و بالاتر") - Count(before, "مریضان به تفکیک سن", "۶۰ سال و بالاتر"));
-        Assert.Equal(1, Count(after, "مریضان به تفکیک سن", "کمتر از ۱۵ سال") - Count(before, "مریضان به تفکیک سن", "کمتر از ۱۵ سال"));
-
-        Assert.Equal(2, after.GetProperty("trend").GetProperty("points").GetArrayLength());
-        Assert.Equal(JsonValueKind.Null, (await ReportAsync(reception, "patients")).GetProperty("trend").ValueKind);
+        var rows = Rows(Table(after, "فهرست مراجعات")).ToList();
+        var man = rows.Single(r => r[2].GetString() == old.FileNumber);
+        Assert.Equal("مرد", man[4].GetString());
+        Assert.Equal(70, man[5].GetInt32());
+        Assert.Equal("لغو شده", rows.Single(r => r[2].GetString() == gone.FileNumber)[8].GetString());
     }
 
     [Fact]
@@ -178,83 +186,63 @@ public sealed class ReportDocumentTests(ApiFixture api)
         Assert.Equal(1, row[1].GetInt32());
         Assert.Equal(1, row[2].GetInt32());
         Assert.DoesNotContain(patient.FirstName, report.GetRawText());
-        Assert.DoesNotContain(patient.FileNumber, report.GetRawText());
+        // A short numeric file number may occur inside a date or count; compare complete cells.
+        Assert.DoesNotContain(Rows(Table(report, "تشخیص‌ها از بیشتر به کمتر")).SelectMany(r => r),
+            cell => cell.ValueKind == JsonValueKind.String && cell.GetString() == patient.FileNumber);
     }
 
     [Fact]
-    public async Task Income_lines_add_up_to_the_books_and_the_result_takes_out_every_cost()
+    public async Task Cash_report_lists_each_receipt_and_its_figures_add_up()
     {
         var accountant = await UserAsync(Roles.Accountant);
-        await NewVisitAsync();
-        await Read<JsonElement>(await accountant.SendAsync(ApiFixture.Keyed("/api/expenses", new CreateExpenseRequest("برق", null, 25, KabulClock.Today))), HttpStatusCode.Created);
+        var cashier = await api.FeeCashierAsync();
+        var token = await api.NewTokenAsync();
+        var before = await ReportAsync(accountant, "cash");
 
-        var report = await ReportAsync(accountant, "income");
-        var account = Rows(Table(report, "حساب دوره")).ToDictionary(r => r[0].GetString()!, r => r[1].GetDecimal());
-        var gross = account["درآمد خدمات"] + account["فروش دواخانه"] + account["فروش عینک"];
+        var payment = await Read<PaymentRow>(await cashier.SendAsync(ApiFixture.Keyed("/api/payments", new PaymentRequest(token.InvoiceId, token.Balance, PaymentMethod.Cash, null, token.InvoiceVersion))), HttpStatusCode.Created);
 
-        Assert.Equal(gross, Rows(Table(report, "درآمد به تفکیک خدمت")).Sum(r => r[1].GetDecimal()));
-        Assert.Equal(account["درآمد خالص"], Tile(report, "درآمد خالص"));
-        Assert.Equal(account["درآمد خالص"] + account["کم: قیمت خرید جنس فروخته‌شده"] + account["کم: مصارف"] + account["کم: تعدیل موجودی"], Tile(report, "نتیجه دوره"));
-        Assert.True(Tile(report, "مصارف") >= 25);
+        var after = await ReportAsync(accountant, "cash");
+        Assert.Equal(token.Balance, Tile(after, "مجموع دریافت") - Tile(before, "مجموع دریافت"));
+        Assert.Equal(token.Balance, Tile(after, "نقد") - Tile(before, "نقد"));
+        Assert.Equal(1, Tile(after, "تعداد رسید") - Tile(before, "تعداد رسید"));
+        Assert.Equal(Tile(after, "نقد") + Tile(after, "غیرنقد"), Tile(after, "مجموع دریافت"));
+
+        var row = Rows(Table(after, "فهرست دریافت‌ها")).Single(r => r[1].GetString() == payment.ReceiptNumber);
+        Assert.Equal(token.InvoiceNumber, row[2].GetString());
+        Assert.Equal("نقد", row[5].GetString());
+        Assert.Equal(token.Balance, row[7].GetDecimal());
     }
 
     [Fact]
-    public async Task Outstanding_and_adjustments_follow_the_money()
+    public async Task Outstanding_lists_an_unpaid_invoice_until_it_is_paid()
     {
         var accountant = await UserAsync(Roles.Accountant);
         var cashier = await api.FeeCashierAsync();
         var token = await api.NewTokenAsync();
 
-        Assert.Contains(Rows(Table(await ReportAsync(accountant, "outstanding"), "فاکتورهای باز")), r => r[0].GetString() == token.InvoiceNumber);
+        var open = Rows(Table(await ReportAsync(accountant, "outstanding"), "فاکتورهای پرداخت‌نشده")).Single(r => r[1].GetString() == token.InvoiceNumber);
+        Assert.Equal(token.Balance, open[8].GetDecimal());
 
-        var reason = Name("دلیل");
-        Assert.Equal(HttpStatusCode.NoContent, (await accountant.PostAsJsonAsync($"/api/invoices/{token.InvoiceId}/discount", new DiscountRequest(10, reason, token.InvoiceVersion))).StatusCode);
-        var payment = await Read<PaymentRow>(await cashier.SendAsync(ApiFixture.Keyed("/api/payments", new PaymentRequest(token.InvoiceId, token.Balance - 10, PaymentMethod.Cash, null))), HttpStatusCode.Created);
-        Assert.DoesNotContain(Rows(Table(await ReportAsync(accountant, "outstanding"), "فاکتورهای باز")), r => r[0].GetString() == token.InvoiceNumber);
-
-        var refundReason = Name("برگشت");
-        await Read<JsonElement>(await accountant.SendAsync(ApiFixture.Keyed("/api/refunds", new RefundRequest(payment.Id, 5, refundReason))), HttpStatusCode.Created);
-
-        var adjustments = await ReportAsync(accountant, "adjustments");
-        var discount = Rows(Table(adjustments, "تخفیف‌ها")).Single(r => r[3].GetString() == reason);
-        Assert.Equal(token.InvoiceNumber, discount[0].GetString());
-        Assert.Equal(10, discount[2].GetDecimal());
-        Assert.Contains(Rows(Table(adjustments, "برگشت وجه")), r => r[4].GetString() == refundReason && r[3].GetDecimal() == 5);
+        await Read<PaymentRow>(await cashier.SendAsync(ApiFixture.Keyed("/api/payments", new PaymentRequest(token.InvoiceId, token.Balance, PaymentMethod.Cash, null, token.InvoiceVersion))), HttpStatusCode.Created);
+        Assert.DoesNotContain(Rows(Table(await ReportAsync(accountant, "outstanding"), "فاکتورهای پرداخت‌نشده")), r => r[1].GetString() == token.InvoiceNumber);
     }
 
     [Fact]
-    public async Task Cash_report_shows_each_cashier_and_any_shortage_at_closing()
+    public async Task Expenses_report_lists_each_expense_and_totals_it()
     {
         var accountant = await UserAsync(Roles.Accountant);
-        var name = Name("c");
-        await api.CreateUserAsync(name, Roles.Cashier);
-        var cashier = await api.LoginAsync(name);
-        var register = await InDbAsync(async db =>
-        {
-            var row = new CashRegister { Name = name };
-            db.CashRegisters.Add(row);
-            await db.SaveChangesAsync();
-            return row.Id;
-        });
-        var opened = await Read<JsonElement>(await cashier.PostAsJsonAsync("/api/cash/sessions", new OpenSessionRequest(register, 10)), HttpStatusCode.Created);
-        var token = await api.NewTokenAsync();
-        await Read<PaymentRow>(await cashier.SendAsync(ApiFixture.Keyed("/api/payments", new PaymentRequest(token.InvoiceId, token.Balance, PaymentMethod.Cash, null, token.InvoiceVersion))), HttpStatusCode.Created);
+        var what = Name("برق");
+        var before = await ReportAsync(accountant, "expenses");
+        await Read<JsonElement>(await accountant.SendAsync(ApiFixture.Keyed("/api/expenses", new CreateExpenseRequest(what, "ماه جاری", 25, KabulClock.Today))), HttpStatusCode.Created);
 
-        var open = Rows(Table(await ReportAsync(accountant, "cash"), "باز و بسته شدن صندوق‌ها")).Single(r => r[0].GetString() == name);
-        Assert.Equal(JsonValueKind.Null, open[3].ValueKind);
-        Assert.Equal(JsonValueKind.Null, open[8].ValueKind);
-
-        var closed = await Read<JsonElement>(await cashier.PostAsJsonAsync($"/api/cash/sessions/{opened.GetProperty("id").GetInt64()}/close", new CloseSessionRequest(token.Balance + 7, 0)));
-        Assert.NotEqual(JsonValueKind.Null, closed.GetProperty("closedAt").ValueKind);
-
-        var row = Rows(Table(await ReportAsync(accountant, "cash"), "باز و بسته شدن صندوق‌ها")).Single(r => r[0].GetString() == name);
-        Assert.Equal(token.Balance, row[5].GetDecimal());
-        Assert.Equal(token.Balance + 10, row[6].GetDecimal());
-        Assert.Equal(-3, row[8].GetDecimal());
+        var after = await ReportAsync(accountant, "expenses");
+        Assert.Equal(25, Tile(after, "مجموع مصارف") - Tile(before, "مجموع مصارف"));
+        var row = Rows(Table(after, "فهرست مصارف")).Single(r => r[2].GetString() == what);
+        Assert.Equal(25, row[4].GetDecimal());
     }
 
     [Fact]
-    public async Task Stock_report_warns_about_low_stock_and_expiry()
+    public async Task Stock_report_lists_every_product_with_its_state_problems_first()
     {
         var inventory = await UserAsync(Roles.Inventory);
         var low = "کم " + Name("n");
@@ -280,11 +268,14 @@ public sealed class ReportDocumentTests(ApiFixture api)
 
         var report = await ReportAsync(inventory, "stock");
         Assert.Equal(JsonValueKind.Null, report.GetProperty("from").ValueKind);
-        Assert.Contains(Rows(Table(report, "اجناس رو به ختم")), r => r[0].GetString() == low && r[1].GetDecimal() == 4);
-        var expiring = Rows(Table(report, "تاریخ‌گذشته و نزدیک به ختم تاریخ")).Select(r => r[0].GetString()).ToList();
-        Assert.Contains(expired, expiring);
-        Assert.DoesNotContain(fresh, expiring);
-        Assert.True(Tile(report, "بسته‌های تاریخ‌گذشته") >= 1);
+        var rows = Rows(Table(report, "فهرست اجناس")).ToList();
+        string State(string name) => rows.Single(r => r[0].GetString() == name)[8].GetString()!;
+        Assert.Equal("رو به ختم", State(low));
+        Assert.Equal(4, rows.Single(r => r[0].GetString() == low)[3].GetDecimal());
+        Assert.Equal("تاریخ گذشته", State(expired));
+        Assert.Equal("عادی", State(fresh));
+        Assert.True(rows.FindIndex(r => r[0].GetString() == expired) < rows.FindIndex(r => r[0].GetString() == fresh));
+        Assert.True(Tile(report, "تاریخ گذشته یا نزدیک") >= 1);
     }
 
     [Fact]
@@ -295,11 +286,165 @@ public sealed class ReportDocumentTests(ApiFixture api)
 
         var opticalReport = await ReportAsync(optical, "sales");
         Assert.DoesNotContain(opticalReport.GetProperty("tiles").EnumerateArray(), t => t.GetProperty("label").GetString() == "فروش دواخانه");
-        Assert.DoesNotContain(opticalReport.GetProperty("tables").EnumerateArray(), t => t.GetProperty("title").GetString() == "نسخه‌های دوا");
+        Assert.DoesNotContain(Rows(Table(opticalReport, "فهرست فروش‌ها")), r => r[2].GetString() == "دواخانه");
 
         var pharmacyReport = await ReportAsync(pharmacist, "sales");
         Assert.DoesNotContain(pharmacyReport.GetProperty("tiles").EnumerateArray(), t => t.GetProperty("label").GetString() == "فروش عینک");
-        Assert.Contains(pharmacyReport.GetProperty("tables").EnumerateArray(), t => t.GetProperty("title").GetString() == "نسخه‌های دوا");
+        Assert.DoesNotContain(Rows(Table(pharmacyReport, "فهرست فروش‌ها")), r => r[2].GetString() == "عینک");
+    }
+
+    [Fact]
+    public async Task Excel_and_pdf_files_hold_the_report_and_only_who_may_export_gets_them()
+    {
+        var accountant = await UserAsync(Roles.Accountant);
+        var what = Name("کرایه");
+        await Read<JsonElement>(await accountant.SendAsync(ApiFixture.Keyed("/api/expenses", new CreateExpenseRequest(what, null, 40, KabulClock.Today))), HttpStatusCode.Created);
+
+        var excel = await accountant.GetAsync("/api/reports/expenses/export?format=xlsx");
+        Assert.Equal(HttpStatusCode.OK, excel.StatusCode);
+        Assert.Equal("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excel.Content.Headers.ContentType?.MediaType);
+        Assert.EndsWith(".xlsx", excel.Content.Headers.ContentDisposition?.FileName?.Trim('"'));
+        using (var zip = new System.IO.Compression.ZipArchive(new MemoryStream(await excel.Content.ReadAsByteArrayAsync())))
+        {
+            using var reader = new StreamReader(zip.GetEntry("xl/worksheets/sheet1.xml")!.Open());
+            var sheet = await reader.ReadToEndAsync();
+            Assert.Contains("rightToLeft=\"1\"", sheet);
+            Assert.Contains("مصارف", sheet);
+            Assert.Contains(what, sheet);
+            // Text is never a formula, and an amount is a real number Excel can add up.
+            Assert.DoesNotContain("<f>", sheet);
+            Assert.Contains("<v>40</v>", sheet);
+        }
+
+        var pdf = await accountant.GetAsync("/api/reports/expenses/export?format=pdf");
+        Assert.Equal(HttpStatusCode.OK, pdf.StatusCode);
+        Assert.Equal("application/pdf", pdf.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("%PDF", System.Text.Encoding.ASCII.GetString((await pdf.Content.ReadAsByteArrayAsync())[..4]));
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await accountant.GetAsync("/api/reports/expenses/export?format=csv")).StatusCode);
+
+        // A doctor may read the doctors' report but not take it away as a file.
+        var doctor = await UserAsync(Roles.Doctor);
+        Assert.Equal(HttpStatusCode.Forbidden, (await doctor.GetAsync("/api/reports/doctors/export?format=xlsx")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await doctor.GetAsync("/api/reports/doctors/export?format=pdf")).StatusCode);
+    }
+
+    [Fact]
+    public async Task New_financial_reports_reconcile_reversals_costs_and_Kabul_boundaries_without_counting_collections_as_income()
+    {
+        var accountant = await UserAsync(Roles.Accountant);
+        var marker = Name("finrep");
+        try
+        {
+        var departmentName = await InDbAsync(async db =>
+        {
+            var department = await db.Departments.FirstAsync();
+            var service = new Service { Code = marker, Name = "خدمت گزارش", DepartmentId = department.Id };
+            var invoice = new Invoice { InvoiceNumber = marker, Total = 1000, Items = [new InvoiceItem { Description = "خدمت", UnitPrice = 1000, LineTotal = 1000, RevenueAccount = Accounts.ServiceRevenue }] };
+            // ServiceId is assigned below after the service has received its database identifier.
+            db.Services.Add(service);
+            db.Invoices.Add(invoice);
+            var expense = new Expense { ExpenseNumber = marker, Category = "مصرف آزمایشی گزارش", Amount = 80, Status = ExpenseStatus.Cancelled, ExpenseDate = new DateOnly(2000, 1, 1) };
+            db.Expenses.Add(expense);
+            await db.SaveChangesAsync();
+            invoice.Items[0].ServiceId = service.Id;
+
+            var start = new DateTime(2001, 1, 1, 19, 30, 0, DateTimeKind.Utc); // 2 January in Kabul.
+            LedgerTransaction Add(DateTime at, string debit, string credit, decimal amount, string source = "ReportTest", long id = 0)
+            {
+                var transaction = new LedgerTransaction
+                {
+                    Kind = Name("test"), SourceType = source, SourceId = id, CreatedAt = at, Description = marker,
+                    Entries = [new LedgerEntry { AccountCode = debit, Debit = amount }, new LedgerEntry { AccountCode = credit, Credit = amount }],
+                };
+                db.LedgerTransactions.Add(transaction);
+                return transaction;
+            }
+            Add(start.AddSeconds(-1), Accounts.Cash, Accounts.OpeningBalance, 100);
+            Add(start, Accounts.Receivable, Accounts.ServiceRevenue, 1000, "InvoiceItem", invoice.Items[0].Id);
+            Add(start.AddHours(1), Accounts.Receivable, Accounts.PharmacyRevenue, 400);
+            Add(start.AddHours(1), Accounts.Receivable, Accounts.OpticalRevenue, 200);
+            Add(start.AddHours(1), Accounts.Discounts, Accounts.Receivable, 100);
+            Add(start.AddHours(1), Accounts.Refunds, Accounts.Cash, 50);
+            Add(start.AddHours(1), Accounts.CostOfGoods, Accounts.Inventory, 250);
+            var original = Add(start.AddHours(1), Accounts.Expenses, Accounts.Cash, 80, "Expense", expense.Id);
+            Add(start.AddHours(1), Accounts.InventoryAdjustments, Accounts.Inventory, 20);
+            Add(start.AddHours(1), Accounts.Cash, Accounts.Receivable, 900);
+            await db.SaveChangesAsync();
+            var reversal = Add(start.AddDays(1), Accounts.Cash, Accounts.Expenses, 80, "Expense", expense.Id);
+            reversal.ReversalOfId = original.Id;
+            Add(start.AddDays(1), Accounts.Expenses, Accounts.Cash, 40);
+            Add(start.AddDays(2), Accounts.Receivable, Accounts.ServiceRevenue, 999);
+            await db.SaveChangesAsync();
+            return department.Name;
+        });
+
+        const string range = "?from=2001-01-02&to=2001-01-03";
+        var profit = await ReportAsync(accountant, "profit-loss", range);
+        Assert.Equal(1450, Tile(profit, "عواید خالص"));
+        Assert.Equal(250, Tile(profit, "قیمت خرید فروش‌ها"));
+        Assert.Equal(1140, Tile(profit, "مفاد / ضرر"));
+        var revenue = await ReportAsync(accountant, "revenue-sources", range);
+        var sourceRows = Rows(Table(revenue, "عواید به تفکیک بخش")).ToList();
+        Assert.Equal(1000, sourceRows.Single(r => r[0].GetString() == departmentName)[1].GetDecimal());
+        Assert.Equal(1450, sourceRows.Sum(r => r[1].GetDecimal()));
+        Assert.Equal(1450, Tile(revenue, "عواید خالص"));
+        var expenses = await ReportAsync(accountant, "expense-summary", range);
+        Assert.Equal(120, Tile(expenses, "مصارف ثبت‌شده"));
+        Assert.Equal(80, Tile(expenses, "برگشت اسناد مصرف"));
+        Assert.Equal(40, Tile(expenses, "مصارف خالص"));
+        var daily = await ReportAsync(accountant, "daily-finance", range);
+        var days = Rows(Table(daily, "عواید، مصارف و مفاد روزانه")).ToList();
+        Assert.Equal(2, days.Count);
+        Assert.Equal("2001-01-02", days[0][0].GetString());
+        Assert.Equal(1100, days[0][5].GetDecimal());
+        Assert.Equal(40, days[1][5].GetDecimal());
+        Assert.Equal(Tile(profit, "مفاد / ضرر"), days.Sum(r => r[5].GetDecimal()));
+        var cash = await ReportAsync(accountant, "cash-flow", range);
+        Assert.Equal(100, Tile(cash, "مانده دفتری آغاز"));
+        Assert.Equal(980, Tile(cash, "ورودی حساب"));
+        Assert.Equal(170, Tile(cash, "خروجی حساب"));
+        Assert.Equal(910, Tile(cash, "مانده دفتری پایان"));
+
+        // The original expense is cancelled today, but still belongs in the earlier posting period.
+        var firstDay = await ReportAsync(accountant, "expense-summary", "?from=2001-01-02&to=2001-01-02");
+        Assert.Equal(80, Tile(firstDay, "مصارف خالص"));
+        var empty = await ReportAsync(accountant, "profit-loss", "?from=1999-01-01&to=1999-01-01");
+        Assert.Equal(0, Tile(empty, "مفاد / ضرر"));
+
+        foreach (var key in new[] { "profit-loss", "revenue-sources", "expense-summary", "daily-finance", "cash-flow" })
+        {
+            foreach (var format in new[] { "xlsx", "pdf" })
+            {
+                var response = await accountant.GetAsync($"/api/reports/{key}/export{range}&format={format}");
+                Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+                var bytes = await response.Content.ReadAsByteArrayAsync();
+                Assert.True(bytes.Length > 100);
+                Assert.Equal(format == "pdf" ? "%PDF" : "PK", System.Text.Encoding.ASCII.GetString(bytes[..(format == "pdf" ? 4 : 2)]));
+            }
+            Assert.Equal(HttpStatusCode.BadRequest, (await accountant.GetAsync($"/api/reports/{key}?from=2001-01-03&to=2001-01-02")).StatusCode);
+        }
+        }
+        finally
+        {
+            // Synthetic boundary fixtures must not change later tests' whole-ledger reconciliation.
+            await InDbAsync(async db =>
+            {
+                var transactions = await db.LedgerTransactions.Include(t => t.Entries).Where(t => t.Description == marker).ToListAsync();
+                foreach (var transaction in transactions) transaction.ReversalOfId = null;
+                await db.SaveChangesAsync();
+                db.LedgerEntries.RemoveRange(transactions.SelectMany(t => t.Entries));
+                db.LedgerTransactions.RemoveRange(transactions);
+                var invoices = await db.Invoices.Include(i => i.Items).Where(i => i.InvoiceNumber == marker).ToListAsync();
+                db.InvoiceItems.RemoveRange(invoices.SelectMany(i => i.Items));
+                db.Invoices.RemoveRange(invoices);
+                db.Expenses.RemoveRange(await db.Expenses.Where(e => e.ExpenseNumber == marker).ToListAsync());
+                await db.SaveChangesAsync();
+                db.Services.RemoveRange(await db.Services.Where(s => s.Code == marker).ToListAsync());
+                await db.SaveChangesAsync();
+                return true;
+            });
+        }
     }
 
     [Fact]

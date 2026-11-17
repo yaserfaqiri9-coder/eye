@@ -48,11 +48,13 @@ const slitLamp = [
   { code: 'Iris', label: 'Iris' },
   { code: 'Pupil', label: 'Pupil' },
   { code: 'Lens', label: 'Lens' },
-  { code: 'Vitreous', label: 'Vit' },
+  { code: 'Gonioscopy', label: 'Gonioscopy' },
   { code: 'EOM', label: 'E.O.M' },
 ]
 
+// The vitreous is read with the fundus, as on the screen dossier.
 const fundusRows = [
+  { code: 'Vitreous', label: 'Vit' },
   { code: 'Fundus', label: 'Fundus' },
   { code: 'Disc', label: 'Disc' },
   { code: 'CDR', label: 'CDR' },
@@ -94,7 +96,6 @@ const densePrescription = computed(() => rxShown.value.length >= 13 || contentCo
 const optical = computed(() => (chart.value?.opticalPrescriptions ?? []).filter((o) => !o.isCancelled))
 const rxNotes = computed(() => (chart.value?.prescriptions ?? []).filter((p) => p.status !== 'Cancelled' && p.notes).map((p, i) => clip(`Rx note ${i + 1}`, p.notes, 160)))
 
-const followUp = computed(() => chart.value?.followUps[0] ?? null)
 const isMale = computed(() => patient.value?.gender === 'Male')
 const isFemale = computed(() => patient.value?.gender === 'Female')
 
@@ -185,7 +186,7 @@ onBeforeUnmount(() => {
               <span><b>Age:</b> {{ patient.ageYears }}</span>
               <span class="id-block__addr"><b>Add:</b> <span dir="auto">{{ clip('Address', patient.address, 60) }}</span></span>
             </div>
-            <div class="kv"><b>Occupation:</b></div>
+            <div class="kv"><b>Occupation:</b> <span dir="auto">{{ clip('Occupation', patient.occupation, 40) }}</span></div>
           </div>
           <div class="id-block__brand box">
             <img src="/print/alshefa-official-logo.png" alt="لوگوی شفاخانه تخصصی چشم الشفا" class="brand-logo" />
@@ -274,10 +275,11 @@ onBeforeUnmount(() => {
                 T+Ph <i class="tick" :class="{ 'tick--on': dropsUsed.includes('T+Ph') }"></i>
                 Ph <i class="tick" :class="{ 'tick--on': dropsUsed.includes('Ph') }"></i>
                 C <i class="tick" :class="{ 'tick--on': dropsUsed.includes('C') }"></i>
+                H <i class="tick" :class="{ 'tick--on': dropsUsed.includes('H') }"></i>
               </span>
               <span class="small">Dilate Time: {{ dilateTime }}</span>
             </div>
-            <div class="fundus__method"><b>90D / 78D / Direct / Indirect:</b> {{ method }}</div>
+            <div class="fundus__method"><b>Indirect: 90 D / 78 D / 20 D - 360° - Direct:</b> {{ method }}</div>
             <div class="fundus__grid">
               <svg viewBox="0 0 110 110" class="fundus__eye" aria-hidden="true">
                 <g fill="none" stroke="#000"><circle cx="55" cy="55" r="52" /><ellipse cx="72" cy="55" rx="9" ry="11" /><path d="M72 44 Q52 34 36 40 M72 66 Q52 76 36 70" /></g>
@@ -344,10 +346,13 @@ onBeforeUnmount(() => {
             </table>
           </div>
         </section>
+        <section v-if="plan.note" class="note-block box">
+          <b>Note:</b> <span dir="auto">{{ clip('Note', plan.note, 220) }}</span>
+        </section>
         <p v-if="clipped.length" class="clip-note">* خلاصه‌شده؛ متن کامل در پرونده دیجیتالی.</p>
       </article>
 
-      <!-- Back: advice, diagnosis, prescription, follow-up and signature. -->
+      <!-- Back: advice, diagnosis, prescription and signature. -->
       <article ref="backSheet" class="sheet sheet--back" :class="{ 'sheet--back-dense': densePrescription, 'sheet--back-measuring': !fitReady }" :aria-busy="!fitReady" data-side="پشت ورق" dir="ltr" aria-label="پشت دوسیه">
         <section class="back-advice box">
           <b>Advice:</b>
@@ -373,7 +378,7 @@ onBeforeUnmount(() => {
             <thead>
               <tr>
                 <th scope="col">دوا</th>
-                <th scope="col">دوز</th>
+                <th scope="col" class="rx-table__dose">طریقه مصرف</th>
                 <th scope="col" class="rx-table__qty">تعداد</th>
               </tr>
             </thead>
@@ -397,7 +402,6 @@ onBeforeUnmount(() => {
             <template v-if="o.pd"> &nbsp;|&nbsp; PD {{ o.pd }}</template>
           </div>
           <div class="back-sign">
-            <div><b>F / U within</b> {{ followUp ? shamsiPaper(followUp.dueDate) : '' }}<template v-if="followUp?.note"> <span dir="auto">{{ clip('Follow-up note', followUp.note, 80) }}</span></template></div>
             <div><b>Ophthalmologist's Signature</b> <span class="sign-line"></span></div>
           </div>
         </section>
@@ -821,6 +825,11 @@ onBeforeUnmount(() => {
   width: 9mm;
 }
 
+.note-block {
+  font-size: 8pt;
+  line-height: 1.3;
+}
+
 .clip-note {
   margin-top: auto;
   font-size: 7pt;
@@ -960,6 +969,9 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 
+/* The dose ("1x3") reads left to right inside a right-to-left table; centred, it sits under its heading either way. */
+.rx-table th.rx-table__dose,
+.rx-table td.rx-table__dose,
 .rx-table th.rx-table__qty,
 .rx-table td.rx-table__qty {
   text-align: center;

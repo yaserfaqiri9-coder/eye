@@ -83,13 +83,50 @@ public class PatientCall
     public int Version { get; set; }
 }
 
-/// <summary>The clip names of the local voice pack. The spoken text belongs to the pack tool, deploy/windows/voice-phrases.json.</summary>
+/// <summary>Versioned recordings for new playback; legacy names remain for compatibility with older installation tools.</summary>
 public static class VoicePack
 {
+    // Content-addressed directory: new recordings cannot reuse the old browser cache.
+    public const string RecordedVersion = "recorded-c98dd13ed170";
+    public const int RecordedMaxNumber = 50;
+    public const string RecordedBase = "/audio/" + RecordedVersion + "/WAV/";
+    public static readonly string[] RecordedDestinations = ["doctor", "refraction", "imaging", "pharmacy", "optical", "initial_exam", "reception", "cashier", "surgery"];
+
+    /// <summary>Use stored machine identifiers, including the original desk for numbered rooms. Never infer a destination from display text.</summary>
+    public static string? RecordedDestination(string destination, CallDesk? desk = null)
+    {
+        if (destination.StartsWith("room-", StringComparison.Ordinal))
+        {
+            return desk switch
+            {
+                CallDesk.Doctor => "doctor", CallDesk.Vision => "initial_exam", CallDesk.Reception => "reception",
+                CallDesk.Refraction => "refraction", CallDesk.Imaging => "imaging", CallDesk.Pharmacy => "pharmacy",
+                CallDesk.Optical => "optical", _ => null,
+            };
+        }
+        return destination == "vision" ? "initial_exam" : RecordedDestinations.Contains(destination) ? destination : null;
+    }
+
+    public static string[] RecordedClips(int number, string destination, CallDesk? desk = null) =>
+        number is >= 1 and <= RecordedMaxNumber && RecordedDestination(destination, desk) is { } key
+            ? [$"{RecordedBase}numbers/number_{number:D3}.wav", $"{RecordedBase}destinations/destination_{key}.wav"] : [];
+
+    public static IEnumerable<string> RecordedFiles() =>
+        Enumerable.Range(1, RecordedMaxNumber).Select(n => $"numbers/number_{n:D3}.wav")
+            .Concat(RecordedDestinations.Select(d => $"destinations/destination_{d}.wav"));
+
+    public static string RecordedRoot(IHostEnvironment env)
+    {
+        var published = Path.Combine(env.ContentRootPath, "wwwroot", "audio", RecordedVersion, "WAV");
+        // A development checkout serves its static files with Vite; published builds serve wwwroot.
+        return Directory.Exists(published) ? published : Path.GetFullPath(Path.Combine(env.ContentRootPath, "..", "..", "..", "frontend", "public", "audio", RecordedVersion, "WAV"));
+    }
+
+    // These limits and legacy MP3 helpers are used by older voice installation tools, not recorded playback.
     public const int MaxNumber = 100;
     public const int MaxRoom = 20;
 
-    /// <summary>The doctor's desk has no section: a doctor is always announced by room.</summary>
+    /// <summary>Internal routing keys and labels. Doctor routing uses its assigned room; the recording says only "doctor".</summary>
     public static readonly IReadOnlyDictionary<CallDesk, (string Clip, string Label)> Sections = new Dictionary<CallDesk, (string, string)>
     {
         [CallDesk.Reception] = ("reception", "بخش پذیرش"),
@@ -117,8 +154,7 @@ public static class VoicePack
     {
         if (destination.StartsWith("room-", StringComparison.Ordinal))
         {
-            var digits = string.Concat(destination["room-".Length..].TrimStart('0').Select(c => (char)('۰' + (c - '0'))));
-            return $"اتاق شماره {digits}";
+            return $"اتاق شماره {destination["room-".Length..].TrimStart('0')}";
         }
 
         return Sections.Values.FirstOrDefault(s => s.Clip == destination).Label ?? destination;

@@ -21,6 +21,7 @@ const form = reactive({
   estimatedAge: null as number | null,
   phone: '',
   address: '',
+  occupation: '',
 })
 
 const { dirty, markSaved, applying } = useUnsavedGuard(form)
@@ -54,6 +55,7 @@ async function load() {
         estimatedAge: existing.birthDate ? null : existing.ageYears,
         phone: existing.phone ?? '',
         address: existing.address ?? '',
+        occupation: existing.occupation ?? '',
       }),
     )
   } catch (cause) {
@@ -179,7 +181,11 @@ onMounted(load)
             <label class="form-label" for="p-phone">شماره تماس</label>
             <input id="p-phone" v-model="form.phone" class="form-control" dir="ltr" maxlength="30" inputmode="tel" />
           </div>
-          <div class="col-md-9">
+          <div class="col-md-3 col-sm-6">
+            <label class="form-label" for="p-occupation">شغل</label>
+            <input id="p-occupation" v-model="form.occupation" class="form-control" maxlength="100" />
+          </div>
+          <div class="col-md-6">
             <label class="form-label" for="p-address">آدرس</label>
             <input id="p-address" v-model="form.address" class="form-control" maxlength="300" />
           </div>

@@ -6,6 +6,7 @@ import UiAvatar from '@/components/UiAvatar.vue'
 import UiModal from '@/components/UiModal.vue'
 import { useAuthStore } from '@/stores/auth'
 import { roleLabel } from '@/features/users/roles'
+import { patientName, type PatientListItem } from '@/features/patients/types'
 
 defineEmits<{ 'toggle-sidebar': [] }>()
 
@@ -51,11 +52,90 @@ function toggleFullscreen() {
   else void document.documentElement.requestFullscreen()
 }
 
+/** A few matching patients appear while typing; one click opens the file. Enter without a choice still opens the full list. */
+const hits = ref<PatientListItem[]>([])
+const hitsOpen = ref(false)
+const activeHit = ref(-1)
+let hitTimer: ReturnType<typeof setTimeout> | undefined
+let hitController: AbortController | null = null
+
+function onSearchInput() {
+  clearTimeout(hitTimer)
+  hitController?.abort()
+  activeHit.value = -1
+  const term = search.value.trim()
+  // One digit is a whole file number now, so it searches; one letter would find too much.
+  if (term.length < 2 && !/^[0-9۰-۹]$/.test(term)) {
+    hits.value = []
+    hitsOpen.value = false
+    return
+  }
+  hitTimer = setTimeout(async () => {
+    const controller = new AbortController()
+    hitController = controller
+    try {
+      const page = await api<{ items: PatientListItem[] }>(`/patients?pageSize=6&q=${encodeURIComponent(term)}`, { signal: controller.signal })
+      if (controller.signal.aborted) return
+      hits.value = page.items
+      // A late answer must not open a list the user has already left or submitted.
+      hitsOpen.value = document.activeElement === searchInput.value
+    } catch {
+      // The list is a shortcut only; Enter still searches on the patients page.
+      if (!controller.signal.aborted) hitsOpen.value = false
+    }
+  }, 250)
+}
+
+const searchInput = ref<HTMLInputElement | null>(null)
+
+function closeHits() {
+  hitsOpen.value = false
+  activeHit.value = -1
+}
+
+/** Stops a suggestion search still on its way, so nothing reopens after the user has moved on. */
+function cancelHits() {
+  clearTimeout(hitTimer)
+  hitController?.abort()
+  closeHits()
+}
+
+function openHit(row: PatientListItem) {
+  cancelHits()
+  search.value = ''
+  hits.value = []
+  router.push(`/patients/${row.id}`)
+}
+
+function onSearchKeydown(event: KeyboardEvent) {
+  if (!hitsOpen.value || hits.value.length === 0) return
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    const count = hits.value.length
+    if (event.key === 'ArrowDown') activeHit.value = (activeHit.value + 1) % count
+    else activeHit.value = activeHit.value <= 0 ? count - 1 : activeHit.value - 1
+  } else if (event.key === 'Escape') {
+    cancelHits()
+  }
+}
+
 function submitSearch() {
+  const chosen = hits.value[activeHit.value]
+  if (hitsOpen.value && chosen) return openHit(chosen)
+  cancelHits()
   router.push({ name: 'patients', query: { q: search.value.trim() } })
 }
 
+onBeforeUnmount(() => {
+  clearTimeout(hitTimer)
+  hitController?.abort()
+})
+
+/** Leaving ends the session for everyone at this desk, so it asks first: the icon sits beside «تغییر رمز». */
+const confirmingLogout = ref(false)
+
 async function logout() {
+  confirmingLogout.value = false
   error.value = ''
   try {
     await auth.logout()
@@ -77,8 +157,41 @@ async function logout() {
       <i class="ri-menu-line" aria-hidden="true"></i>
     </button>
     <form v-if="auth.can('patients.view')" class="header__search" role="search" @submit.prevent="submitSearch">
-      <input v-model="search" type="search" class="form-control" placeholder="جستجوی مریض..." aria-label="جستجوی مریض در هدر" />
+      <input
+        ref="searchInput"
+        v-model="search"
+        type="search"
+        class="form-control"
+        placeholder="جستجوی مریض: نام، پرونده یا تماس"
+        aria-label="جستجوی مریض در هدر"
+        autocomplete="off"
+        aria-controls="header-search-hits"
+        :aria-expanded="hitsOpen"
+        :aria-activedescendant="hitsOpen && activeHit >= 0 ? `header-hit-${activeHit}` : undefined"
+        @input="onSearchInput"
+        @keydown="onSearchKeydown"
+        @blur="cancelHits"
+      />
       <i class="ri-search-line" aria-hidden="true"></i>
+      <div v-if="hitsOpen" id="header-search-hits" class="header__hits xr-popover" role="listbox" aria-label="مریضان پیدا شده" @mousedown.prevent>
+        <button
+          v-for="(row, index) in hits"
+          :id="`header-hit-${index}`"
+          :key="row.id"
+          type="button"
+          role="option"
+          class="header__hit"
+          :class="{ 'header__hit--active': index === activeHit }"
+          :aria-selected="index === activeHit"
+          @mousemove="activeHit = index"
+          @click="openHit(row)"
+        >
+          <span class="header__hit-name">{{ patientName(row) }}</span>
+          <span class="header__hit-meta"><span class="ltr-num">{{ row.fileNumber }}</span><template v-if="row.fatherName"> · پدر: {{ row.fatherName }}</template></span>
+        </button>
+        <p v-if="hits.length === 0" class="xr-combo__note">مریضی پیدا نشد.</p>
+        <p v-else class="xr-combo__note">Enter: همه نتایج در فهرست مریضان</p>
+      </div>
     </form>
     <div class="header__spacer"></div>
     <span v-if="error" class="text-danger small" role="alert">{{ error }}</span>
@@ -88,11 +201,11 @@ async function logout() {
     <button type="button" class="header__icon" aria-label="تغییر رمز" title="تغییر رمز" @click="Object.assign(password, { open: true, current: '', next: '', error: '', done: false })">
       <i class="ri-key-2-fill" aria-hidden="true"></i>
     </button>
-    <button type="button" class="header__icon" aria-label="خروج" title="خروج" @click="logout">
+    <button type="button" class="header__icon" aria-label="خروج" title="خروج" @click="confirmingLogout = true">
       <i class="ri-logout-box-line" aria-hidden="true"></i>
     </button>
     <div v-if="auth.user" class="header__user">
-      <UiAvatar :seed="auth.user.fullName" :size="50" plain />
+      <UiAvatar :seed="auth.user.fullName" :size="38" plain />
       <div class="header__identity">
         <div class="header__name">{{ auth.user.fullName }}</div>
         <div class="header__role" :title="roles">{{ roles }}</div>
@@ -114,13 +227,21 @@ async function logout() {
       </div>
     </form>
   </UiModal>
+
+  <UiModal v-if="confirmingLogout" title="خروج از سیستم" @close="confirmingLogout = false">
+    <p>از حساب {{ auth.user?.fullName }} خارج می‌شوید. کار ذخیره‌نشده در صفحه باز از بین می‌رود.</p>
+    <div class="xr-form-actions">
+      <button type="button" class="btn btn-primary" @click="logout">خروج</button>
+      <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
+    </div>
+  </UiModal>
 </template>
 
 <style scoped>
 .header {
   position: fixed;
-  top: 20px;
-  inset-inline: calc(var(--xr-sidebar-current) + 30px) 30px;
+  top: var(--xr-header-top);
+  inset-inline: calc(var(--xr-sidebar-current) + var(--xr-page-gutter)) var(--xr-page-gutter);
   z-index: 99;
   display: flex;
   align-items: center;
@@ -157,10 +278,14 @@ async function logout() {
   min-height: 35px;
   padding-block: 5px;
   padding-inline: 15px 40px;
-  border: 0;
-  background: var(--xr-primary-light);
+  border: 1px solid var(--xr-border-table);
+  background: var(--xr-surface);
   color: #000;
   line-height: 25.2px;
+}
+
+.header__search .form-control:focus {
+  border-color: var(--xr-primary);
 }
 
 .header__search .form-control::placeholder {
@@ -174,6 +299,38 @@ async function logout() {
   transform: translateY(-50%);
   color: var(--xr-primary);
   font-size: 16px;
+}
+
+.header__hits {
+  position: absolute;
+  inset-block-start: calc(100% + 6px);
+  inset-inline: 0;
+  padding: 4px;
+}
+
+.header__hit {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--xr-radius-button);
+  background: transparent;
+  color: var(--xr-text);
+  text-align: start;
+}
+
+.header__hit--active {
+  background: var(--xr-primary-light);
+}
+
+.header__hit-name {
+  font-weight: 500;
+}
+
+.header__hit-meta {
+  color: var(--xr-text-soft);
+  font-size: 12.5px;
 }
 
 .header__icon {
@@ -204,8 +361,9 @@ async function logout() {
 
 .header__name {
   color: var(--xr-text);
-  font-size: 18px;
-  line-height: 27px;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 22px;
 }
 
 .header__role {

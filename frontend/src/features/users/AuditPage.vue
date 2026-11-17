@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { api, errorMessage } from '@/api/http'
 import UiCard from '@/components/UiCard.vue'
+import UiFilterBar from '@/components/UiFilterBar.vue'
 import UiPager from '@/components/UiPager.vue'
 import { formatDateTime } from '@/utils/date'
 
@@ -69,12 +70,13 @@ onMounted(load)
 </script>
 
 <template>
-  <UiCard title="ثبت فعالیت‌ها">
-    <template #actions>
-      <select v-model="action" class="form-select" aria-label="فیلتر فعالیت">
-        <option v-for="f in filters" :key="f.value" :value="f.value">{{ f.label }}</option>
-      </select>
-    </template>
+  <UiFilterBar title="ثبت فعالیت‌ها">
+    <select v-model="action" class="form-select" aria-label="فیلتر فعالیت">
+      <option v-for="f in filters" :key="f.value" :value="f.value">{{ f.label }}</option>
+    </select>
+  </UiFilterBar>
+
+  <UiCard>
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
     <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
     <div v-else-if="rows.length === 0" class="xr-state">موردی ثبت نشده است.</div>

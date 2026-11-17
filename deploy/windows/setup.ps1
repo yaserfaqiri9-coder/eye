@@ -121,6 +121,13 @@ function Test-Everything([string]$Url, [string]$HealthUrl) {
         }
     }
 
+    # New releases ship immutable WAV recordings in wwwroot. Do not run the legacy
+    # MP3 importer/check against them or tell the operator to install a second pack.
+    if (Test-Path -LiteralPath (Join-Path $Root 'app\wwwroot\audio\recorded-c98dd13ed170\manifest.json')) {
+        Invoke-Script 'test-recorded-voice.ps1' @('-Root', (Join-Path $Root 'app')) -AllowFailure
+        if ($script:lastScriptCode) { '##VOICE pending' }
+        return
+    }
     $voiceDir = Join-Path $Root 'storage\voice'
     $bundledVoice = Join-Path $package 'voice'
     if (Test-Path $bundledVoice) {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, reactive, ref, useId, watch } from 'vue'
-import { afghanMonths, faDigits, formatShamsi, isoToShamsi, parseShamsi, shamsiMonthLength, shamsiToIso, shamsiWeekColumn, todayIso, weekdayNames } from '@/utils/date'
+import { afghanMonths, latinDigits, formatShamsi, isoToShamsi, parseShamsi, shamsiMonthLength, shamsiToIso, shamsiWeekColumn, todayIso, weekdayNames } from '@/utils/date'
 import { useFloating } from './useFloating'
 
 /** The value is a date-only yyyy-MM-dd string, exactly as the API stores it, or null when empty. */
@@ -265,12 +265,12 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside, tru
             <option v-for="(name, index) in afghanMonths" :key="name" :value="index + 1">{{ name }}</option>
           </select>
           <select v-model.number="view.year" class="xr-calendar__select" aria-label="سال" @change="onViewChange">
-            <option v-for="year in years" :key="year" :value="year">{{ faDigits(year) }}</option>
+            <option v-for="year in years" :key="year" :value="year">{{ latinDigits(year) }}</option>
           </select>
           <button type="button" class="xr-calendar__nav" aria-label="ماه بعد" title="ماه بعد" @click="shiftMonth(1)"><i class="ri-arrow-left-s-line" aria-hidden="true"></i></button>
         </div>
 
-        <table class="xr-calendar__grid" role="grid" :aria-label="`${afghanMonths[view.month - 1]} ${faDigits(view.year)}`" @keydown="onGridKeydown">
+        <table class="xr-calendar__grid" role="grid" :aria-label="`${afghanMonths[view.month - 1]} ${latinDigits(view.year)}`" @keydown="onGridKeydown">
           <thead>
             <tr>
               <th v-for="name in weekdayNames" :key="name" scope="col" :abbr="name">{{ name[0] }}</th>
@@ -287,11 +287,11 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside, tru
                   :disabled="!isAllowed(dayIso(day))"
                   :tabindex="day === cursor ? 0 : -1"
                   :data-cursor="day === cursor"
-                  :aria-label="`${faDigits(day)} ${afghanMonths[view.month - 1]} ${faDigits(view.year)}`"
+                  :aria-label="`${latinDigits(day)} ${afghanMonths[view.month - 1]} ${latinDigits(view.year)}`"
                   :aria-pressed="dayIso(day) === model"
                   :aria-current="dayIso(day) === today ? 'date' : undefined"
                   @click="pick(dayIso(day))"
-                >{{ faDigits(day) }}</button>
+                >{{ latinDigits(day) }}</button>
               </td>
             </tr>
           </tbody>

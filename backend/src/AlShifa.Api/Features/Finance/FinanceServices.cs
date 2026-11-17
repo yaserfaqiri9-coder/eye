@@ -24,18 +24,18 @@ public static class Accounts
     public static readonly (string Code, string Name)[] All =
     [
         (Cash, "صندوق"),
-        (Receivable, "حساب‌های دریافتنی"),
-        (Inventory, "موجودی اجناس"),
-        (Payable, "حساب‌های پرداختنی"),
-        (OpeningBalance, "سرمایه افتتاحیه"),
-        (ServiceRevenue, "درآمد خدمات"),
+        (Receivable, "باقیات مریضان"),
+        (Inventory, "اجناس گدام"),
+        (Payable, "قرض به شرکت‌ها"),
+        (OpeningBalance, "اجناس پیش از شروع سیستم"),
+        (ServiceRevenue, "عاید خدمات"),
         (PharmacyRevenue, "فروش دواخانه"),
         (OpticalRevenue, "فروش عینک"),
-        (Discounts, "تخفیف‌ها"),
-        (Refunds, "برگشت وجه"),
-        (CostOfGoods, "قیمت تمام‌شده فروش"),
+        (Discounts, "تخفیف"),
+        (Refunds, "پول پس‌داده"),
+        (CostOfGoods, "قیمت خرید اجناس فروخته‌شده"),
         (Expenses, "مصارف"),
-        (InventoryAdjustments, "تعدیل موجودی"),
+        (InventoryAdjustments, "کمی و زیادی اجناس"),
     ];
 }
 
@@ -108,7 +108,7 @@ public sealed class InvoiceService(AppDbContext db, NumberService numbers, Ledge
     {
         var invoice = new Invoice
         {
-            InvoiceNumber = $"INV-{await numbers.NextAsync("invoice", ct: ct):D7}",
+            InvoiceNumber = await numbers.NextNumberAsync("invoice", ct),
             PatientId = patientId,
             VisitId = visitId,
             IssuedByUserId = user.Id,
@@ -269,7 +269,7 @@ public sealed class InvoiceService(AppDbContext db, NumberService numbers, Ledge
 
         var payment = new Payment
         {
-            ReceiptNumber = $"RC-{await numbers.NextAsync("receipt", ct: ct):D7}",
+            ReceiptNumber = await numbers.NextNumberAsync("receipt", ct),
             InvoiceId = invoice.Id,
             Amount = request.Amount,
             Method = request.Method,
@@ -291,7 +291,7 @@ public sealed class InvoiceService(AppDbContext db, NumberService numbers, Ledge
         return payment;
     }
 
-    public static decimal Balance(Invoice i) => i.Total - i.Discount - i.Paid;
+    public static decimal Balance(Invoice i) => i.Status == InvoiceStatus.Void ? 0 : i.Total - i.Discount - i.Paid;
 
     /// <summary>The payable amount after discount is covered by money still held, so a refund undoes it.</summary>
     public static bool IsSettled(Invoice i) => i.Status != InvoiceStatus.Void && i.Total - i.Discount <= i.Paid - i.Refunded;

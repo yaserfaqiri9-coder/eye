@@ -39,7 +39,7 @@ public sealed class PharmacyFlowTests(ApiFixture api)
     private sealed record Setup(long PatientId, string FileNumber, long VisitId, long RxId, string RxNumber, long ItemId, int ProductId, string Drug, HttpClient Doctor, HttpClient Pharmacist);
 
     /// <summary>A patient with a prescription of one drug the pharmacy stocks.</summary>
-    private async Task<Setup> PrescriptionAsync(decimal prescribed, decimal stock, string? father = null, string? phone = null, DateOnly? validUntil = null)
+    private async Task<Setup> PrescriptionAsync(decimal prescribed, decimal stock, string? father = null, string? phone = null, DateOnly? validUntil = null, string? unstockedDrug = null)
     {
         var inventory = await UserAsync(Roles.Inventory);
         var drug = "قطره " + Name("d");
@@ -53,7 +53,8 @@ public sealed class PharmacyFlowTests(ApiFixture api)
         var departments = await reception.GetFromJsonAsync<List<LookupItem>>("/api/lookups/departments");
         var visit = await Created<VisitRow>(await reception.SendAsync(ApiFixture.Keyed("/api/visits", new CreateVisitRequest(patient.Id, (int)departments!.Single(d => d.Name == "داکتر").Id, null, null, null, await api.PaidTokenAsync()))));
         var doctor = await UserAsync(Roles.Doctor);
-        var rx = await Created<PrescriptionDto>(await doctor.SendAsync(ApiFixture.Keyed("/api/prescriptions", new CreatePrescriptionRequest(visit.Id, null, [new RxItemInput(drug, "یک قطره", "چشم", "۵ روز", null, prescribed)], validUntil))));
+        var rx = await Created<PrescriptionDto>(await doctor.SendAsync(ApiFixture.Keyed("/api/prescriptions", new CreatePrescriptionRequest(visit.Id, null,
+            [new RxItemInput(drug, "یک قطره", "چشم", "۵ روز", null, prescribed), .. unstockedDrug is null ? Array.Empty<RxItemInput>() : [new RxItemInput(unstockedDrug, "1x3", null, null, null, 1)]], validUntil))));
         return new(patient.Id, patient.FileNumber, visit.Id, rx.Id, rx.RxNumber, rx.Items[0].Id, productId, drug, doctor, await UserAsync(Roles.Pharmacist));
     }
 
@@ -101,8 +102,44 @@ public sealed class PharmacyFlowTests(ApiFixture api)
 
         // Doctors pick drug names for a prescription the same way.
         var doctor = await UserAsync(Roles.Doctor);
-        var names = await doctor.GetFromJsonAsync<List<string>>($"/api/prescriptions/drugs?q={Uri.EscapeDataString($"VIGAMOX{tag}")}");
-        Assert.Equal([stored], names);
+        var names = await doctor.GetFromJsonAsync<List<AlShifa.Api.Features.Clinical.DrugOption>>($"/api/prescriptions/drugs?q={Uri.EscapeDataString($"VIGAMOX{tag}")}");
+        Assert.Equal([stored], names!.Select(d => d.Name));
+    }
+
+    [Fact]
+    public async Task Generic_and_usual_dose_are_kept_found_by_doctors_and_printed_as_the_old_prescriptions()
+    {
+        var inventory = await UserAsync(Roles.Inventory);
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var brand = $"Tobradex{tag} (قطره چشمی)";
+        var generic = $"Tobramycin{tag} + Dexamethasone";
+        var created = await Created<JsonElement>(await inventory.PostAsJsonAsync("/api/inventory/products",
+            new SaveProductRequest(brand, ProductKind.Drug, "قطره چشمی", "دانه", 0, 100, GenericName: $"  {generic} ", DefaultDose: "1x3")));
+        var id = created.GetProperty("id").GetInt32();
+
+        // Stored trimmed, listed with the product, and the generic finds it in the stock list.
+        var row = Assert.Single((await inventory.GetFromJsonAsync<PagedResult<ProductRow>>($"/api/inventory/products?q={Uri.EscapeDataString($"tobramycin{tag}")}", JsonOptions))!.Items);
+        Assert.Equal((id, generic, "1x3"), (row.Id, row.GenericName, row.DefaultDose));
+
+        // A doctor finds the drug by any part of its generic, with the form, generic and usual dose.
+        var doctor = await UserAsync(Roles.Doctor);
+        var found = await doctor.GetFromJsonAsync<List<AlShifa.Api.Features.Clinical.DrugOption>>($"/api/prescriptions/drugs?q={Uri.EscapeDataString($"MYCIN{tag}")}");
+        var option = Assert.Single(found!);
+        Assert.Equal((brand, "قطره چشمی", generic, "1x3"), (option.Name, option.Form, option.Generic, option.DefaultDose));
+
+        var details = await doctor.GetFromJsonAsync<Dictionary<string, AlShifa.Api.Features.Clinical.DrugOption>>($"/api/prescriptions/drug-details?names={Uri.EscapeDataString(brand)}");
+        Assert.Equal(generic, details![brand].Generic);
+
+        // The printed line reads as the old system wrote it; the pharmacy's form suffix is not repeated.
+        Assert.Equal($"Eye drop Tobradex{tag} ({generic})", AlShifa.Api.Features.Clinical.PrescriptionEndpoints.PrescriptionLine(brand, "قطره چشمی", generic));
+        Assert.Equal("Tablet Loprin 75 mg (Aspirin)", AlShifa.Api.Features.Clinical.PrescriptionEndpoints.PrescriptionLine("Loprin 75 mg", "تابلیت", "Aspirin"));
+        Assert.Equal("Eye drop Ocuzol (Antazoline + Naphazoline)", AlShifa.Api.Features.Clinical.PrescriptionEndpoints.PrescriptionLine("Eye drop Ocuzol (Antazoline + Naphazoline)", "قطره چشمی", null));
+        Assert.Equal("Unknown", AlShifa.Api.Features.Clinical.PrescriptionEndpoints.PrescriptionLine("Unknown", null, null));
+
+        // Clearing the fields on edit leaves them empty, not blank strings.
+        Assert.Equal(HttpStatusCode.NoContent, (await inventory.PutAsJsonAsync($"/api/inventory/products/{id}",
+            new SaveProductRequest(brand, ProductKind.Drug, "قطره چشمی", "دانه", 0, 100, Version: row.Version, GenericName: " ", DefaultDose: ""))).StatusCode);
+        Assert.Equal((null, null), await api.InDbAsync(db => db.Products.Where(p => p.Id == id).Select(p => new ValueTuple<string?, string?>(p.GenericName, p.DefaultDose)).SingleAsync()));
     }
 
     [Fact]
@@ -143,6 +180,17 @@ public sealed class PharmacyFlowTests(ApiFixture api)
     }
 
     [Fact]
+    public async Task Stock_past_its_date_is_named_as_expired_not_out_and_is_still_not_sold()
+    {
+        var s = await PrescriptionAsync(2, 10);
+        await api.InDbAsync(db => db.StockBatches.Where(b => b.ProductId == s.ProductId).ExecuteUpdateAsync(u => u.SetProperty(b => b.ExpiryDate, KabulClock.Today.AddDays(-1))));
+
+        var detail = await Detail(s.Pharmacist, s.RxId);
+        Assert.Equal(("Expired", 0m), (detail.Items[0].Stock, detail.Items[0].Available));
+        Assert.NotEqual(HttpStatusCode.Created, (await s.Pharmacist.SendAsync(Bill(s, 2))).StatusCode);
+    }
+
+    [Fact]
     public async Task Stock_leaves_only_when_a_paid_bill_is_handed_over_and_only_once()
     {
         var s = await PrescriptionAsync(2, 10);
@@ -171,6 +219,24 @@ public sealed class PharmacyFlowTests(ApiFixture api)
     }
 
     [Fact]
+    public async Task Returning_a_paid_prescription_restores_dispensing_and_stock_only_once_even_concurrently()
+    {
+        var s = await PrescriptionAsync(2, 10);
+        var sale = await Created<SaleRow>(await s.Pharmacist.SendAsync(Bill(s, 2)));
+        await api.PayAndDeliverAsync(s.Pharmacist, sale.Id);
+        var version = await SaleVersion(sale.Id);
+        var results = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => s.Pharmacist.PostAsJsonAsync($"/api/pharmacy/sales/{sale.Id}/return", new ReturnSaleRequest(version, "مریض دوا را برگشت داد"))));
+        Assert.Single(results, r => r.StatusCode == HttpStatusCode.NoContent);
+        Assert.Single(results, r => r.StatusCode == HttpStatusCode.Conflict);
+        Assert.Equal((10m, 0m), (await OnHand(s.ProductId), await Dispensed(s.ItemId)));
+        var detail = await Detail(s.Pharmacist, s.RxId);
+        Assert.True(Assert.Single(detail.Bills).IsReturned);
+        Assert.Equal(0, detail.Bills[0].Balance);
+        Assert.Equal(2, detail.Items[0].Remaining);
+        Assert.Equal(200, await api.InDbAsync(db => db.Invoices.Where(i => i.Id == sale.InvoiceId).Select(i => i.Refunded).SingleAsync()));
+    }
+
+    [Fact]
     public async Task A_partial_purchase_keeps_the_rest_for_later_and_a_bill_holds_its_stock_until_cancelled()
     {
         var s = await PrescriptionAsync(5, 3);
@@ -196,6 +262,27 @@ public sealed class PharmacyFlowTests(ApiFixture api)
         var rest = await Created<SaleRow>(await s.Pharmacist.SendAsync(Bill(s, 1)));
         await api.PayAndDeliverAsync(s.Pharmacist, rest.Id);
         Assert.Equal(3m, await Dispensed(s.ItemId));
+    }
+
+    [Fact]
+    public async Task A_drug_the_pharmacy_lacks_never_holds_up_the_others_and_buying_it_outside_closes_the_job()
+    {
+        var s = await PrescriptionAsync(2, 10, unstockedDrug: "نیست " + Name("x"));
+        var detail = await Detail(s.Pharmacist, s.RxId);
+        Assert.Equal(["Available", "NotStocked"], detail.Items.Select(i => i.Stock));
+
+        // Only the stocked drug is billed and handed over; the missing one stays owed on the prescription.
+        var sale = await Created<SaleRow>(await s.Pharmacist.SendAsync(Bill(s, 2)));
+        await api.PayAndDeliverAsync(s.Pharmacist, sale.Id);
+        detail = await Detail(s.Pharmacist, s.RxId);
+        Assert.Equal(("Partial", 2m, 1m), (detail.Prescription.Stage, detail.Items[0].Dispensed, detail.Items[1].Remaining));
+        Assert.Contains((await s.Pharmacist.GetFromJsonAsync<PharmacyQueues>("/api/pharmacy/queues", JsonOptions))!.Partial, r => r.Id == s.RxId);
+
+        // The patient buys the rest outside: it leaves the partial list and reads as such.
+        Assert.Equal(HttpStatusCode.NoContent, (await s.Pharmacist.PostAsJsonAsync($"/api/pharmacy/prescriptions/{s.RxId}/status",
+            new SetPharmacyStatusRequest(PharmacyRxStatus.BuyingOutside, null, detail.Prescription.Version), JsonOptions)).StatusCode);
+        Assert.Equal("BuyingOutside", (await Detail(s.Pharmacist, s.RxId)).Prescription.Stage);
+        Assert.DoesNotContain((await s.Pharmacist.GetFromJsonAsync<PharmacyQueues>("/api/pharmacy/queues", JsonOptions))!.Partial, r => r.Id == s.RxId);
     }
 
     [Fact]
@@ -284,6 +371,7 @@ public sealed class PharmacyFlowTests(ApiFixture api)
         Assert.Contains(await Find(father.Replace('ي', 'ی')), p => p.Id == s.PatientId && p.FatherName == father);
         Assert.Contains(await Find(s.RxNumber), p => p.Id == s.PatientId);
         Assert.Contains(await Find(s.FileNumber.ToLowerInvariant()), p => p.Id == s.PatientId);
-        Assert.Contains(await Find(s.RxNumber.Split('-')[1]), p => p.Id == s.PatientId);
+        Assert.Contains(await Find($"RX-{long.Parse(s.RxNumber):D7}"), p => p.Id == s.PatientId);
+        Assert.Contains(await Find($"P-{long.Parse(s.FileNumber):D6}"), p => p.Id == s.PatientId);
     }
 }

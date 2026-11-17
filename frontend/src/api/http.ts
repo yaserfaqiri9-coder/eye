@@ -98,6 +98,29 @@ async function toApiError(response: Response) {
   )
 }
 
+/** Saves a file the server makes, under the name the server gives it. A refusal reads like any other API error. */
+export async function downloadFile(path: string, fallbackName: string) {
+  let response: Response
+  try {
+    response = await send(path, {})
+  } catch {
+    throw new ApiError(0, 'network', 'اتصال با سرور برقرار نشد. اتصال شبکه را بررسی کنید.')
+  }
+  if (response.status === 401) onUnauthorized()
+  if (!response.ok) throw await toApiError(response)
+
+  const disposition = response.headers.get('Content-Disposition') ?? ''
+  const name = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1] ?? /filename="?([^";]+)"?/i.exec(disposition)?.[1] ?? fallbackName
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = decodeURIComponent(name)
+  document.body.append(link)
+  link.click()
+  link.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 export async function api<T = void>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = options.method ?? 'GET'
   let response: Response

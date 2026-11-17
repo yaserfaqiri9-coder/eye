@@ -137,6 +137,7 @@ onBeforeUnmount(() => {
 .layout {
   --xr-sidebar-current: var(--xr-sidebar-width);
   height: 100dvh;
+  line-height: var(--xr-lh-app);
   overflow: hidden;
   background: var(--xr-gradient-shell);
 }
@@ -156,7 +157,7 @@ onBeforeUnmount(() => {
   scrollbar-gutter: stable;
   direction: rtl;
   margin-inline-start: var(--xr-sidebar-current);
-  padding: 120px 27px 0;
+  padding: var(--xr-main-pad-top) var(--xr-page-gutter) 0;
   background: var(--xr-page-bg);
   transition: margin 0.3s ease-in-out;
 }
@@ -164,6 +165,13 @@ onBeforeUnmount(() => {
 .layout__content {
   flex: 1;
   flex-shrink: 0;
+}
+
+/* System notices are one slim line each, so even several of them leave the page in view. */
+.layout__content > .alert {
+  margin-bottom: 10px;
+  padding: 6px 14px;
+  font-size: 13px;
 }
 
 @media print {

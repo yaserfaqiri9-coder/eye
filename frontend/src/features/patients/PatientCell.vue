@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import UiAvatar from '@/components/UiAvatar.vue'
 
-defineProps<{ name: string; fileNumber?: string | null; to?: string; avatar?: boolean; gender?: string }>()
+/** `note` sits on the file-number line (for example the age), so the cell stays two lines. */
+defineProps<{ name: string; fileNumber?: string | null; to?: string; avatar?: boolean; gender?: string; note?: string }>()
 </script>
 
 <template>
@@ -10,7 +11,11 @@ defineProps<{ name: string; fileNumber?: string | null; to?: string; avatar?: bo
     <div class="xr-person__text">
       <RouterLink v-if="to" :to="to" class="xr-person__name">{{ name }}</RouterLink>
       <span v-else class="xr-person__name">{{ name }}</span>
-      <span v-if="fileNumber" class="xr-meta">پرونده <span class="ltr-num">{{ fileNumber }}</span></span>
+      <span v-if="fileNumber || note" class="xr-meta">
+        <template v-if="fileNumber">پرونده <span class="ltr-num">{{ fileNumber }}</span></template>
+        <template v-if="fileNumber && note"> · </template>
+        <template v-if="note">{{ note }}</template>
+      </span>
     </div>
   </div>
 </template>

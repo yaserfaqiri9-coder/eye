@@ -5,6 +5,7 @@ import UiCard from '@/components/UiCard.vue'
 import { formatTime } from '@/utils/date'
 import { quantity } from '@/utils/money'
 import { useAudioStation } from './audioStation'
+import TelevisionButton from './TelevisionButton.vue'
 
 defineOptions({ name: 'AudioStationPage' })
 
@@ -18,7 +19,7 @@ const statusLabels: Record<string, { label: string; tone: string }> = {
   Cancelled: { label: 'لغو شد', tone: 'orange' },
 }
 
-const { activated, needsClick, busyElsewhere, serverReachable, status, nowPlaying, volume, error, testing, packReady, packPending, onAir, activate, loadStatus, testSound, restoreSound } = useAudioStation()
+const { activated, needsClick, busyElsewhere, serverReachable, status, nowPlaying, volume, error, testing, preparing, prepared, retryAudio, packReady, packPending, onAir, activate, loadStatus, testSound, restoreSound } = useAudioStation()
 
 let statusTimer: ReturnType<typeof setInterval> | undefined
 
@@ -32,16 +33,20 @@ onBeforeUnmount(() => clearInterval(statusTimer))
 
 <template>
   <div class="d-grid gap-4">
-    <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
+    <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}
+      <button type="button" class="btn btn-soft btn-sm ms-2" :disabled="preparing" @click="retryAudio">تلاش مجدد برای بارگذاری صدا</button>
+      <span class="d-block small">برای تکرار اعلان ناموفق، از بخش مربوط «فراخوان مجدد» را بزنید.</span>
+    </div>
+    <p v-if="preparing || prepared" role="status" class="mb-0">{{ preparing ? 'آماده‌سازی صداهای محلی…' : 'صداهای ضبط‌شده برای پخش محلی آماده‌اند.' }}</p>
     <div v-if="needsClick" class="alert alert-warning mb-0" role="alert">
       مرورگر صدا را متوقف کرده است و تا فعال‌شدن دوباره، فراخوانی پخش نمی‌شود.
       <button type="button" class="btn btn-primary btn-sm ms-2" @click="restoreSound">فعال‌سازی دوباره صدا</button>
     </div>
     <div v-if="packPending" class="alert alert-warning mb-0" role="status">
-      فایل‌های صوتی روی سرور نصب نشده‌اند و تا آن زمان هیچ فراخوانی پخش نمی‌شود. روی لپ‌تاپ میزبان <span class="ltr-num">Import-AlShifa-Voice.exe</span> را اجرا کنید.
+      بستهٔ صوتی ضبط‌شده در فایل‌های محلی سیستم موجود نیست. مسئول سیستم باید بستهٔ کامل این نسخه را نصب کند. ثبت فراخوان و کار بخش‌ها ادامه دارد، اما صدا آماده نیست.
     </div>
     <div v-else-if="status && status.clipsMissing > 0" class="alert alert-danger mb-0" role="alert">
-      {{ quantity(status.clipsMissing) }} فایل از {{ quantity(status.clipsTotal) }} فایل مجموعه صوتی موجود نیست. فراخوانی که به این فایل‌ها نیاز دارد انجام نمی‌شود.
+      {{ quantity(status.clipsMissing) }} فایل از {{ quantity(status.clipsTotal) }} فایل مجموعه صوتی موجود نیست. فراخوان ثبت می‌شود؛ پخش تا آماده‌شدن فایل‌ها ناموفق خواهد بود.
       <span class="ltr-num d-block small mt-1">{{ status.missingSample.join(', ') }}</span>
     </div>
 
@@ -76,9 +81,11 @@ onBeforeUnmount(() => clearInterval(statusTimer))
           <button v-if="!activated" type="button" class="btn btn-primary" @click="activate(false)">فعال‌سازی صدا در این رایانه</button>
           <button v-if="busyElsewhere" type="button" class="btn btn-soft-danger" @click="activate(true)">این رایانه مرکز پخش شود</button>
           <button type="button" class="btn btn-soft" :disabled="testing || !status" @click="testSound">آزمایش صدا</button>
+          <TelevisionButton setup-link />
         </div>
       </div>
-      <p class="form-hint mt-3 mb-0">کافی است یک بار فعال شود: رفتن به صفحه‌های دیگر پخش را قطع نمی‌کند و پس از تازه‌کردن صفحه یا ورود دوباره، این رایانه با اولین کلیک خودش دوباره مرکز پخش می‌شود. اگر مرکز پخش فعال نباشد، فراخوان از رایانه‌ای پخش می‌شود که دکمه را زده است.</p>
+      <p class="form-hint mt-3 mb-0">کافی است یک بار فعال شود: رفتن به صفحه‌های دیگر پخش را قطع نمی‌کند و پس از تازه‌کردن صفحه یا ورود دوباره، این رایانه با اولین کلیک خودش دوباره مرکز پخش می‌شود. اگر مرکز پخش فعال نباشد، فراخوان از رایانه‌ای پخش می‌شود که دکمه را زده است.
+        برای رایانه‌ای که به تلویزیون سالن انتظار وصل است «نمایش روی تلویزیون» را باز کنید: همان رایانه صدا را پخش می‌کند و نوبت و مقصد را هم‌زمان با صدا با خط درشت نشان می‌دهد.</p>
     </UiCard>
 
     <UiCard title="فراخوان‌های امروز">

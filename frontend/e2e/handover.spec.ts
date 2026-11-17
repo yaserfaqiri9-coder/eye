@@ -57,7 +57,9 @@ test('the responsible doctor and the manager hand a patient over through the scr
   // The responsible doctor hands over from the chart, with a reason.
   const first = await staff(browser, `ho_a${stamp}`)
   await first.goto(`/chart/${visit.id}`)
-  await first.getByRole('button', { name: 'انتقال مسئولیت به داکتر دیگر' }).click()
+  // Handing over is a rare step, so it sits in the dossier's «more» menu.
+  await first.getByRole('button', { name: 'گزینه‌های بیشتر پرونده' }).click()
+  await first.getByRole('menuitem', { name: 'انتقال به داکتر دیگر' }).click()
   const fromChart = first.getByRole('dialog')
   await pick(first, fromChart, 'داکتر جدید', doctorB)
   await fromChart.getByLabel('دلیل انتقال').fill('رفتن به عملیات')
@@ -80,7 +82,8 @@ test('the responsible doctor and the manager hand a patient over through the scr
 
   const second = await staff(browser, `ho_b${stamp}`)
   await second.goto(`/chart/${visit.id}`)
-  await second.getByRole('button', { name: 'انتقال مسئولیت به داکتر دیگر' }).click()
+  await second.getByRole('button', { name: 'گزینه‌های بیشتر پرونده' }).click()
+  await second.getByRole('menuitem', { name: 'انتقال به داکتر دیگر' }).click()
   const refused = second.getByRole('dialog')
   await pick(second, refused, 'داکتر جدید', doctorB)
   await refused.getByLabel('دلیل انتقال').fill('می‌خواهم انتقال دهم')

@@ -19,7 +19,7 @@ export function niceTicks(max: number, steps = 5): number[] {
 
 /** Short "12 عقرب" label for a yyyy-MM-dd date. It is a calendar date, so it is formatted in UTC to stop it shifting a day. */
 export function dayLabel(iso: string) {
-  return new Intl.DateTimeFormat('fa-AF-u-ca-persian', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(`${iso}T00:00:00Z`))
+  return new Intl.DateTimeFormat('fa-AF-u-ca-persian-nu-latn', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(`${iso}T00:00:00Z`))
 }
 
 export function useChartTip(): { tip: Ref<ChartTip | null>; show: (event: MouseEvent, title: string, lines: string[]) => void; hide: () => void } {

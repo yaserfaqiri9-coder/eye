@@ -31,7 +31,7 @@ const error = ref('')
 const started = computed(() => ['InProgress', 'Completed', 'FollowUp'].includes(props.detail.case.status))
 const canRecord = computed(() => auth.can('surgery.edit') && started.value && record.value?.recorded === false)
 const chosenPackage = computed(() => packages.value.find((p) => p.id === form.packageId) ?? null)
-const packageOptions = computed<ComboOption[]>(() => packages.value.map((p) => ({ value: p.id, label: p.name, hint: `${quantity(p.items.length)} قلم` })))
+const packageOptions = computed<ComboOption[]>(() => packages.value.map((p) => ({ value: p.id, label: p.name, hint: `موجود: ${quantity(p.onHand)}` })))
 const short = computed(() => form.lines.filter((l) => l.quantity > (onHand.value[l.productId] ?? 0)))
 
 function fill(pkg: SurgeryPackage | null) {

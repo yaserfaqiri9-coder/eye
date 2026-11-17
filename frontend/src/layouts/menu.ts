@@ -65,6 +65,7 @@ export const menu: MenuSection[] = [
           { label: 'دواخانه', icon: 'ri-capsule-fill', to: '/pharmacy', permission: 'pharmacy.create' },
           { label: 'عینک', icon: 'ri-glasses-fill', to: '/optical', permission: 'optical.view' },
           { label: 'گدام', icon: 'ri-archive-2-fill', to: '/inventory', permission: 'inventory.view' },
+          { label: 'خرید', icon: 'ri-shopping-cart-2-fill', to: '/purchases', permission: 'inventory.view' },
         ],
       },
       {

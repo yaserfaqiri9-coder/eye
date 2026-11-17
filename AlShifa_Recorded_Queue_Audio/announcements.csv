@@ -1,0 +1,69 @@
+﻿name,label_fa,spoken_text,wav,mp3,duration_seconds
+number_001,مریض شماره یک,مریض شماره یک,WAV/numbers/number_001.wav,MP3/numbers/number_001.mp3,1.13
+number_002,مریض شماره دو,مریض شماره دو,WAV/numbers/number_002.wav,MP3/numbers/number_002.mp3,0.99
+number_003,مریض شماره سه,مریض شماره سه,WAV/numbers/number_003.wav,MP3/numbers/number_003.mp3,1.01
+number_004,مریض شماره چهار,مریض شماره چهار,WAV/numbers/number_004.wav,MP3/numbers/number_004.mp3,1.21
+number_005,مریض شماره پنج,مریض شماره پنج,WAV/numbers/number_005.wav,MP3/numbers/number_005.mp3,1.07
+number_006,مریض شماره شش,مریض شماره شش,WAV/numbers/number_006.wav,MP3/numbers/number_006.mp3,1.15
+number_007,مریض شماره هفت,مریض شماره هفت,WAV/numbers/number_007.wav,MP3/numbers/number_007.mp3,1.19
+number_008,مریض شماره هشت,مریض شماره هشت,WAV/numbers/number_008.wav,MP3/numbers/number_008.mp3,1.09
+number_009,مریض شماره نه,مریض شماره نه,WAV/numbers/number_009.wav,MP3/numbers/number_009.mp3,1.13
+number_010,مریض شماره ده,مریض شماره ده,WAV/numbers/number_010.wav,MP3/numbers/number_010.mp3,1.07
+number_011,مریض شماره یازده,مریض شماره یازده,WAV/numbers/number_011.wav,MP3/numbers/number_011.mp3,1.25
+number_012,مریض شماره دوازده,مریض شماره دوازده,WAV/numbers/number_012.wav,MP3/numbers/number_012.mp3,1.25
+number_013,مریض شماره سیزده,مریض شماره سیزده,WAV/numbers/number_013.wav,MP3/numbers/number_013.mp3,1.25
+number_014,مریض شماره چهارده,مریض شماره چهارده,WAV/numbers/number_014.wav,MP3/numbers/number_014.mp3,1.35
+number_015,مریض شماره پانزده,مریض شماره پانزده,WAV/numbers/number_015.wav,MP3/numbers/number_015.mp3,1.39
+number_016,مریض شماره شانزده,مریض شماره شانزده,WAV/numbers/number_016.wav,MP3/numbers/number_016.mp3,1.35
+number_017,مریض شماره هفده,مریض شماره هفده,WAV/numbers/number_017.wav,MP3/numbers/number_017.mp3,1.17
+number_018,مریض شماره هجده,مریض شماره هجده,WAV/numbers/number_018.wav,MP3/numbers/number_018.mp3,1.27
+number_019,مریض شماره نوزده,مریض شماره نوزده,WAV/numbers/number_019.wav,MP3/numbers/number_019.mp3,1.33
+number_020,مریض شماره بیست,مریض شماره بیست,WAV/numbers/number_020.wav,MP3/numbers/number_020.mp3,1.09
+number_021,مریض شماره بیست و یک,مریض شماره بیست و یک,WAV/numbers/number_021.wav,MP3/numbers/number_021.mp3,1.41
+number_022,مریض شماره بیست و دو,مریض شماره بیست و دو,WAV/numbers/number_022.wav,MP3/numbers/number_022.mp3,1.35
+number_023,مریض شماره بیست و سه,مریض شماره بیست و سه,WAV/numbers/number_023.wav,MP3/numbers/number_023.mp3,1.33
+number_024,مریض شماره بیست و چهار,مریض شماره بیست و چهار,WAV/numbers/number_024.wav,MP3/numbers/number_024.mp3,1.49
+number_025,مریض شماره بیست و پنج,مریض شماره بیست و پنج,WAV/numbers/number_025.wav,MP3/numbers/number_025.mp3,1.39
+number_026,مریض شماره بیست و شش,مریض شماره بیست و شش,WAV/numbers/number_026.wav,MP3/numbers/number_026.mp3,1.55
+number_027,مریض شماره بیست و هفت,مریض شماره بیست و هفت,WAV/numbers/number_027.wav,MP3/numbers/number_027.mp3,1.47
+number_028,مریض شماره بیست و هشت,مریض شماره بیست و هشت,WAV/numbers/number_028.wav,MP3/numbers/number_028.mp3,1.41
+number_029,مریض شماره بیست و نه,مریض شماره بیست و نه,WAV/numbers/number_029.wav,MP3/numbers/number_029.mp3,1.39
+number_030,مریض شماره سی,مریض شماره سی,WAV/numbers/number_030.wav,MP3/numbers/number_030.mp3,1.11
+number_031,مریض شماره سی و یک,مریض شماره سی و یک,WAV/numbers/number_031.wav,MP3/numbers/number_031.mp3,1.35
+number_032,مریض شماره سی و دو,مریض شماره سی و دو,WAV/numbers/number_032.wav,MP3/numbers/number_032.mp3,1.25
+number_033,مریض شماره سی و سه,مریض شماره سی و سه,WAV/numbers/number_033.wav,MP3/numbers/number_033.mp3,1.33
+number_034,مریض شماره سی و چهار,مریض شماره سی و چهار,WAV/numbers/number_034.wav,MP3/numbers/number_034.mp3,1.49
+number_035,مریض شماره سی و پنج,مریض شماره سی و پنج,WAV/numbers/number_035.wav,MP3/numbers/number_035.mp3,1.45
+number_036,مریض شماره سی و شش,مریض شماره سی و شش,WAV/numbers/number_036.wav,MP3/numbers/number_036.mp3,1.45
+number_037,مریض شماره سی و هفت,مریض شماره سی و هفت,WAV/numbers/number_037.wav,MP3/numbers/number_037.mp3,1.349
+number_038,مریض شماره سی و هشت,مریض شماره سی و هشت,WAV/numbers/number_038.wav,MP3/numbers/number_038.mp3,1.411
+number_039,مریض شماره سی و نه,مریض شماره سی و نه,WAV/numbers/number_039.wav,MP3/numbers/number_039.mp3,1.43
+number_040,مریض شماره چهل,مریض شماره چهل,WAV/numbers/number_040.wav,MP3/numbers/number_040.mp3,1.19
+number_041,مریض شماره چهل و یک,مریض شماره چهل و یک,WAV/numbers/number_041.wav,MP3/numbers/number_041.mp3,1.43
+number_042,مریض شماره چهل و دو,مریض شماره چهل و دو,WAV/numbers/number_042.wav,MP3/numbers/number_042.mp3,1.29
+number_043,مریض شماره چهل و سه,مریض شماره چهل و سه,WAV/numbers/number_043.wav,MP3/numbers/number_043.mp3,1.35
+number_044,مریض شماره چهل و چهار,مریض شماره چهل و چهار,WAV/numbers/number_044.wav,MP3/numbers/number_044.mp3,1.41
+number_045,مریض شماره چهل و پنج,مریض شماره چهل و پنج,WAV/numbers/number_045.wav,MP3/numbers/number_045.mp3,1.41
+number_046,مریض شماره چهل و شش,مریض شماره چهل و شش,WAV/numbers/number_046.wav,MP3/numbers/number_046.mp3,1.45
+number_047,مریض شماره چهل و هفت,مریض شماره چهل و هفت,WAV/numbers/number_047.wav,MP3/numbers/number_047.mp3,1.37
+number_048,مریض شماره چهل و هشت,مریض شماره چهل و هشت,WAV/numbers/number_048.wav,MP3/numbers/number_048.mp3,1.39
+number_049,مریض شماره چهل و نه,مریض شماره چهل و نه,WAV/numbers/number_049.wav,MP3/numbers/number_049.mp3,1.35
+number_050,مریض شماره پنجاه,مریض شماره پنجاه,WAV/numbers/number_050.wav,MP3/numbers/number_050.mp3,1.27
+destination_doctor,لطفاً به اتاق داکتر مراجعه کنید.,لطفاً به اتاق دکتر مراجعه کنید.,WAV/destinations/destination_doctor.wav,MP3/destinations/destination_doctor.mp3,2.37
+destination_refraction,لطفاً به بخش رفراکشن مراجعه کنید.,لطفاً به بخش reflection مراجعه کنید.,WAV/destinations/destination_refraction.wav,MP3/destinations/destination_refraction.mp3,2.33
+destination_imaging,لطفاً به بخش عکس‌برداری مراجعه کنید.,لطفاً به بخش عکس‌برداری مراجعه کنید.,WAV/destinations/destination_imaging.wav,MP3/destinations/destination_imaging.mp3,2.55
+destination_pharmacy,لطفاً به بخش دواخانه مراجعه کنید.,لطفاً به بخش داروخانه مراجعه کنید.,WAV/destinations/destination_pharmacy.wav,MP3/destinations/destination_pharmacy.mp3,2.71
+destination_optical,لطفاً به بخش عینک مراجعه کنید.,لطفاً به بخش عینک مراجعه کنید.,WAV/destinations/destination_optical.wav,MP3/destinations/destination_optical.mp3,2.23
+destination_initial_exam,لطفاً به بخش معاینه ابتدایی مراجعه کنید.,لطفاً به بخش معاینه ابتدایی مراجعه کنید.,WAV/destinations/destination_initial_exam.wav,MP3/destinations/destination_initial_exam.mp3,2.95
+destination_reception,لطفاً به بخش پذیرش مراجعه کنید.,لطفاً به بخش پذیرش مراجعه کنید.,WAV/destinations/destination_reception.wav,MP3/destinations/destination_reception.mp3,2.49
+destination_cashier,لطفاً به بخش صندوق مراجعه کنید.,لطفاً به بخش صندوق مراجعه کنید.,WAV/destinations/destination_cashier.wav,MP3/destinations/destination_cashier.mp3,2.51
+destination_surgery,لطفاً به بخش جراحی مراجعه کنید.,لطفاً به بخش جراحی مراجعه کنید.,WAV/destinations/destination_surgery.wav,MP3/destinations/destination_surgery.mp3,2.35
+department_doctor,اتاق داکتر,اتاق دکتر,WAV/departments/department_doctor.wav,MP3/departments/department_doctor.mp3,0.95
+department_refraction,بخش رفراکشن,بخش reflection,WAV/departments/department_refraction.wav,MP3/departments/department_refraction.mp3,0.99
+department_imaging,بخش عکس‌برداری,بخش عکس‌برداری,WAV/departments/department_imaging.wav,MP3/departments/department_imaging.mp3,1.03
+department_pharmacy,بخش دواخانه,بخش داروخانه,WAV/departments/department_pharmacy.wav,MP3/departments/department_pharmacy.mp3,1.07
+department_optical,بخش عینک,بخش عینک,WAV/departments/department_optical.wav,MP3/departments/department_optical.mp3,0.87
+department_initial_exam,بخش معاینه ابتدایی,بخش معاینه ابتدایی,WAV/departments/department_initial_exam.wav,MP3/departments/department_initial_exam.mp3,1.45
+department_reception,بخش پذیرش,بخش پذیرش,WAV/departments/department_reception.wav,MP3/departments/department_reception.mp3,0.95
+department_cashier,بخش صندوق,بخش صندوق,WAV/departments/department_cashier.wav,MP3/departments/department_cashier.mp3,0.93
+department_surgery,بخش جراحی,بخش جراحی,WAV/departments/department_surgery.wav,MP3/departments/department_surgery.mp3,0.83

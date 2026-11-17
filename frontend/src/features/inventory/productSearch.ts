@@ -25,7 +25,7 @@ export function productSearch(kinds: string[], remember: (rows: ProductOption[])
     const rows = page.items.filter((p) => p.isActive && (!kinds.length || kinds.includes(p.kind)))
     remember(rows)
     return rows.map((p) => {
-      // The drug form and the stock unit are shown apart: «قطره چشمی · موجودی: ۱۲ دانه».
+      // The drug form and the stock unit are shown apart: «قطره چشمی · موجودی: 12 دانه».
       const form = drugFormOf(p)
       const parts = [form ? `نوعیت: ${form}` : null, withStock ? `موجودی: ${quantity(p.onHand)} ${p.unit}` : null, withStock ? money(p.salePrice) : null]
       const hint = parts.filter(Boolean).join(' · ')

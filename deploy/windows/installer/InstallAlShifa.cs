@@ -602,7 +602,7 @@ namespace AlShifa.Setup
             if (outcome.HealthAttention) AddText(page, "بررسی سلامت موردی را گزارش کرد. پیش از شروع کار با مریض، گزارش نصب را به مسئول فنی نشان دهید.", Color.Firebrick);
             foreach (var warning in outcome.Warnings) AddText(page, warning, Color.DarkGoldenrod);
             if (backupOnSameDisk) AddText(page, "هشدار: بکاپ فقط روی همین کمپیوتر است (C:\\AlShifaBackups). اگر دیسک خراب یا لپ‌تاپ دزدیده شود، بکاپ هم از دست می‌رود. پیش از کار با مریض واقعی هارد جداگانه وصل کنید.", Color.Firebrick);
-            if (outcome.VoicePending) AddText(page, "فراخوان صوتی: در انتظار فعال‌سازی. بقیه سیستم کامل کار می‌کند. برای فعال‌سازی، Import-AlShifa-Voice.exe را از فلش اجرا کنید.", Color.DarkGoldenrod);
+            if (outcome.VoicePending) AddText(page, "بستهٔ صوتی کامل تأیید نشد. بقیه سیستم کار می‌کند؛ گزارش نصب را بررسی کنید و بستهٔ کامل همین نسخه را دوباره نصب کنید. برای شروع پخش، در نمایشگر فراخوان صدا را فعال کنید.", Color.DarkGoldenrod);
 
             AddText(page, "رمز بازیابی بکاپ (بدون آن هیچ بکاپی باز نمی‌شود):").Margin = new Padding(0, 10, 0, 4);
             var secret = File.ReadAllText(Path.Combine(Host.Root, @"secrets\backup-password.txt"));

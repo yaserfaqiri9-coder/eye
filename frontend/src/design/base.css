@@ -22,6 +22,12 @@ a {
   row-gap: var(--xr-gap-y) !important;
 }
 
+/* A notice alone in a grid row already has the row gap below it; its own margin would double the space. */
+.d-grid > * > .alert:only-child,
+.d-grid > .alert {
+  margin-bottom: 0;
+}
+
 /* Headings */
 h1, .h1, h2, .h2, h3, .h3, h4, .h4, h5, .h5, h6, .h6 {
   margin: 0;
@@ -49,9 +55,9 @@ h6, .h6 { font-size: 14px; }
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  min-height: 60px;
-  padding: 0 20px;
+  gap: 8px 12px;
+  min-height: 52px;
+  padding: 6px 18px;
   border-bottom: 1px solid var(--xr-border);
 }
 
@@ -59,12 +65,12 @@ h6, .h6 { font-size: 14px; }
   margin: 0;
   color: var(--xr-text);
   font-size: var(--xr-fs-card-title);
-  font-weight: 400;
+  font-weight: 500;
   line-height: 1.5;
 }
 
 .xr-card__body {
-  padding: 20px;
+  padding: 16px 18px;
 }
 
 /* Filters in a card header sit level with the header's buttons. */
@@ -582,7 +588,7 @@ fieldset:disabled .xr-combo__field {
 }
 
 .xr-lines td {
-  padding: 8px 6px;
+  padding: 10px 6px;
   border-bottom: 1px solid var(--xr-row-border);
   vertical-align: top;
 }
@@ -715,7 +721,7 @@ fieldset:disabled .xr-combo__field {
 
 /* Loading and empty messages inside a card. */
 .xr-state {
-  padding: 32px 16px;
+  padding: 20px 16px;
   color: var(--xr-text-muted);
   text-align: center;
 }
@@ -729,22 +735,41 @@ fieldset:disabled .xr-combo__field {
   width: 100%;
   margin: 0;
   color: var(--xr-text);
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .xr-table th {
-  padding: 10px 12px;
+  padding: 10px 14px;
   color: var(--xr-text-soft);
   font-size: 12.5px;
-  font-weight: 500;
+  font-weight: 600;
   white-space: nowrap;
   text-align: start;
 }
 
+/* Rows get room to breathe so lists read clearly, while a long queue still fits a screen. */
 .xr-table td {
-  padding: 12px;
+  padding: 11px 14px;
   border-top: 1px solid var(--xr-row-border);
   vertical-align: middle;
+}
+
+/* A row that opens a record takes the click anywhere on it; its name stays the real link for the keyboard. */
+.xr-table tr.xr-row-link {
+  position: relative;
+  cursor: pointer;
+}
+
+.xr-table tr.xr-row-link .xr-row-link__target::after {
+  content: '' / '';
+  position: absolute;
+  inset: 0;
+}
+
+/* Buttons, menus and copyable values sit above the row's link. */
+.xr-table tr.xr-row-link :is(button, a:not(.xr-row-link__target), select, input, .xr-row-above) {
+  position: relative;
+  z-index: 1;
 }
 
 .xr-table tbody tr {
@@ -801,6 +826,19 @@ fieldset:disabled .xr-combo__field {
   --bs-btn-bg: transparent;
   --bs-btn-color: var(--xr-tone-red-text);
   --bs-btn-border-color: var(--xr-border-table);
+}
+
+/* Cancelling a dialog harms nothing, so it is never red: red is kept for what deletes, voids or refunds. */
+.btn-soft-danger[data-modal-cancel] {
+  --bs-btn-bg: transparent;
+  --bs-btn-color: var(--xr-text);
+  --bs-btn-border-color: var(--xr-border-table);
+  --bs-btn-hover-bg: var(--xr-row-hover);
+  --bs-btn-hover-color: var(--xr-text);
+  --bs-btn-hover-border-color: var(--xr-border-table);
+  --bs-btn-active-bg: var(--xr-row-hover);
+  --bs-btn-active-color: var(--xr-text);
+  --bs-btn-active-border-color: var(--xr-border-table);
 }
 
 /* Who a row is about: the name reads first, the file number sits quietly under it. */
@@ -958,7 +996,83 @@ fieldset:disabled .xr-combo__field {
 
 .xr-tab--active {
   background: var(--xr-primary-light);
-  color: var(--xr-primary);
+  color: var(--xr-tone-primary-text);
+  font-weight: 600;
+}
+
+/* How many rows wait behind a tab. */
+.xr-tab__count {
+  display: inline-block;
+  min-width: 22px;
+  margin-inline-start: 4px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--xr-border);
+  color: var(--xr-text);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.xr-tab--active .xr-tab__count {
+  background: var(--xr-primary);
+  color: #fff;
+}
+
+/* A page's few numbers on one slim line, where a row of large cards would push the work below the screen. */
+.xr-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+
+.xr-figure {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: var(--xr-radius-control);
+  background: var(--xr-surface);
+  box-shadow: var(--xr-shadow-card);
+  color: var(--xr-text-soft);
+  font-size: 13px;
+}
+
+.xr-figure strong {
+  color: var(--xr-text);
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.xr-figure--orange strong { color: var(--xr-tone-orange-text); }
+.xr-figure--red strong { color: var(--xr-tone-red-text); }
+.xr-figure--green strong { color: var(--xr-tone-green-text); }
+
+/* A search box and its filters above a list. */
+.xr-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.xr-toolbar .form-control,
+.xr-toolbar .form-select {
+  width: auto;
+  min-height: 36px;
+  padding-block: 4px;
+}
+
+.xr-toolbar input[type='search'] {
+  flex: 1 1 240px;
+  max-width: 360px;
+}
+
+.xr-toolbar__end {
+  margin-inline-start: auto;
+  color: var(--xr-text-soft);
+  font-size: 12.5px;
 }
 
 /* Eye identity: the same two tones everywhere, so right and left are never confused. */
@@ -1015,6 +1129,9 @@ fieldset:disabled .xr-combo__field {
 .xr-clinical-table .form-control,
 .xr-clinical-table .form-select {
   min-width: 72px;
+  /* A grid of short values: a slimmer cell keeps both eyes and every stage on screen together. */
+  min-height: 36px;
+  padding-block: 4px;
 }
 
 /* A sticky bar keeps the main action in reach on a long clinical page. */
@@ -1126,9 +1243,9 @@ fieldset:disabled .xr-combo__field {
 
 /* Alerts */
 .alert {
-  --bs-alert-padding-x: 16px;
-  --bs-alert-padding-y: 16px;
-  --bs-alert-margin-bottom: 16px;
+  --bs-alert-padding-x: 14px;
+  --bs-alert-padding-y: 10px;
+  --bs-alert-margin-bottom: 12px;
   --bs-alert-border-radius: var(--xr-radius-button);
 }
 

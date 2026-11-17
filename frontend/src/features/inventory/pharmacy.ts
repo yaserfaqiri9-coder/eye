@@ -47,7 +47,7 @@ export interface PharmacyRxItem {
   unit: string | null
   salePrice: number | null
   available: number
-  /** Available, Short, Out or NotStocked. */
+  /** Available, Short, Out, Expired (only stock past its date is on the shelf) or NotStocked. */
   stock: string
 }
 
@@ -106,6 +106,7 @@ export const stockLabels: Record<string, { text: string; tone: string }> = {
   Available: { text: 'موجود', tone: 'green' },
   Short: { text: 'کمتر از نسخه', tone: 'orange' },
   Out: { text: 'ناموجود', tone: 'red' },
+  Expired: { text: 'موجودی تاریخ‌گذشته', tone: 'red' },
   NotStocked: { text: 'در فهرست دواخانه نیست', tone: 'red' },
 }
 

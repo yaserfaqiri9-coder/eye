@@ -16,13 +16,25 @@ public sealed record SaveProductRequest(
     [Range(0, 100000000)] decimal ReorderLevel,
     [Range(0, 100000000)] decimal SalePrice,
     bool IsActive = true,
-    int? Version = null);
+    int? Version = null,
+    [MaxLength(200)] string? GenericName = null,
+    [MaxLength(20)] string? DefaultDose = null);
 
-public sealed record ProductRow(int Id, string Code, string Name, string Kind, string? Category, string Unit, decimal ReorderLevel, decimal SalePrice, bool IsActive, decimal OnHand, int Version);
+public sealed record ProductRow(int Id, string Code, string Name, string Kind, string? Category, string Unit, decimal ReorderLevel, decimal SalePrice, bool IsActive, decimal OnHand, int Version,
+    string? GenericName = null, string? DefaultDose = null);
 
 public sealed record BatchRow(long Id, int ProductId, string ProductName, string LocationCode, string LocationName, string LotNumber, DateOnly? ExpiryDate, decimal Quantity, decimal UnitCost);
 
-public sealed record PurchaseLineInput(int ProductId, [MaxLength(50)] string? LotNumber, DateOnly? ExpiryDate, [Range(0.001, 100000000)] decimal Quantity, [Range(0, 100000000)] decimal UnitCost);
+/// <summary>A line names a listed product by <c>ProductId</c>, or a product typed on the form (<c>NewProduct</c>) that is added to the list with the purchase.</summary>
+public sealed record PurchaseLineInput(int ProductId, [MaxLength(50)] string? LotNumber, DateOnly? ExpiryDate, [Range(0.001, 100000000)] decimal Quantity, [Range(0, 100000000)] decimal UnitCost,
+    NewProductInput? NewProduct = null);
+
+public sealed record NewProductInput(
+    [Required, MaxLength(200)] string Name,
+    ProductKind Kind,
+    [Required, MaxLength(30)] string Unit,
+    [Range(0, 100000000)] decimal SalePrice,
+    [MaxLength(80)] string? Category = null);
 
 public sealed record CreatePurchaseRequest([MaxLength(150)] string? SupplierName, [Required, MaxLength(30)] string LocationCode, [Required, MinLength(1)] PurchaseLineInput[] Items, int? SupplierId = null);
 
@@ -34,7 +46,7 @@ public sealed record TransferStockRequest(long BatchId, [Required, MaxLength(30)
 
 public sealed record LocationSummary(string Code, string Name, int ProductCount, int BatchCount, decimal StockValue, DateTime? LastMovementAt);
 
-public sealed record LocationStockRow(int ProductId, string ProductCode, string ProductName, string Unit, decimal Quantity, decimal Value, DateOnly? NearestExpiry, int BatchCount, string Kind, string? Category);
+public sealed record LocationStockRow(int ProductId, string ProductCode, string ProductName, string Unit, decimal Quantity, decimal Value, DateOnly? NearestExpiry, int BatchCount, string Kind, string? Category, decimal SalePrice = 0);
 
 public sealed record LocationDetail(LocationSummary Location, List<LocationStockRow> Stock);
 
@@ -52,7 +64,8 @@ public sealed record CancelPurchaseRequest([Required, MinLength(3), MaxLength(30
 
 public sealed record CorrectPurchaseRequest(int? SupplierId, [Required, MaxLength(30)] string LocationCode, [Required, MinLength(1)] PurchaseLineInput[] Items, [Required, MinLength(3), MaxLength(300)] string Reason, int Version);
 
-public sealed record SaleLineRow(int ProductId, string ProductName, string Kind, string Unit, decimal SalePrice, decimal OnHand, bool IsActive, decimal Quantity, long? PrescriptionItemId);
+/// <param name="UnitPrice">What this sale charged per unit, which for an optical order may differ from the product's price.</param>
+public sealed record SaleLineRow(int ProductId, string ProductName, string Kind, string Unit, decimal SalePrice, decimal OnHand, bool IsActive, decimal Quantity, long? PrescriptionItemId, decimal UnitPrice = 0);
 
 public sealed record CustomLineRow(string Description, decimal Amount);
 
@@ -107,7 +120,8 @@ public static class InventoryEndpoints
                 // vigamox, Vigamox and VIGAMOX find the same drug whatever the column collation is: both sides are lower-cased.
                 // Stored names are never changed. Wildcards in the text are matched as plain characters.
                 var prefix = q.Trim().ToLowerInvariant().Replace("|", "||").Replace("%", "|%").Replace("_", "|_") + "%";
-                query = query.Where(p => EF.Functions.Like(p.Code.ToLower(), prefix, "|") || EF.Functions.Like(p.Name.ToLower(), prefix, "|"));
+                query = query.Where(p => EF.Functions.Like(p.Code.ToLower(), prefix, "|") || EF.Functions.Like(p.Name.ToLower(), prefix, "|")
+                    || (p.GenericName != null && EF.Functions.Like(p.GenericName.ToLower(), prefix, "|")));
             }
 
             var total = await query.CountAsync(ct);
@@ -183,9 +197,9 @@ public static class InventoryEndpoints
                 ?? throw AppException.NotFound();
             var stock = await db.StockBatches.AsNoTracking()
                 .Where(b => b.Location!.Code == code && b.Quantity > 0)
-                .GroupBy(b => new { b.ProductId, b.Product!.Code, b.Product.Name, b.Product.Unit, b.Product.Kind, b.Product.Category })
+                .GroupBy(b => new { b.ProductId, b.Product!.Code, b.Product.Name, b.Product.Unit, b.Product.Kind, b.Product.Category, b.Product.SalePrice })
                 .OrderBy(g => g.Key.Name)
-                .Select(g => new LocationStockRow(g.Key.ProductId, g.Key.Code, g.Key.Name, g.Key.Unit, g.Sum(b => b.Quantity), g.Sum(b => b.Quantity * b.UnitCost), g.Min(b => b.ExpiryDate), g.Count(), g.Key.Kind.ToString(), g.Key.Category))
+                .Select(g => new LocationStockRow(g.Key.ProductId, g.Key.Code, g.Key.Name, g.Key.Unit, g.Sum(b => b.Quantity), g.Sum(b => b.Quantity * b.UnitCost), g.Min(b => b.ExpiryDate), g.Count(), g.Key.Kind.ToString(), g.Key.Category, g.Key.SalePrice))
                 .ToListAsync(ct);
             return Results.Ok(new LocationDetail(location, stock));
         }).RequirePermission("inventory.view");
@@ -308,12 +322,18 @@ public static class InventoryEndpoints
             return Results.NoContent();
         }).RequireAuthorization();
 
-        inventory.MapGet("/purchases", async (AppDbContext db, int page = 1, int pageSize = 50, CancellationToken ct = default) =>
+        inventory.MapGet("/purchases", async (AppDbContext db, string? location, int page = 1, int pageSize = 50, CancellationToken ct = default) =>
         {
             pageSize = Math.Clamp(pageSize, 1, 100);
             page = Math.Max(page, 1);
-            var total = await db.Purchases.CountAsync(ct);
-            var rows = await ProjectPurchases(db.Purchases.AsNoTracking().OrderByDescending(p => p.Id).Skip((page - 1) * pageSize).Take(pageSize)).ToListAsync(ct);
+            var query = db.Purchases.AsNoTracking();
+            if (!string.IsNullOrWhiteSpace(location))
+            {
+                query = query.Where(p => p.Location!.Code == location);
+            }
+
+            var total = await query.CountAsync(ct);
+            var rows = await ProjectPurchases(query.OrderByDescending(p => p.Id).Skip((page - 1) * pageSize).Take(pageSize)).ToListAsync(ct);
             return Results.Ok(new PagedResult<PurchaseRow>(rows, total, page, pageSize));
         }).RequirePermission("inventory.view");
 
@@ -338,7 +358,7 @@ public static class InventoryEndpoints
 
         // Stock already on the shelf when the system starts: no supplier and nothing owed, so it is booked against the opening balance.
         // A mistaken line is undone from the movement history like any other adjustment.
-        inventory.MapPost("/opening-stock", async (OpeningStockRequest request, AppDbContext db, Idempotency idempotency, StockService stock, LedgerService ledger, AuditService audit, Outbox outbox, CancellationToken ct) =>
+        inventory.MapPost("/opening-stock", async (OpeningStockRequest request, AppDbContext db, Idempotency idempotency, NumberService numbers, StockService stock, LedgerService ledger, AuditService audit, Outbox outbox, CancellationToken ct) =>
             await idempotency.RunAsync(request, async () =>
             {
                 var locationId = await db.StockLocations.Where(l => l.Code == request.LocationCode).Select(l => (int?)l.Id).SingleOrDefaultAsync(ct)
@@ -347,7 +367,7 @@ public static class InventoryEndpoints
                 var reason = note is null ? "موجودی اول دوره" : $"موجودی اول دوره؛ {note}";
                 var total = 0m;
 
-                foreach (var line in request.Items.OrderBy(l => l.ProductId))
+                foreach (var line in (await ResolveNewProductsAsync(request.Items, db, numbers, audit, ct)).OrderBy(l => l.ProductId))
                 {
                     if (!await db.Products.AnyAsync(p => p.Id == line.ProductId, ct))
                     {
@@ -492,7 +512,7 @@ public static class InventoryEndpoints
         pharmacy.MapPost("/sales/{id:long}/return", async (long id, ReturnSaleRequest request, AppDbContext db, SaleService sales, CancellationToken ct) =>
         {
             await using var tx = await db.Database.BeginTransactionAsync(ct);
-            await sales.ReturnAsync(id, request.Version, request.Reason.Trim(), ct);
+            await sales.ReturnAsync(id, request.Version, request.Reason.Trim(), ct, refundPaidPharmacy: true);
             await tx.CommitAsync(ct);
             return Results.NoContent();
         }).RequirePermission("pharmacy.cancel");
@@ -547,7 +567,7 @@ public static class InventoryEndpoints
                 var sale = await sales.CreateAsync(SaleKind.Optical, request.PatientId, null, request.Items ?? [], request.CustomLines ?? [], ct);
                 var order = new OpticalOrder
                 {
-                    OrderNumber = $"OO-{await numbers.NextAsync("optical-order", ct: ct):D6}",
+                    OrderNumber = await numbers.NextNumberAsync("optical-order", ct),
                     PatientId = request.PatientId,
                     OpticalPrescriptionId = request.OpticalPrescriptionId,
                     Description = Text.Clean(request.Description),
@@ -621,7 +641,7 @@ public static class InventoryEndpoints
             var sale = await sales.CreateAsync(SaleKind.Optical, order.PatientId, null, request.Items ?? [], request.CustomLines ?? [], ct);
             var replacement = new OpticalOrder
             {
-                OrderNumber = $"OO-{await numbers.NextAsync("optical-order", ct: ct):D6}",
+                OrderNumber = await numbers.NextNumberAsync("optical-order", ct),
                 PatientId = order.PatientId,
                 OpticalPrescriptionId = order.OpticalPrescriptionId,
                 Description = Text.Clean(request.Description),
@@ -657,7 +677,7 @@ public static class InventoryEndpoints
 
         var purchase = new Purchase
         {
-            PurchaseNumber = $"PU-{await numbers.NextAsync("purchase", ct: ct):D6}",
+            PurchaseNumber = await numbers.NextNumberAsync("purchase", ct),
             SupplierName = supplierName,
             SupplierId = request.SupplierId,
             LocationId = locationId,
@@ -666,7 +686,7 @@ public static class InventoryEndpoints
         db.Purchases.Add(purchase);
         await db.SaveChangesAsync(ct);
 
-        foreach (var line in request.Items.OrderBy(l => l.ProductId))
+        foreach (var line in (await ResolveNewProductsAsync(request.Items, db, numbers, audit, ct)).OrderBy(l => l.ProductId))
         {
             if (!await db.Products.AnyAsync(p => p.Id == line.ProductId, ct))
             {
@@ -730,10 +750,10 @@ public static class InventoryEndpoints
 
         // One line may have been taken from several batches; the form wants it back as one.
         var parts = await db.Set<SaleItem>().AsNoTracking().Where(i => i.SaleId == id)
-            .Select(i => new { i.ProductId, i.PrescriptionItemId, i.Quantity, i.Product!.Name, Kind = i.Product.Kind, i.Product.Unit, i.Product.SalePrice, i.Product.IsActive, OnHand = db.StockBatches.Where(b => b.ProductId == i.ProductId).Sum(b => (decimal?)b.Quantity) ?? 0 })
+            .Select(i => new { i.ProductId, i.PrescriptionItemId, i.Quantity, i.UnitPrice, i.Product!.Name, Kind = i.Product.Kind, i.Product.Unit, i.Product.SalePrice, i.Product.IsActive, OnHand = db.StockBatches.Where(b => b.ProductId == i.ProductId).Sum(b => (decimal?)b.Quantity) ?? 0 })
             .ToListAsync(ct);
         var items = parts.GroupBy(p => new { p.ProductId, p.PrescriptionItemId })
-            .Select(g => new SaleLineRow(g.Key.ProductId, g.First().Name, g.First().Kind.ToString(), g.First().Unit, g.First().SalePrice, g.First().OnHand, g.First().IsActive, g.Sum(p => p.Quantity), g.Key.PrescriptionItemId))
+            .Select(g => new SaleLineRow(g.Key.ProductId, g.First().Name, g.First().Kind.ToString(), g.First().Unit, g.First().SalePrice, g.First().OnHand, g.First().IsActive, g.Sum(p => p.Quantity), g.Key.PrescriptionItemId, g.First().UnitPrice))
             .ToList();
         var custom = await db.InvoiceItems.AsNoTracking().Where(i => i.InvoiceId == sale.InvoiceId && !i.IsVoid && i.SourceType == null)
             .OrderBy(i => i.Id).Select(i => new CustomLineRow(i.Description, i.LineTotal)).ToListAsync(ct);
@@ -766,11 +786,55 @@ public static class InventoryEndpoints
     public static Task<string> NextProductCodeAsync(AppDbContext db, NumberService numbers, CancellationToken ct) =>
         ShortCodes.NextAsync(numbers, "product", code => db.Products.AnyAsync(p => p.Code == code, ct), ct);
 
+    /// <summary>
+    /// Adds the products typed on a purchase form, inside the purchase's own transaction, so a failed purchase leaves no stray product.
+    /// A name already in the list (active, same kind) or typed twice on one form is the same product and is never added twice.
+    /// </summary>
+    private static async Task<PurchaseLineInput[]> ResolveNewProductsAsync(PurchaseLineInput[] items, AppDbContext db, NumberService numbers, AuditService audit, CancellationToken ct)
+    {
+        var known = new Dictionary<(string Name, ProductKind Kind), int>();
+        var resolved = new PurchaseLineInput[items.Length];
+        for (var i = 0; i < items.Length; i++)
+        {
+            var line = items[i];
+            if (line.NewProduct is not { } fresh)
+            {
+                resolved[i] = line;
+                continue;
+            }
+
+            var name = Text.Clean(fresh.Name) ?? throw new AppException(StatusCodes.Status400BadRequest, "product_name_required", "نام جنس جدید را بنویسید.");
+            var unit = Text.Clean(fresh.Unit) ?? throw new AppException(StatusCodes.Status400BadRequest, "product_unit_required", "واحد جنس جدید را بنویسید.");
+            var keyName = (name.ToLowerInvariant(), fresh.Kind);
+            if (!known.TryGetValue(keyName, out var id))
+            {
+                id = await db.Products.Where(p => p.IsActive && p.Kind == fresh.Kind && p.Name == name).OrderBy(p => p.Id).Select(p => p.Id).FirstOrDefaultAsync(ct);
+                if (id == 0)
+                {
+                    var product = new Product { Code = await NextProductCodeAsync(db, numbers, ct) };
+                    Apply(product, new SaveProductRequest(name, fresh.Kind, fresh.Category, unit, 0, fresh.SalePrice));
+                    db.Products.Add(product);
+                    await db.SaveChangesAsync(ct);
+                    audit.Add("ProductCreated", nameof(Product), product.Id.ToString(), "از فرم خرید");
+                    id = product.Id;
+                }
+
+                known[keyName] = id;
+            }
+
+            resolved[i] = line with { ProductId = id, NewProduct = null };
+        }
+
+        return resolved;
+    }
+
     private static void Apply(Product p, SaveProductRequest r)
     {
         p.Name = r.Name.Trim();
         p.Kind = r.Kind;
         p.Category = Text.Clean(r.Category);
+        p.GenericName = Text.Clean(r.GenericName);
+        p.DefaultDose = Text.Clean(r.DefaultDose);
         p.Unit = r.Unit.Trim();
         p.ReorderLevel = r.ReorderLevel;
         p.SalePrice = r.SalePrice;
@@ -779,7 +843,7 @@ public static class InventoryEndpoints
 
     private static IQueryable<ProductRow> ProjectProducts(AppDbContext db, IQueryable<Product> products) => products.Select(p => new ProductRow(
         p.Id, p.Code, p.Name, p.Kind.ToString(), p.Category, p.Unit, p.ReorderLevel, p.SalePrice, p.IsActive,
-        db.StockBatches.Where(b => b.ProductId == p.Id).Sum(b => (decimal?)b.Quantity) ?? 0, p.Version));
+        db.StockBatches.Where(b => b.ProductId == p.Id).Sum(b => (decimal?)b.Quantity) ?? 0, p.Version, p.GenericName, p.DefaultDose));
 
     private static IQueryable<LocationSummary> ProjectLocations(AppDbContext db, IQueryable<StockLocation> locations) => locations.Select(l => new LocationSummary(
         l.Code,
@@ -794,7 +858,7 @@ public static class InventoryEndpoints
 
     private static IQueryable<SaleRow> ProjectSales(IQueryable<Sale> sales) => sales.Select(s => new SaleRow(
         s.Id, s.SaleNumber, s.Kind.ToString(), s.PatientId, s.Patient != null ? (s.Patient.FirstName + " " + (s.Patient.LastName ?? "")).Trim() : null, s.PrescriptionId,
-        s.InvoiceId, s.Invoice!.InvoiceNumber, s.Invoice.Total, s.Invoice.Total - s.Invoice.Discount - s.Invoice.Paid, s.Invoice.Status.ToString(), s.IsReturned, s.CreatedAt, s.Version, s.DeliveredAt));
+        s.InvoiceId, s.Invoice!.InvoiceNumber, s.Invoice.Total, s.Invoice.Status == InvoiceStatus.Void ? 0 : s.Invoice.Total - s.Invoice.Discount - s.Invoice.Paid, s.Invoice.Status.ToString(), s.IsReturned, s.CreatedAt, s.Version, s.DeliveredAt));
 
     private sealed record OrderProjection(long Id, string OrderNumber, long? PatientId, string? PatientName, long? OpticalPrescriptionId, string? Description, OpticalOrderStatus Status, long InvoiceId, string InvoiceNumber, decimal Total, decimal Balance, DateTime? DeliveredAt, DateTime CreatedAt, int Version);
 

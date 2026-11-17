@@ -18,7 +18,8 @@
   --xr-page-bg: #eff7f8;
   --xr-surface: #ffffff;
   --xr-text: #3f414d;
-  --xr-text-muted: #a09e9e;
+  /* Secondary text must still be readable by older staff: 4.6 to 1 on white. */
+  --xr-text-muted: #6b7278;
   --xr-text-table: #000000;
   --xr-border: #eeeeee;
   --xr-border-table: #dee2e6;
@@ -74,11 +75,20 @@
   --xr-sidebar-width: 260px;
   --xr-sidebar-mini: 80px;
   --xr-sidebar-child: #777d74;
-  --xr-header-height: 75px;
-  --xr-gap-x: 24px;
-  --xr-gap-y: 30px;
+  --xr-header-height: 60px;
+  /* The floating header's gap from the top edge, and where a sticky bar inside a page must stop to stay clear of it. */
+  --xr-header-top: 10px;
+  --xr-main-pad-top: calc(var(--xr-header-top) + var(--xr-header-height) + 16px);
+  /* Side margin of the page body and floating header: wider on big screens so tables do not stretch edge to edge. */
+  --xr-page-gutter: clamp(22px, 4.5vw, 96px);
+  /* How far below the window's top edge a sticky bar stops, and the same place as a `top` value: the browser measures `top` from inside the page's padding. */
+  --xr-sticky-clear: calc(var(--xr-header-height) + 8px);
+  --xr-sticky-top: calc(var(--xr-sticky-clear) - var(--xr-main-pad-top));
+  /* Work screens are dense: less air between cards means less scrolling for the same content. */
+  --xr-gap-x: 20px;
+  --xr-gap-y: 20px;
   --xr-gap: var(--xr-gap-y) var(--xr-gap-x);
-  --xr-radius-card: 25px;
+  --xr-radius-card: 18px;
   --xr-radius-tile: 16px;
   --xr-radius-link: 15px;
   --xr-radius-control: 10px;
@@ -93,14 +103,16 @@
   /* Poppins draws Latin letters and digits as in the template; Dari text falls through to Vazirmatn. */
   --xr-font: 'Poppins', 'Vazirmatn', system-ui, sans-serif;
   --xr-fs-body: 14px;
+  /* Paper and the login keep the template's line height; the working screens set a denser one on the app layout. */
   --xr-lh-body: 1.8;
-  --xr-fs-card-title: 19.6px;
-  --xr-fs-stat: 32.2px;
+  --xr-lh-app: 1.65;
+  --xr-fs-card-title: 17px;
+  --xr-fs-stat: 24px;
 
   --bs-primary: var(--xr-primary);
   --bs-primary-rgb: 8, 155, 171;
   --bs-body-bg: var(--xr-page-bg);
-  --bs-body-color: var(--xr-text-muted);
+  --bs-body-color: var(--xr-text);
   --bs-body-font-family: var(--xr-font);
   --bs-body-font-size: var(--xr-fs-body);
   --bs-body-line-height: var(--xr-lh-body);
@@ -111,4 +123,12 @@
   --bs-link-color-rgb: 8, 155, 171;
   --bs-link-hover-color: var(--xr-primary);
   --bs-link-hover-color-rgb: 8, 155, 171;
+}
+
+/* On a phone the header scrolls away with the page, so nothing has to stay clear of it. */
+@media (max-width: 991.98px) {
+  :root {
+    --xr-main-pad-top: 12px;
+    --xr-sticky-clear: 8px;
+  }
 }

@@ -1,25 +1,27 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { api, errorMessage } from '@/api/http'
+import { usePagedList } from '@/api/paged'
 import { useLiveRefresh } from '@/api/realtime'
 import UiCard from '@/components/UiCard.vue'
+import UiPager from '@/components/UiPager.vue'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/date'
 import SurgeryPackagesPanel from './SurgeryPackagesPanel.vue'
 import { eyeLabels, surgeryStatusLabels, type SurgeryRow } from './types'
 
 const auth = useAuthStore()
-const rows = ref<SurgeryRow[]>([])
 const status = ref('')
+// Read a page at a time, so cases older than the newest hundred stay reachable.
+const list = usePagedList<SurgeryRow>(() => (status.value ? `/surgeries?status=${status.value}` : '/surgeries'))
+const rows = list.rows
 const loading = ref(true)
 const error = ref('')
 const tab = ref<'cases' | 'packages'>('cases')
 
 async function load() {
   try {
-    const params = new URLSearchParams({ pageSize: '100' })
-    if (status.value) params.set('status', status.value)
-    rows.value = (await api<{ items: SurgeryRow[] }>(`/surgeries?${params}`)).items
+    await list.load()
     error.value = ''
   } catch (cause) {
     error.value = errorMessage(cause)
@@ -28,8 +30,13 @@ async function load() {
   }
 }
 
-async function changeStatus(row: SurgeryRow, next: string) {
+async function changeStatus(row: SurgeryRow, next: string, select: HTMLSelectElement) {
   error.value = ''
+  // One slip of the pointer on a list must not move a case: the step is named and confirmed first.
+  if (!window.confirm(`پرونده ${row.caseNumber} به «${surgeryStatusLabels[next]}» تغییر کند؟`)) {
+    select.value = ''
+    return
+  }
   try {
     await api(`/surgeries/${row.id}/status`, { method: 'POST', body: { status: next, version: row.version } })
   } catch (cause) {
@@ -44,7 +51,15 @@ function canMove(next: string) {
 
 useLiveRefresh(['SurgeryScheduled'], load)
 onMounted(load)
-watch(status, load)
+watch(status, () => {
+  list.page.value = 1
+  return load()
+})
+
+function goTo(page: number) {
+  list.page.value = page
+  return load()
+}
 </script>
 
 <template>
@@ -84,7 +99,7 @@ watch(status, load)
                   v-if="row.nextStatuses.some(canMove)"
                   class="form-select form-select-sm"
                   :aria-label="`تغییر وضعیت ${row.caseNumber}`"
-                  @change="changeStatus(row, ($event.target as HTMLSelectElement).value)"
+                  @change="changeStatus(row, ($event.target as HTMLSelectElement).value, $event.target as HTMLSelectElement)"
                 >
                   <option value="" selected disabled>تغییر وضعیت</option>
                   <option v-for="next in row.nextStatuses.filter(canMove)" :key="next" :value="next">{{ surgeryStatusLabels[next] }}</option>
@@ -95,6 +110,7 @@ watch(status, load)
         </tbody>
       </table>
     </div>
+    <UiPager :page="list.page.value" :page-count="list.pageCount.value" @go="goTo" />
     </template>
   </UiCard>
 

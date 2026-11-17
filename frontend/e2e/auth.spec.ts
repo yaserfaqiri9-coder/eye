@@ -28,6 +28,8 @@ test('admin creates a receptionist who sees no user management, then is deactiva
   await login(page, adminUser, adminPassword)
   await expect(page.getByRole('img', { name: 'تصویر خوش‌آمدگویی' })).toBeVisible()
 
+  // Users sits in the system-management submenu, which opens first.
+  await page.getByRole('button', { name: 'مدیریت سیستم', exact: true }).click()
   await page.getByRole('link', { name: 'کاربران' }).click()
   await expect(page).toHaveURL(/\/users$/)
 

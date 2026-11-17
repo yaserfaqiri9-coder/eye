@@ -61,7 +61,8 @@ test('receptionist registers a patient, duplicate is caught, visit reaches the q
   await reception.getByRole('link', { name: 'مریض جدید' }).click()
   await fillPatient()
   await expect(reception).toHaveURL(/\/patients\/\d+$/)
-  await expect(reception.getByText('P-', { exact: false }).first()).toBeVisible()
+  // A file number is plain digits, no letters.
+  await expect(reception.locator('dd.ltr-num').first()).toHaveText(/^\d+$/)
 
   // Same person again: the system warns before creating a second record.
   await reception.goto('/patients')
@@ -88,7 +89,7 @@ test('receptionist registers a patient, duplicate is caught, visit reaches the q
   await reception.getByLabel('علت مراجعه').fill('تاری دید')
   await reception.getByRole('button', { name: 'ثبت مراجعه' }).click()
 
-  // Registered but unpaid: no number anywhere yet, and the visit waits in the desk's open payments.
+  // The number is reserved and printable now; the unpaid visit still waits for the cashier.
   await expect(reception.getByRole('tab', { name: /منتظر صندوق/ })).toHaveAttribute('aria-selected', 'true')
   const owing = reception.getByRole('row', { name: new RegExp(`${firstName}.*در صندوق بپردازد`) })
   await expect(owing).toBeVisible()

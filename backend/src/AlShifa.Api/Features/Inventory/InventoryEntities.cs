@@ -28,6 +28,14 @@ public class Product
     [MaxLength(80)]
     public string? Category { get; set; }
 
+    /// <summary>The active ingredients, as the old prescriptions wrote them in brackets: "Tobramycin + Dexamethasone".</summary>
+    [MaxLength(200)]
+    public string? GenericName { get; set; }
+
+    /// <summary>The dose a doctor usually writes for this drug ("1x3"), offered when it is added to a prescription.</summary>
+    [MaxLength(20)]
+    public string? DefaultDose { get; set; }
+
     [MaxLength(30)]
     public string Unit { get; set; } = "";
 

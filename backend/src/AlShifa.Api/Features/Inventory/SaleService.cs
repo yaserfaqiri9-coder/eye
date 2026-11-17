@@ -5,7 +5,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AlShifa.Api.Features.Inventory;
 
-public sealed record SaleLineInput(int ProductId, decimal Quantity, long? PrescriptionItemId = null);
+/// <param name="UnitPrice">Optical only: the price agreed with the customer, since frames and lenses have no fixed price. Empty uses the product's price.</param>
+public sealed record SaleLineInput(int ProductId, decimal Quantity, long? PrescriptionItemId = null, decimal? UnitPrice = null);
 
 public sealed record CustomLineInput(string Description, decimal Amount);
 
@@ -151,14 +152,29 @@ public sealed class SaleService(AppDbContext db, NumberService numbers, StockSer
             }
 
             EnsureDispensable(prescription);
-            billed = await PendingByItemAsync(rxId, null, ct);
             visitId = prescription.VisitId;
         }
 
+        // Every path that touches a bill locks in one order: prescription, batches, then bills. The batches are locked here, before this
+        // bill's row exists; a delivery holding a batch would otherwise wait on this new bill while this bill waits on its batch.
+        var productIds = lines.Select(l => l.ProductId).Distinct().OrderBy(id => id).ToList();
+        if (productIds.Count > 0)
+        {
+            await db.StockBatches.FromSqlRaw(
+                $"SELECT * FROM StockBatches WHERE LocationId = {{0}} AND ProductId IN ({string.Join(',', productIds)}) ORDER BY Id FOR UPDATE", locationId).ToListAsync(ct);
+        }
+
+        // The invoice number is taken before the locking read of open bills. Two sales for two new prescriptions otherwise both hold
+        // the same gap lock on Sales, then each waits for the other (one for the number, one to insert): a deadlock and a "busy" error.
+        // Waiting on the number first makes the second sale queue up holding nothing it would need from the first.
         var invoice = await invoices.CreateAsync(patientId, visitId, ct);
+        if (prescriptionId is { } heldRxId)
+        {
+            billed = await PendingByItemAsync(heldRxId, null, ct);
+        }
         var sale = new Sale
         {
-            SaleNumber = $"SL-{await numbers.NextAsync("sale", ct: ct):D7}",
+            SaleNumber = await numbers.NextNumberAsync("sale", ct),
             Kind = kind,
             PatientId = patientId,
             PrescriptionId = prescriptionId,
@@ -199,12 +215,23 @@ public sealed class SaleService(AppDbContext db, NumberService numbers, StockSer
                 billed[itemId] = billed.GetValueOrDefault(itemId) + line.Quantity;
             }
 
+            var unitPrice = product.SalePrice;
+            if (kind == SaleKind.Optical && line.UnitPrice is { } agreed)
+            {
+                if (agreed < 0 || agreed > 100000000)
+                {
+                    throw new AppException(StatusCodes.Status400BadRequest, "invalid_amount", "قیمت فروش معتبر نیست.");
+                }
+
+                unitPrice = decimal.Round(agreed, 2, MidpointRounding.AwayFromZero);
+            }
+
             var parts = kind == SaleKind.Pharmacy
                 ? await stock.ReserveAsync(product.Id, locationId, line.Quantity, ct)
                 : await stock.TakeAsync(product.Id, locationId, line.Quantity, nameof(Sale), sale.Id, MovementKind.Sale, null, ct);
             foreach (var (batch, part) in parts)
             {
-                sale.Items.Add(new SaleItem { ProductId = product.Id, BatchId = batch.Id, PrescriptionItemId = line.PrescriptionItemId, Quantity = part, UnitPrice = product.SalePrice, UnitCost = batch.UnitCost });
+                sale.Items.Add(new SaleItem { ProductId = product.Id, BatchId = batch.Id, PrescriptionItemId = line.PrescriptionItemId, Quantity = part, UnitPrice = unitPrice, UnitCost = batch.UnitCost });
             }
 
             await db.SaveChangesAsync(ct);
@@ -250,6 +277,16 @@ public sealed class SaleService(AppDbContext db, NumberService numbers, StockSer
     /// </summary>
     public async Task DeliverAsync(long saleId, int version, string? unpaidReason, CancellationToken ct)
     {
+        // Locks are taken in the order a new bill takes them: prescription, then batches, then the bill. A new bill holds its batches
+        // and then reads the other open bills; if delivery locked its bill first and its batches second, the two would wait on each other.
+        // A bill's prescription and batches never change after it is made, so they can be read before the bill is locked.
+        var head = await db.Sales.AsNoTracking().Where(s => s.Id == saleId).Select(s => new { s.PrescriptionId }).SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
+        MedicalPrescription? prescription = head.PrescriptionId is { } rxId ? await LockPrescriptionAsync(rxId, ct) : null;
+        foreach (var batchId in await db.Set<SaleItem>().Where(i => i.SaleId == saleId).Select(i => i.BatchId).Distinct().OrderBy(id => id).ToListAsync(ct))
+        {
+            await db.StockBatches.FromSqlInterpolated($"SELECT * FROM StockBatches WHERE Id = {batchId} FOR UPDATE").ToListAsync(ct);
+        }
+
         var sale = (await db.Sales.FromSqlInterpolated($"SELECT * FROM Sales WHERE Id = {saleId} FOR UPDATE").ToListAsync(ct)).SingleOrDefault() ?? throw AppException.NotFound();
         db.Entry(sale).Property(s => s.Version).OriginalValue = version;
         if (sale.Kind != SaleKind.Pharmacy)
@@ -268,14 +305,9 @@ public sealed class SaleService(AppDbContext db, NumberService numbers, StockSer
             throw new AppException(StatusCodes.Status409Conflict, "payment_required", "این بل هنوز در صندوق پرداخت نشده است.");
         }
 
-        MedicalPrescription? prescription = null;
-        if (sale.PrescriptionId is { } rxId)
+        if (prescription?.Status == PrescriptionStatus.Cancelled)
         {
-            prescription = await LockPrescriptionAsync(rxId, ct);
-            if (prescription.Status == PrescriptionStatus.Cancelled)
-            {
-                throw new AppException(StatusCodes.Status409Conflict, "prescription_closed", "داکتر این نسخه را لغو کرده است. بل را لغو یا وجه را برگشت کنید.");
-            }
+            throw new AppException(StatusCodes.Status409Conflict, "prescription_closed", "داکتر این نسخه را لغو کرده است. بل را لغو یا وجه را برگشت کنید.");
         }
 
         var items = await db.Set<SaleItem>().Where(i => i.SaleId == saleId).OrderBy(i => i.BatchId).ToListAsync(ct);
@@ -326,10 +358,22 @@ public sealed class SaleService(AppDbContext db, NumberService numbers, StockSer
         await db.SaveChangesAsync(ct);
     }
 
-    /// <summary>Whole-sale return of a sale that was never paid. Returning goods after a payment awaits a finance decision (FINANCE-DECISIONS.md).</summary>
-    public async Task ReturnAsync(long saleId, int version, string reason, CancellationToken ct)
+    /// <summary>Whole-sale return. The pharmacy return endpoint also refunds all money still held, in the same transaction.</summary>
+    public async Task ReturnAsync(long saleId, int version, string reason, CancellationToken ct, bool refundPaidPharmacy = false)
     {
-        var sale = await db.Sales.Include(s => s.Items).SingleOrDefaultAsync(s => s.Id == saleId, ct) ?? throw AppException.NotFound();
+        // Use the delivery lock order so a concurrent delivery cannot move stock after it was returned.
+        var head = await db.Sales.AsNoTracking().Where(s => s.Id == saleId).Select(s => new { s.PrescriptionId }).SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
+        if (head.PrescriptionId is { } prescriptionId)
+        {
+            await LockPrescriptionAsync(prescriptionId, ct);
+        }
+        foreach (var batchId in await db.Set<SaleItem>().Where(i => i.SaleId == saleId).Select(i => i.BatchId).Distinct().OrderBy(id => id).ToListAsync(ct))
+        {
+            await db.StockBatches.FromSqlInterpolated($"SELECT * FROM StockBatches WHERE Id = {batchId} FOR UPDATE").ToListAsync(ct);
+        }
+        var sale = await db.Sales.FromSqlInterpolated($"SELECT * FROM Sales WHERE Id = {saleId} FOR UPDATE").SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
+        await db.Entry(sale).Collection(s => s.Items).LoadAsync(ct);
+        if (refundPaidPharmacy && sale.Kind != SaleKind.Pharmacy) throw AppException.NotFound();
         db.Entry(sale).Property(s => s.Version).OriginalValue = version;
         if (sale.IsReturned)
         {
@@ -337,9 +381,44 @@ public sealed class SaleService(AppDbContext db, NumberService numbers, StockSer
         }
 
         var invoice = await invoices.LockAsync(sale.InvoiceId, ct);
-        if (invoice.Paid > 0)
+        if (invoice.Paid > 0 && !refundPaidPharmacy)
         {
             throw new AppException(StatusCodes.Status409Conflict, "sale_is_paid", "این فروش پرداخت شده است و از اینجا برگشت نمی‌شود. به حسابداری مراجعه کنید.");
+        }
+
+        if (refundPaidPharmacy)
+        {
+            var payments = await db.Payments.FromSqlInterpolated($"SELECT * FROM Payments WHERE InvoiceId = {invoice.Id} ORDER BY Id FOR UPDATE").ToListAsync(ct);
+            foreach (var payment in payments.Where(p => p.Amount > p.Refunded))
+            {
+                var refund = new Refund
+                {
+                    RefundNumber = await numbers.NextNumberAsync("refund", ct),
+                    PaymentId = payment.Id,
+                    Amount = payment.Amount - payment.Refunded,
+                    Reason = reason,
+                    ApprovedByUserId = user.Id,
+                };
+                db.Refunds.Add(refund);
+                payment.Refunded += refund.Amount;
+                invoice.Refunded += refund.Amount;
+                await db.SaveChangesAsync(ct);
+                ledger.Post("Refund", "Refund", refund.Id, reason,
+                    (Accounts.Refunds, refund.Amount, 0), (Accounts.Cash, 0, refund.Amount));
+                audit.Add("RefundApproved", "Refund", refund.Id.ToString(), reason);
+            }
+            // The charges are reversed below. Move both earlier and new refunds to receivables
+            // so the same return does not reduce revenue twice or leave a credit balance.
+            if (invoice.Refunded > 0)
+            {
+                ledger.Post("SaleReturnRefund", nameof(Sale), sale.Id, reason,
+                    (Accounts.Receivable, invoice.Refunded, 0), (Accounts.Refunds, 0, invoice.Refunded));
+            }
+            if (invoice.Discount > 0)
+            {
+                ledger.Post("SaleReturnDiscount", nameof(Sale), sale.Id, reason,
+                    (Accounts.Receivable, invoice.Discount, 0), (Accounts.Discounts, 0, invoice.Discount));
+            }
         }
 
         // An undelivered bill moved no stock and dispensed nothing: cancelling it only frees its reservation.
@@ -373,11 +452,12 @@ public sealed class SaleService(AppDbContext db, NumberService numbers, StockSer
         foreach (var line in lines)
         {
             line.IsVoid = true;
-            invoice.Total -= line.LineTotal;
+            // Keep the original amounts on paid or discounted invoices for the receipt history.
+            if (invoice.Paid == 0 && invoice.Discount == 0) invoice.Total -= line.LineTotal;
             await ledger.ReverseAsync("Charge", "InvoiceItem", line.Id, ct);
         }
 
-        if (invoice.Discount == 0 && invoice.Paid == 0)
+        if (refundPaidPharmacy || (invoice.Discount == 0 && invoice.Paid == 0))
         {
             invoice.Status = InvoiceStatus.Void;
         }

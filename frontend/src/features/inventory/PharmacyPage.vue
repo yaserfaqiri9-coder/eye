@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { api, errorMessage } from '@/api/http'
+import { usePagedList } from '@/api/paged'
 import { useLiveRefresh } from '@/api/realtime'
 import UiCard from '@/components/UiCard.vue'
 import UiModal from '@/components/UiModal.vue'
+import UiPager from '@/components/UiPager.vue'
 import UiListSkeleton from '@/components/UiListSkeleton.vue'
 import CallControls from '@/features/calls/CallControls.vue'
 import CallNotice from '@/features/calls/CallNotice.vue'
@@ -46,7 +49,8 @@ async function search() {
   const term = q.value.trim()
   searchController?.abort()
   chosen.value = null
-  if (term.length < 2) {
+  // One digit is a whole file number now, so it searches; one letter would find too much.
+  if (term.length < 2 && !/^[0-9۰-۹]$/.test(term)) {
     hits.value = null
     searching.value = false
     return
@@ -77,17 +81,40 @@ async function choose(id: number, signal?: AbortSignal) {
   }
 }
 
+const router = useRouter()
+const openRx = (id: number) => router.push({ name: 'pharmacy-rx', params: { id } })
+
+/** Enter in the search box: one patient found opens their newest prescription; several open the first patient. */
+async function searchEnter() {
+  // Typed faster than the debounce: search for what is in the box now, never act on the previous term's results.
+  if (pending) {
+    clearTimeout(debounce)
+    pending = false
+    await search()
+  }
+  if (searching.value) return
+  if (chosen.value?.prescriptions.length) await openRx(chosen.value.prescriptions[0].id)
+  else if (hits.value?.length && !chosen.value) await choose(hits.value[0].id)
+}
+
 let debounce: ReturnType<typeof setTimeout> | undefined
+let pending = false
 watch(q, () => {
   clearTimeout(debounce)
-  debounce = setTimeout(search, 350)
+  pending = true
+  debounce = setTimeout(() => {
+    pending = false
+    search()
+  }, 350)
 })
 
 // Work lists.
 type TabKey = 'new' | 'awaitingPayment' | 'readyToDeliver' | 'partial' | 'needsDoctor' | 'sales'
 const tab = ref<TabKey>('new')
 const queues = ref<PharmacyQueues | null>(null)
-const sales = ref<SaleRow[]>([])
+// The sales history is read a page at a time, so older sales stay reachable for a return or a reprint.
+const saleList = usePagedList<SaleRow>(() => '/pharmacy/sales')
+const sales = saleList.rows
 const loading = ref(true)
 
 const tabs = computed(() => [
@@ -106,7 +133,7 @@ async function load() {
   error.value = ''
   try {
     queues.value = await api<PharmacyQueues>('/pharmacy/queues')
-    sales.value = (await api<{ items: SaleRow[] }>('/pharmacy/sales?pageSize=50')).items
+    await saleList.load()
     if (chosen.value) await choose(chosen.value.patient.id)
   } catch (cause) {
     error.value = errorMessage(cause)
@@ -165,8 +192,7 @@ onBeforeUnmount(() => {
       <template #actions>
         <RouterLink v-if="auth.can('pharmacy.create')" :to="{ name: 'pharmacy-sale' }" class="btn btn-soft text-nowrap">فروش مستقل</RouterLink>
       </template>
-      <input v-model="q" type="search" class="form-control form-control-lg" placeholder="نام، نام پدر، شماره تماس، شماره پرونده، نسخه یا مراجعه" aria-label="جستجوی مریض و نسخه" autofocus />
-      <p class="form-hint mb-0 mt-1">اعداد فارسی و انگلیسی هر دو پذیرفته می‌شوند. نسخه‌های قدیمی هم پیدا می‌شوند.</p>
+      <input v-model="q" type="search" class="form-control form-control-lg" placeholder="نام، نام پدر، شماره تماس، شماره پرونده، نسخه یا مراجعه" aria-label="جستجوی مریض و نسخه" autofocus @keydown.enter.prevent="searchEnter" />
 
       <p v-if="searching" class="xr-state" role="status">در حال جستجو...</p>
       <p v-else-if="hits && hits.length === 0" class="xr-state">مریضی پیدا نشد.</p>
@@ -174,7 +200,7 @@ onBeforeUnmount(() => {
         <table class="xr-table">
           <thead><tr><th>مریض</th><th>نام پدر</th><th>شماره پرونده</th><th>شماره تماس</th><th>سن</th><th>نسخه‌ها</th><th>آخرین نسخه</th><th></th></tr></thead>
           <tbody>
-            <tr v-for="p in hits" :key="p.id">
+            <tr v-for="p in hits" :key="p.id" class="row-link" @click="choose(p.id)">
               <td><span class="xr-person__name">{{ p.name }}</span></td>
               <td>{{ p.fatherName ?? '—' }}</td>
               <td><span class="ltr-num">{{ p.fileNumber }}</span></td>
@@ -182,7 +208,7 @@ onBeforeUnmount(() => {
               <td>{{ p.age ?? '—' }}</td>
               <td>{{ p.prescriptionCount }}</td>
               <td>{{ p.lastPrescriptionAt ? formatDate(p.lastPrescriptionAt) : '—' }}</td>
-              <td><button type="button" class="btn btn-soft btn-sm" @click="choose(p.id)">انتخاب</button></td>
+              <td><button type="button" class="btn btn-soft btn-sm" @click.stop="choose(p.id)">انتخاب</button></td>
             </tr>
           </tbody>
         </table>
@@ -202,7 +228,7 @@ onBeforeUnmount(() => {
           <table class="xr-table">
             <thead><tr><th>نسخه</th><th>تاریخ</th><th>داکتر</th><th>وضعیت</th><th></th></tr></thead>
             <tbody>
-              <tr v-for="rx in chosen.prescriptions" :key="rx.id">
+              <tr v-for="rx in chosen.prescriptions" :key="rx.id" class="row-link" @click="openRx(rx.id)">
                 <td><span class="ltr-num">{{ rx.rxNumber }}</span></td>
                 <td>{{ formatDateTime(rx.createdAt) }}</td>
                 <td>{{ rx.doctorName ?? '—' }}</td>
@@ -232,14 +258,14 @@ onBeforeUnmount(() => {
             <table class="xr-table">
               <thead><tr><th>نسخه</th><th>مریض</th><th>نام پدر</th><th>داکتر</th><th>تاریخ</th><th>وضعیت</th><th v-if="tab === 'new'">فراخوان</th><th></th></tr></thead>
               <tbody>
-                <tr v-for="rx in rxRows" :key="rx.id">
+                <tr v-for="rx in rxRows" :key="rx.id" class="row-link" @click="openRx(rx.id)">
                   <td><span class="ltr-num">{{ rx.rxNumber }}</span></td>
                   <td><span class="xr-person__name">{{ rx.patientName }}</span> <span class="ltr-num small">{{ rx.fileNumber }}</span></td>
                   <td>{{ rx.fatherName ?? '—' }}</td>
                   <td>{{ rx.doctorName ?? '—' }}</td>
                   <td>{{ formatDateTime(rx.createdAt) }}</td>
                   <td><span class="xr-badge" :class="`xr-badge--${stageTone[rx.stage] ?? 'primary'}`">{{ rxStageLabels[rx.stage] ?? rx.stage }}</span></td>
-                  <td v-if="tab === 'new'"><CallControls :desk="calls" :visit-id="rx.visitId" /></td>
+                  <td v-if="tab === 'new'" @click.stop><CallControls :desk="calls" :visit-id="rx.visitId" /></td>
                   <td><RouterLink :to="{ name: 'pharmacy-rx', params: { id: rx.id } }" class="btn btn-soft btn-sm">باز کردن</RouterLink></td>
                 </tr>
               </tbody>
@@ -297,6 +323,7 @@ onBeforeUnmount(() => {
               </tbody>
             </table>
           </div>
+          <UiPager :page="saleList.page.value" :page-count="saleList.pageCount.value" @go="saleList.goTo($event).catch((cause) => (error = errorMessage(cause)))" />
         </template>
       </div>
     </section>
@@ -304,14 +331,25 @@ onBeforeUnmount(() => {
 
   <UiModal v-if="returning.row" :title="`${returning.row.deliveredAt ? 'برگشت فروش' : 'لغو بل'} ${returning.row.saleNumber}`" @close="returning.row = null">
     <form @submit.prevent="submitReturn">
-      <p v-if="!returning.row.deliveredAt" class="small">بل پرداخت‌نشده لغو می‌شود و موجودی نگه‌داشته‌شده آزاد می‌شود. نسخه مریض تغییر نمی‌کند.</p>
+      <p class="small">{{ returning.row.deliveredAt ? 'با تأیید، تمام دوای این بل را از مریض تحویل بگیرید؛ دوا به موجودی برمی‌گردد.' : 'بل لغو و موجودی نگه‌داشته‌شده آزاد می‌شود.' }} مبلغی که هنوز از مریض نزد شفاخانه است، هم‌زمان برگشت وجه ثبت می‌شود؛ پول را به مریض پس بدهید. رسید اصلی در سابقه باقی می‌ماند.</p>
       <label class="form-label" for="ret-reason">دلیل</label>
       <input id="ret-reason" v-model="returning.reason" class="form-control mb-3" minlength="3" maxlength="300" required />
       <div v-if="returning.error" class="alert alert-danger" role="alert">{{ returning.error }}</div>
       <div class="xr-form-actions">
-        <button type="submit" class="btn btn-primary" :disabled="returning.saving">ثبت</button>
+        <button type="submit" class="btn btn-danger" :disabled="returning.saving">{{ returning.row.deliveredAt ? 'تأیید برگشت دوا و وجه' : 'تأیید لغو و برگشت وجه' }}</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>
   </UiModal>
 </template>
+
+<style scoped>
+/* A whole row opens what it shows; the buttons in it keep their own job. */
+.row-link {
+  cursor: pointer;
+}
+
+.row-link:hover td {
+  background: color-mix(in srgb, var(--xr-primary) 6%, transparent);
+}
+</style>

@@ -11,6 +11,9 @@ if not exist ".tools\dotnet\dotnet.exe" (
     goto :failed
 )
 
+rem Node comes from .tools when it is not installed on the computer.
+if exist ".tools\node\node.exe" set "PATH=%~dp0.tools\node;%PATH%"
+
 echo [1/4] Database...
 powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\dev-db.ps1"
 if errorlevel 1 (

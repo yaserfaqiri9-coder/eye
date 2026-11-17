@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, errorMessage } from '@/api/http'
-import { faDigits } from '@/utils/date'
+import { useRoute } from 'vue-router'
+import { latinDigits } from '@/utils/date'
 import { shamsiPaper } from './paper'
 
 interface PrintField { label: string; value: string | null }
@@ -30,13 +31,15 @@ type PaperSize = 'receipt-80' | 'receipt-58' | 'a5' | 'a4'
  * proportions, spacing and type scale as the card it copies.
  */
 const PAPER: Record<PaperSize, { width: number; label: string }> = {
-  'receipt-80': { width: 80, label: 'رول حرارتی ۸۰ میلی‌متر' },
-  'receipt-58': { width: 58, label: 'رول حرارتی ۵۸ میلی‌متر' },
+  'receipt-80': { width: 80, label: 'رول حرارتی 80 میلی‌متر' },
+  'receipt-58': { width: 58, label: 'رول حرارتی 58 میلی‌متر' },
   a5: { width: 148, label: 'A5 عمودی' },
   a4: { width: 210, label: 'A4 عمودی' },
 }
 
 const props = defineProps<{ kind: string; id: string }>()
+const route = useRoute()
+let autoPrinted = false
 const doc = ref<PrintDocument | null>(null)
 const error = ref('')
 const loading = ref(false)
@@ -45,12 +48,12 @@ const selectedPaper = ref<PaperSize>('a5')
 
 const filled = (value: string | null | undefined): value is string => value != null && value.trim() !== ''
 /** Amounts, counts and dates read in Dari digits as on the reference; document numbers and names keep their own letters. */
-const show = (value: string) => (/[A-Za-z]/.test(value) ? value : faDigits(value))
+const show = (value: string) => (/[A-Za-z]/.test(value) ? value : latinDigits(value))
 
 const isReceipt = computed(() => doc.value?.format === 'receipt')
 const layout = computed(() => (props.kind === 'rx' ? 'rx' : doc.value?.headers?.length && doc.value.rows?.length ? 'table' : 'card'))
 const hospitalName = computed(() => doc.value?.hospital.hospitalName?.trim() || 'شفاخانه تخصصی چشم الشفا')
-const dateText = computed(() => faDigits(shamsiPaper(doc.value?.date)))
+const dateText = computed(() => latinDigits(shamsiPaper(doc.value?.date)))
 const numberLabel = computed(() => doc.value?.numberLabel ?? 'شماره سند')
 const fields = computed(() => doc.value?.fields.filter((field) => filled(field.value)) ?? [])
 const totals = computed(() => doc.value?.totals?.filter((total) => filled(total.value)) ?? [])
@@ -123,6 +126,11 @@ async function load() {
     if (current === request) error.value = errorMessage(cause)
   } finally {
     if (current === request) loading.value = false
+  }
+  if (current === request && doc.value && route.query.autoPrint === '1' && !autoPrinted) {
+    await nextTick()
+    autoPrinted = true
+    await openPrintDialog()
   }
 }
 

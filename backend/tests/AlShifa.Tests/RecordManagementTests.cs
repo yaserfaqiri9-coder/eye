@@ -411,11 +411,13 @@ public sealed class RecordManagementTests(ApiFixture api)
 
         var detail = (await optical.GetFromJsonAsync<OpticalOrderDetail>($"/api/optical/orders/{order.Id}"))!;
         Assert.Equal(1, detail.Sale.Items.Single().Quantity);
+        Assert.Equal(50, detail.Sale.Items.Single().UnitPrice);
         Assert.Equal(30, detail.Sale.CustomLines.Single().Amount);
 
-        var corrected = await optical.PostAsJsonAsync($"/api/optical/orders/{order.Id}/correct", new CorrectOpticalOrderRequest("فریم دیگر", [new SaleLineInput(frame, 2)], [new CustomLineInput("ساخت عدسی", 40)], "مقدار اشتباه بود", detail.Version));
+        // Frames have no fixed price: the seller types the agreed one.
+        var corrected = await optical.PostAsJsonAsync($"/api/optical/orders/{order.Id}/correct", new CorrectOpticalOrderRequest("فریم دیگر", [new SaleLineInput(frame, 2, null, 75)], [new CustomLineInput("ساخت عدسی", 40)], "مقدار اشتباه بود", detail.Version));
         Assert.Equal(HttpStatusCode.OK, corrected.StatusCode);
-        Assert.Equal(140, (await corrected.Content.ReadFromJsonAsync<OpticalOrderRow>())!.Total);
+        Assert.Equal(190, (await corrected.Content.ReadFromJsonAsync<OpticalOrderRow>())!.Total);
         Assert.Equal(3, await OnHand(frame));
         Assert.Equal(OpticalOrderStatus.Cancelled, (await InDb(db => db.OpticalOrders.SingleAsync(o => o.Id == order.Id))).Status);
         await AssertBooksBalance(accountant);

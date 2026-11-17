@@ -1,4 +1,4 @@
-import { afghanMonths, faDigits, formatDate, formatDateTime, isoToShamsi } from '@/utils/date'
+import { afghanMonths, latinDigits, formatDate, formatDateTime, isoToShamsi } from '@/utils/date'
 import { money, quantity } from '@/utils/money'
 import type { ReportCell, ReportValueKind } from './types'
 
@@ -30,13 +30,13 @@ export function cellText(value: ReportCell, kind: ReportValueKind) {
   return value
 }
 
-/** A period in plain words, such as «۱ حمل تا ۳۱ حمل ۱۴۰۵». A report of the present moment has no dates. */
+/** A period in plain words, such as «1 حمل تا 31 حمل 1405». A report of the present moment has no dates. */
 export function periodWords(from: string | null, to: string | null) {
   if (!from || !to) return 'وضعیت همین حالا'
   const start = isoToShamsi(from)
   const end = isoToShamsi(to)
-  const dayMonth = (date: { day: number; month: number }) => `${faDigits(date.day)} ${afghanMonths[date.month - 1]}`
-  const last = `${dayMonth(end)} ${faDigits(end.year)}`
+  const dayMonth = (date: { day: number; month: number }) => `${latinDigits(date.day)} ${afghanMonths[date.month - 1]}`
+  const last = `${dayMonth(end)} ${latinDigits(end.year)}`
   if (from === to) return last
-  return `${dayMonth(start)}${start.year === end.year ? '' : ` ${faDigits(start.year)}`} تا ${last}`
+  return `${dayMonth(start)}${start.year === end.year ? '' : ` ${latinDigits(start.year)}`} تا ${last}`
 }

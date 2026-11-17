@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, errorMessage } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
-import { faDigits, formatDateTime } from '@/utils/date'
+import { latinDigits, formatDateTime } from '@/utils/date'
 import SyncStatusPanel from './SyncStatusPanel.vue'
 
 interface BackupFile {
@@ -47,14 +47,14 @@ const running = computed(() => !!status.value?.runningSince || waiting.value)
 
 function size(bytes: number | null) {
   if (bytes === null) return '—'
-  if (bytes < 1024 * 1024) return `${faDigits((bytes / 1024).toFixed(0))} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${faDigits((bytes / 1024 / 1024).toFixed(1))} MB`
-  return `${faDigits((bytes / 1024 / 1024 / 1024).toFixed(2))} GB`
+  if (bytes < 1024 * 1024) return `${latinDigits((bytes / 1024).toFixed(0))} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${latinDigits((bytes / 1024 / 1024).toFixed(1))} MB`
+  return `${latinDigits((bytes / 1024 / 1024 / 1024).toFixed(2))} GB`
 }
 
 function duration(seconds: number | null) {
   if (seconds === null) return '—'
-  return seconds < 60 ? `${faDigits(seconds)} ثانیه` : `${faDigits(Math.round(seconds / 60))} دقیقه`
+  return seconds < 60 ? `${latinDigits(seconds)} ثانیه` : `${latinDigits(Math.round(seconds / 60))} دقیقه`
 }
 
 async function load() {
@@ -107,8 +107,8 @@ onBeforeUnmount(() => clearTimeout(timer))
 
   <template v-else-if="status">
     <p class="form-hint">
-      سیستم هر شب ساعت ۲ بامداد (وقت کابل) خودکار از کل دیتابیس، فایل‌های بارگذاری‌شده و کلیدهای ورود پشتیبان فشرده می‌گیرد. فایل پشتیبان رمزگذاری می‌شود و پس از نوشتن روی مقصد باز و بررسی می‌شود.
-      ۷ پشتیبان روزانه، ۴ هفتگی و ۳ ماهانه نگه داشته می‌شوند. اگر سرور آنلاین تنظیم شده باشد، یک نسخه رمزگذاری‌شده هم به آن فرستاده می‌شود.
+      سیستم هر شب ساعت 2 بامداد (وقت کابل) خودکار از کل دیتابیس، فایل‌های بارگذاری‌شده و کلیدهای ورود پشتیبان فشرده می‌گیرد. فایل پشتیبان رمزگذاری می‌شود و پس از نوشتن روی مقصد باز و بررسی می‌شود.
+      7 پشتیبان روزانه، 4 هفتگی و 3 ماهانه نگه داشته می‌شوند. اگر سرور آنلاین تنظیم شده باشد، یک نسخه رمزگذاری‌شده هم به آن فرستاده می‌شود.
     </p>
 
     <div v-if="running" class="alert alert-info" role="status">
@@ -117,7 +117,7 @@ onBeforeUnmount(() => clearTimeout(timer))
     <div v-else-if="status.needsAttention" class="alert alert-danger" role="alert">
       پشتیبان‌گیری مشکل دارد.
       <span v-if="status.lastError" dir="auto"> خطا: {{ status.lastError }}</span>
-      <span v-else> در ۲۴ ساعت اخیر پشتیبان موفق ثبت نشده است.</span>
+      <span v-else> در 24 ساعت اخیر پشتیبان موفق ثبت نشده است.</span>
     </div>
     <div v-else class="alert alert-success" role="status">پشتیبان‌گیری درست کار می‌کند.</div>
 

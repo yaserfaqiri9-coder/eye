@@ -43,7 +43,7 @@ const eyeRows = computed(() => [
     </dl>
 
     <section class="pre-document__section" aria-labelledby="pre-complaint-title">
-      <h3 id="pre-complaint-title"><span>۰۱</span> شکایت اصلی</h3>
+      <h3 id="pre-complaint-title"><span>01</span> شکایت اصلی</h3>
       <p class="pre-document__prose">{{ value(preExam.chiefComplaint) }}</p>
       <dl class="pre-document__inline">
         <div><dt>چشم</dt><dd>{{ eyeName(extras.eye) }}</dd></div>
@@ -52,7 +52,7 @@ const eyeRows = computed(() => [
     </section>
 
     <section class="pre-document__section" aria-labelledby="pre-eyes-title">
-      <h3 id="pre-eyes-title"><span>۰۲</span> بررسی چشم‌ها</h3>
+      <h3 id="pre-eyes-title"><span>02</span> بررسی چشم‌ها</h3>
       <table class="pre-document__eyes">
         <caption class="visually-hidden">نتایج ثبت‌شده چشم راست و چشم چپ</caption>
         <thead><tr><th scope="col">اندازه‌گیری</th><th scope="col">چشم راست <bdi dir="ltr">OD</bdi></th><th scope="col">چشم چپ <bdi dir="ltr">OS</bdi></th></tr></thead>
@@ -62,7 +62,7 @@ const eyeRows = computed(() => [
     </section>
 
     <section class="pre-document__section" aria-labelledby="pre-history-title">
-      <h3 id="pre-history-title"><span>۰۳</span> سوابق و هشدارها</h3>
+      <h3 id="pre-history-title"><span>03</span> سوابق و هشدارها</h3>
       <p class="pre-document__prose" :class="{ 'pre-document__warning': preExam.history }">{{ value(preExam.history) }}</p>
       <dl class="pre-document__history">
         <div v-for="condition in systemicConditions" :key="condition.code" :class="{ 'pre-document__positive': extras.systemic[condition.code].answer === 'Y' }">
@@ -74,7 +74,7 @@ const eyeRows = computed(() => [
     </section>
 
     <section class="pre-document__section" aria-labelledby="pre-notes-title">
-      <h3 id="pre-notes-title"><span>۰۴</span> جزئیات و یادداشت‌ها</h3>
+      <h3 id="pre-notes-title"><span>04</span> جزئیات و یادداشت‌ها</h3>
       <dl class="pre-document__notes">
         <div><dt>اندازه‌گیری‌ها و اطلاعات تکمیلی</dt><dd>{{ value(extras.measurements) }}</dd></div>
         <div><dt>یادداشت معاینه ابتدایی</dt><dd>{{ value(preExam.notes) }}</dd></div>

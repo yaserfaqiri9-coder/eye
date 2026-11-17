@@ -2,8 +2,10 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api, ApiError } from '@/api/http'
 import UiCard from '@/components/UiCard.vue'
+import UiFilterBar from '@/components/UiFilterBar.vue'
 import UiPager from '@/components/UiPager.vue'
 import UiModal from '@/components/UiModal.vue'
+import UiRowMenu from '@/components/UiRowMenu.vue'
 import { useAuthStore } from '@/stores/auth'
 import { roleLabel, roles } from './roles'
 import { isMenuParent, menu, type MenuItem } from '@/layouts/menu'
@@ -208,19 +210,17 @@ onMounted(load)
 </script>
 
 <template>
-  <UiCard title="کاربران">
-    <template #actions>
-      <button v-if="auth.can('users.create')" type="button" class="btn btn-primary" @click="openCreate">
-        کاربر جدید
-      </button>
-    </template>
+  <!-- The search here is asked for, not live, so the bar sits in a form and Enter or the button sends it. -->
+  <form @submit.prevent="search">
+    <UiFilterBar v-model:search="q" title="کاربران" search-label="جستجو" search-placeholder="جستجوی نام یا نام کاربری">
+      <button type="submit" class="btn btn-soft">جستجو</button>
+      <template v-if="auth.can('users.create')" #actions>
+        <button type="button" class="btn btn-primary" @click="openCreate">کاربر جدید</button>
+      </template>
+    </UiFilterBar>
+  </form>
 
-    <form class="row g-2 mb-3" @submit.prevent="search">
-      <div class="col-sm-6 col-lg-4">
-        <input v-model="q" type="search" class="form-control" placeholder="جستجوی نام یا نام کاربری" aria-label="جستجو" />
-      </div>
-      <div class="col-auto"><button type="submit" class="btn btn-soft">جستجو</button></div>
-    </form>
+  <UiCard>
 
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
 
@@ -248,10 +248,8 @@ onMounted(load)
               </span>
             </td>
             <td v-if="auth.can('users.manage')" class="text-nowrap">
-              <button type="button" class="btn btn-soft btn-sm" @click="Object.assign(editName, { user, fullName: user.fullName, saving: false, error: '' })">ویرایش</button>
-              <button type="button" class="btn btn-soft btn-sm ms-2" @click="openRoles(user)">نقش‌ها</button>
-              <button type="button" class="btn btn-soft btn-sm ms-2" @click="openSidebar(user)">بخش‌های منو</button>
-              <button type="button" class="btn btn-soft btn-sm ms-2" @click="Object.assign(reset, { user, password: '', error: '' })">بازنشانی رمز</button>
+              <!-- The two actions used most stay on the row; the rarer ones wait in the menu. -->
+              <button type="button" class="btn btn-soft btn-sm" @click="Object.assign(reset, { user, password: '', error: '' })">بازنشانی رمز</button>
               <button
                 v-if="user.id !== auth.user?.id"
                 type="button"
@@ -261,6 +259,15 @@ onMounted(load)
               >
                 {{ user.isActive ? 'غیرفعال‌سازی' : 'فعال‌سازی' }}
               </button>
+              <UiRowMenu
+                class="ms-1"
+                :label="`گزینه‌های بیشتر ${user.fullName}`"
+                :items="[
+                  { label: 'ویرایش نام', icon: 'ri-edit-line', onSelect: () => Object.assign(editName, { user, fullName: user.fullName, saving: false, error: '' }) },
+                  { label: 'نقش‌ها', icon: 'ri-shield-user-line', onSelect: () => openRoles(user) },
+                  { label: 'بخش‌های منو', icon: 'ri-menu-line', onSelect: () => openSidebar(user) },
+                ]"
+              />
             </td>
           </tr>
         </tbody>

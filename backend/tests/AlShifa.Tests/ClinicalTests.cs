@@ -89,14 +89,25 @@ public sealed class ClinicalTests(ApiFixture api)
         Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
 
         Assert.Equal(HttpStatusCode.NoContent, (await triage.PostAsync($"/api/pre-examinations/{visit.Id}/complete", null)).StatusCode);
+        Assert.DoesNotContain((await triage.GetFromJsonAsync<List<VisitRow>>("/api/clinical/worklist?kind=triage"))!, v => v.Id == visit.Id);
+        Assert.Contains((await triage.GetFromJsonAsync<List<VisitRow>>("/api/clinical/worklist?kind=triage&done=true"))!, v => v.Id == visit.Id);
 
         var doctor = await UserAsync(Roles.Doctor);
         var queue = await doctor.GetFromJsonAsync<List<VisitRow>>("/api/clinical/worklist?kind=doctor");
-        Assert.Contains(queue!, v => v.Id == visit.Id && v.Status == nameof(VisitStatus.ReadyForDoctor));
+        Assert.Contains(queue!, v => v.Id == visit.Id && v.Status == nameof(VisitStatus.ReadyForDoctor) && v.VisionComplete);
 
         var chart = await doctor.GetFromJsonAsync<ChartDto>($"/api/consultations/{visit.Id}/chart", JsonOptions);
         Assert.Equal("6/9", chart!.PreExam!.VisualAcuityOd);
         Assert.Equal("16", chart.PreExam.IopOs);
+
+        // The visit's vision and pressure travel with it into the history, for the next visit to compare against.
+        var exam = await doctor.PutAsJsonAsync($"/api/consultations/{visit.Id}",
+            new SaveConsultationRequest(null, null, "پلان", null, [new DiagnosisInput(EyeSide.Both, "Dry eye")], null));
+        Assert.Equal(HttpStatusCode.OK, exam.StatusCode);
+        var history = await doctor.GetFromJsonAsync<List<HistoryItem>>($"/api/clinical/patients/{visit.PatientId}/history", JsonOptions);
+        var past = Assert.Single(history!, h => h.VisitId == visit.Id);
+        Assert.Equal(("6/9", "6/12", "15", "16"), (past.VisualAcuityOd, past.VisualAcuityOs, past.IopOd, past.IopOs));
+        Assert.Equal("Both", Assert.Single(past.Diagnoses).Eye);
     }
 
     [Fact]
@@ -109,25 +120,35 @@ public sealed class ClinicalTests(ApiFixture api)
         using (var scope = api.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            Product Item(string name, ProductKind kind, bool active = true) =>
-                new() { Code = Guid.NewGuid().ToString("N")[..30], Name = name, Kind = kind, Unit = "عدد", IsActive = active };
+            Product Item(string name, ProductKind kind, bool active = true, string? form = null, string unit = "عدد") =>
+                new() { Code = Guid.NewGuid().ToString("N")[..30], Name = name, Kind = kind, Unit = unit, Category = form, IsActive = active };
             db.Products.AddRange(
-                Item(match, ProductKind.Drug),
+                Item(match, ProductKind.Drug, form: "قطره"),
                 Item(arabicSpelling, ProductKind.Drug),
                 Item($"Z{stamp} متوقف", ProductKind.Drug, active: false),
                 Item($"Z{stamp} فریم", ProductKind.Frame),
-                Item(middle, ProductKind.Drug));
+                Item(middle, ProductKind.Drug, unit: "تابلت"));
             await db.SaveChangesAsync();
         }
 
         var doctor = await UserAsync(Roles.Doctor);
+        async Task<string[]> Names(string q) => (await doctor.GetFromJsonAsync<DrugOption[]>($"/api/prescriptions/drugs?q={q}", JsonOptions))!.Select(d => d.Name).ToArray();
+
         // A name that starts with the text is listed before one that only contains it.
-        Assert.Equal([match, middle], (await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=Z{stamp}"))!);
-        Assert.Equal([match, middle], (await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=z{stamp}"))!);
-        Assert.Equal([middle], (await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q={Uri.EscapeDataString("وسط نام")}"))!.Where(n => n.Contains(stamp)).ToArray());
-        Assert.Equal([arabicSpelling], (await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=ی{stamp}"))!);
-        Assert.Empty((await doctor.GetFromJsonAsync<string[]>($"/api/prescriptions/drugs?q=Z{stamp[..3]}%25{stamp[6..]}"))!);
-        Assert.Empty((await doctor.GetFromJsonAsync<string[]>("/api/prescriptions/drugs?q=%20"))!);
+        Assert.Equal([match, middle], await Names($"Z{stamp}"));
+        Assert.Equal([match, middle], await Names($"z{stamp}"));
+        Assert.Equal([middle], (await Names(Uri.EscapeDataString("وسط نام"))).Where(n => n.Contains(stamp)).ToArray());
+        Assert.Equal([arabicSpelling], await Names($"ی{stamp}"));
+        Assert.Empty(await Names($"Z{stamp[..3]}%25{stamp[6..]}"));
+        Assert.Empty(await Names("%20"));
+
+        // Each suggestion says its form: the stock list's form, else a unit that says more than "a piece".
+        var options = (await doctor.GetFromJsonAsync<DrugOption[]>($"/api/prescriptions/drugs?q=Z{stamp}", JsonOptions))!;
+        Assert.Equal(["قطره", "تابلت"], options.Select(o => o.Form ?? "").ToArray());
+        Assert.Null(Assert.Single((await doctor.GetFromJsonAsync<DrugOption[]>($"/api/prescriptions/drugs?q=ی{stamp}", JsonOptions))!).Form);
+        var forms = (await doctor.GetFromJsonAsync<Dictionary<string, string>>(
+            $"/api/prescriptions/drug-forms?names={Uri.EscapeDataString(match)}&names={Uri.EscapeDataString(arabicSpelling)}&names=Unknown", JsonOptions))!;
+        Assert.Equal(new Dictionary<string, string> { [match] = "قطره" }, forms);
 
         var pharmacist = await UserAsync(Roles.Pharmacist);
         Assert.Equal(HttpStatusCode.Forbidden, (await pharmacist.GetAsync($"/api/prescriptions/drugs?q=Z{stamp}")).StatusCode);

@@ -31,7 +31,7 @@ export async function setup(page) {
     else if (path === '/inventory/locations') data = locations
     else if (path.startsWith('/inventory/locations/')) {
       const location = locations.find(l => l.code === path.split('/').pop()) || locations[0]
-      data = { location, stock: products.filter(p => p.onHand > 0 && (location.code === 'central' || p.id === 108)).map(p => ({ productId: p.id, productCode: p.code, productName: p.name, kind: p.kind, category: p.category, unit: p.unit, quantity: p.onHand, value: p.onHand*10, nearestExpiry: null, batchCount: 1 })) }
+      data = { location, stock: products.filter(p => p.onHand > 0 && (location.code === 'central' || p.id === 108)).map(p => ({ productId: p.id, productCode: p.code, productName: p.name, kind: p.kind, category: p.category, unit: p.unit, quantity: p.onHand, value: p.onHand*10, salePrice: p.salePrice, nearestExpiry: p.id === 2 ? '2020-01-01' : null, batchCount: 1 })) }
     }
     else if (path === '/inventory/alerts') data = { lowStock: [], expiring: [] }
     else if (path === '/inventory/batches' || path === '/inventory/drug-forms') data = []

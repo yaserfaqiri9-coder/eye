@@ -134,7 +134,10 @@ public sealed record ChartDto(
     IReadOnlyList<PrescriptionDto> Prescriptions, IReadOnlyList<OpticalRxDto> OpticalPrescriptions,
     IReadOnlyList<DiagnosticOrderDto> DiagnosticOrders, IReadOnlyList<FollowUpDto> FollowUps);
 
-public sealed record HistoryItem(long VisitId, DateOnly VisitDate, string DepartmentName, string? DoctorName, string? TreatmentPlan, IReadOnlyList<DiagnosisDto> Diagnoses);
+/// <summary>One past visit. Vision and pressure come from that visit's pre-exam, so the doctor can compare them with today's.</summary>
+public sealed record HistoryItem(
+    long VisitId, DateOnly VisitDate, string DepartmentName, string? DoctorName, string? TreatmentPlan, IReadOnlyList<DiagnosisDto> Diagnoses,
+    string? VisualAcuityOd = null, string? VisualAcuityOs = null, string? IopOd = null, string? IopOs = null);
 
 public static class ClinicalEndpoints
 {
@@ -467,23 +470,34 @@ public static class ClinicalEndpoints
 
             var ids = rows.Select(r => r.Id).ToList();
             var diagnoses = await db.Diagnoses.AsNoTracking().Where(d => ids.Contains(d.ConsultationId)).Select(d => new { d.ConsultationId, d.Eye, d.Text }).ToListAsync(ct);
+            var visitIds = rows.Select(r => r.VisitId).ToList();
+            var preExams = await db.PreExaminations.AsNoTracking()
+                .Where(p => visitIds.Contains(p.VisitId))
+                .Select(p => new { p.VisitId, p.VisualAcuityOd, p.VisualAcuityOs, p.IopOd, p.IopOs })
+                .ToDictionaryAsync(p => p.VisitId, ct);
 
-            return Results.Ok(rows.Select(r => new HistoryItem(
-                r.VisitId, r.VisitDate, r.DepartmentName, r.DoctorName, r.TreatmentPlan,
-                diagnoses.Where(d => d.ConsultationId == r.Id).Select(d => new DiagnosisDto(d.Eye.ToString(), d.Text)).ToList())).ToList());
+            return Results.Ok(rows.Select(r =>
+            {
+                var pre = preExams.GetValueOrDefault(r.VisitId);
+                return new HistoryItem(
+                    r.VisitId, r.VisitDate, r.DepartmentName, r.DoctorName, r.TreatmentPlan,
+                    diagnoses.Where(d => d.ConsultationId == r.Id).Select(d => new DiagnosisDto(d.Eye.ToString(), d.Text)).ToList(),
+                    pre?.VisualAcuityOd, pre?.VisualAcuityOs, pre?.IopOd, pre?.IopOs);
+            }).ToList());
         }).RequirePermission("clinicalrecord.view");
 
-        app.MapGet("/api/clinical/worklist", async (string kind, AppDbContext db, CurrentUser user, CancellationToken ct) =>
+        // With done=true the list shows the patients this desk has already finished on that day, so they can be opened again.
+        app.MapGet("/api/clinical/worklist", async (string kind, bool? done, DateOnly? date, AppDbContext db, CurrentUser user, CancellationToken ct) =>
         {
-            var today = KabulClock.Today;
-            var query = db.Visits.AsNoTracking().Where(v => v.VisitDate == today);
+            var day = done == true ? date ?? KabulClock.Today : KabulClock.Today;
+            var query = db.Visits.AsNoTracking().Where(v => v.VisitDate == day);
             if (kind == "triage")
             {
-                query = VisionQueue(query);
+                query = done == true ? VisionDone(db, query) : VisionQueue(query);
             }
             else if (kind == "doctor")
             {
-                query = DoctorQueue(db, query, user.Id);
+                query = done == true ? DoctorDone(db, query, user.Id) : DoctorQueue(db, query, user.Id);
             }
             else
             {
@@ -589,6 +603,15 @@ public static class ClinicalEndpoints
                         || (!db.Consultations.Any(c => c.VisitId == v.Id) && (v.Department!.Code == "doctor" || v.Status == VisitStatus.ReadyForDoctor))))) &&
             v.Status != VisitStatus.Completed && v.Status != VisitStatus.Cancelled && v.Status != VisitStatus.AwaitingPayment &&
             v.Status != VisitStatus.Registered && v.Status != VisitStatus.Waiting && v.Status != VisitStatus.InPreExam);
+
+    /// <summary>Visits whose Vision is complete, whatever desk they have moved on to since.</summary>
+    public static IQueryable<Visit> VisionDone(AppDbContext db, IQueryable<Visit> visits) =>
+        visits.Where(v => v.Status != VisitStatus.Cancelled && db.PreExaminations.Any(p => p.VisitId == v.Id && p.CompletedAt != null));
+
+    /// <summary>Completed visits this doctor examined or was assigned to.</summary>
+    public static IQueryable<Visit> DoctorDone(AppDbContext db, IQueryable<Visit> visits, long userId) =>
+        visits.Where(v => v.Status == VisitStatus.Completed
+            && ((v.Doctor != null && v.Doctor.UserId == userId) || db.Consultations.Any(c => c.VisitId == v.Id && c.AuthorUserId == userId)));
 
     private static void MoveVisit(AppDbContext db, Visit visit, VisitStatus to, long userId)
     {

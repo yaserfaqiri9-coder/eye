@@ -32,10 +32,12 @@ const props = withDefaults(
     /** Set while a parent is still fetching `options`, so "nothing found" is not shown too early. */
     loading?: boolean
     error?: string
+    /** Offers the typed text as a new entry («افزودن … جدید») when it is not in the list; the parent receives it through `create`. */
+    createLabel?: string
   }>(),
-  { options: undefined, search: undefined, selectedLabel: undefined, placeholder: 'جستجو یا انتخاب کنید', emptyText: 'موردی پیدا نشد.', loading: false, error: '' },
+  { options: undefined, search: undefined, selectedLabel: undefined, placeholder: 'جستجو یا انتخاب کنید', emptyText: 'موردی پیدا نشد.', loading: false, error: '', createLabel: undefined },
 )
-const emit = defineEmits<{ select: [option: ComboOption | null] }>()
+const emit = defineEmits<{ select: [option: ComboOption | null]; create: [text: string] }>()
 
 const SEARCH_DELAY = 250
 const RENDER_LIMIT = 100
@@ -67,6 +69,21 @@ const matches = computed(() => {
   return term ? list.filter((o) => normalize(`${o.label} ${o.hint ?? ''}`).includes(term)) : list
 })
 const visible = computed(() => matches.value.slice(0, RENDER_LIMIT))
+
+/** The typed text, when it may be added as a new entry: not while searching, and not when the list already has it. */
+const createText = computed(() => {
+  if (!props.createLabel || !typing.value || isLoading.value) return ''
+  const text = query.value.trim()
+  const term = normalize(text)
+  return term && !matches.value.some((o) => normalize(o.label) === term) ? text : ''
+})
+
+function create() {
+  const text = createText.value
+  if (!text) return
+  closeList()
+  emit('create', text)
+}
 
 const selectedText = computed(() => {
   if (model.value === null || model.value === undefined) return ''
@@ -182,6 +199,7 @@ function onKeydown(event: KeyboardEvent) {
     event.preventDefault()
     const option = visible.value[active.value]
     if (option) select(option)
+    else create()
   } else if (event.key === 'Escape' && open.value) {
     event.stopPropagation()
     closeList()
@@ -263,7 +281,33 @@ onBeforeUnmount(() => {
         <p v-else-if="isLoading && visible.length === 0" class="xr-combo__note" role="status">در حال جستجو...</p>
         <p v-else-if="visible.length === 0" class="xr-combo__note" role="status">{{ emptyText }}</p>
         <p v-else-if="matches.length > RENDER_LIMIT" class="xr-combo__note">{{ matches.length - RENDER_LIMIT }} مورد دیگر؛ برای پیدا کردن، تایپ کنید.</p>
+        <button v-if="createText" type="button" class="xr-combo__create" @click="create">
+          <i class="ri-add-line" aria-hidden="true"></i>
+          <span>{{ createLabel }}: «{{ createText }}»</span>
+        </button>
       </div>
     </Teleport>
   </div>
 </template>
+
+<style scoped>
+.xr-combo__create {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-top: 1px solid var(--xr-border, #e5e7eb);
+  background: transparent;
+  color: var(--xr-primary, #0d9488);
+  font-weight: 600;
+  text-align: start;
+  cursor: pointer;
+}
+
+.xr-combo__create:hover,
+.xr-combo__create:focus-visible {
+  background: var(--xr-tone-primary-bg, rgba(13, 148, 136, 0.08));
+}
+</style>

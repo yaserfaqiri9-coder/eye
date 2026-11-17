@@ -16,6 +16,8 @@ import PatientCell from '@/features/patients/PatientCell.vue'
 import PatientPicker from '@/features/patients/PatientPicker.vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { prepareVisitReceipt } from '@/features/print/visitReceipt'
+import VisitReceiptButton from '@/features/print/VisitReceiptButton.vue'
 import { formatDate, formatTime, kabulToUtc, todayIso, utcToKabulParts } from '@/utils/date'
 import { money, quantity } from '@/utils/money'
 import AdmissionFlow from './AdmissionFlow.vue'
@@ -74,7 +76,8 @@ async function loadDesk() {
   const [loadedTokens, loadedPending, sessions] = await Promise.all([
     api<VisitToken[]>('/visit-tokens'),
     api<Admission[]>('/admissions/pending'),
-    auth.can('cash.view') ? api<CashSession[]>('/cash/sessions?mine=true') : Promise.resolve([]),
+    // Someone who may open a register works it at the cashier, so their open one is current, not left over.
+    auth.can('cash.view') && !auth.can('cash.create') ? api<CashSession[]>('/cash/sessions?mine=true') : Promise.resolve([]),
   ])
   tokens.value = loadedTokens
   pending.value = loadedPending
@@ -133,10 +136,18 @@ const search = ref('')
 const flowCard = ref<HTMLElement | null>(null)
 const showPayTab = computed(() => canAdmit.value && auth.can('visitfees.view'))
 
+/** Persian and Arabic digits typed at the desk find the Latin digits the system stores, and letter case never matters. */
+function plain(value: string) {
+  return value
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .toLowerCase()
+}
+
 function matches(...values: (string | number | null | undefined)[]) {
-  const q = search.value.trim()
+  const q = plain(search.value.trim())
   if (!q) return true
-  return values.some((v) => v !== null && v !== undefined && String(v).includes(q))
+  return values.some((v) => v !== null && v !== undefined && plain(String(v)).includes(q))
 }
 
 const isDone = (v: VisitRow) => ['Completed', 'Cancelled'].includes(v.status)
@@ -177,7 +188,8 @@ async function onFlowChanged() {
 
 function openInFlow(row: Admission) {
   flow.value?.resume(row)
-  flowCard.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  // Only when the form is out of view: a page that is already showing it must not jump.
+  flowCard.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 
 function visitMenu(visit: VisitRow) {
@@ -300,6 +312,8 @@ function openCheckIn(row: AppointmentRow) {
 }
 
 async function submitCheckIn() {
+  if (checkIn.saving) return
+  const receipt = prepareVisitReceipt(auth.can('visits.print'))
   checkIn.saving = true
   checkIn.error = ''
   try {
@@ -310,8 +324,10 @@ async function submitCheckIn() {
     })
     checkIn.row = null
     flow.value?.resume(admission)
+    receipt.open(admission.visitId, admission.queueNumber)
     await refresh()
   } catch (cause) {
+    receipt.close()
     checkIn.error = errorMessage(cause)
     // Keep the key when the result is unknown so retry cannot charge twice.
     if (cause instanceof ApiError && !cause.outcomeUnknown) checkIn.key = newIdempotencyKey()
@@ -384,11 +400,6 @@ watch(departmentId, refresh)
 
 <template>
   <div class="d-grid gap-4">
-    <div class="reception-heading">
-      <h1 class="h4 mb-0">پذیرش</h1>
-      <button v-if="auth.can('appointments.create')" type="button" class="btn btn-soft" @click="openBooking"><i class="ri-calendar-line" aria-hidden="true"></i> ثبت وقت ملاقات</button>
-    </div>
-
     <div v-if="error" class="alert alert-danger mb-0" role="alert">{{ error }}</div>
 
     <div v-if="session" class="alert alert-warning mb-0 d-flex flex-wrap align-items-center justify-content-between gap-2" role="alert">
@@ -411,6 +422,7 @@ watch(departmentId, refresh)
             <option :value="null">همه بخش‌ها</option>
             <option v-for="d in departments" :key="d.value" :value="d.value">{{ d.label }}</option>
           </select>
+          <button v-if="auth.can('appointments.create')" type="button" class="btn btn-soft btn-sm reception-booking text-nowrap" @click="openBooking"><i class="ri-calendar-line" aria-hidden="true"></i> ثبت وقت ملاقات</button>
         </div>
       </div>
       <div class="xr-card__body">
@@ -443,11 +455,13 @@ watch(departmentId, refresh)
                   <td><PatientCell :name="a.patientName" :file-number="a.patientFileNumber" /></td>
                   <td>{{ a.departmentName }}<span v-if="a.visitDate !== todayIso()" class="text-muted small"> ({{ formatDate(a.visitDate) }})</span></td>
                   <td>
+                    <span v-if="a.queueNumber !== null" class="me-2">نوبت {{ quantity(a.queueNumber) }}</span>
                     <span v-if="a.paid" class="xr-badge xr-badge--orange">پرداخت شد، نوبت صادر نشده</span>
                     <span v-else class="xr-badge xr-badge--red">باید {{ money(a.balance) }} در صندوق بپردازد</span>
                   </td>
                   <td v-if="tokens.length"></td>
                   <td class="text-nowrap text-end">
+                    <VisitReceiptButton v-if="a.visitDate === todayIso() || a.queueNumber !== null" :visit-id="a.visitId" :queue-number="a.queueNumber" @issued="refresh" />
                     <button type="button" class="btn btn-sm" :class="a.paid ? 'btn-primary' : 'btn-soft'" @click="openInFlow(a)">{{ a.paid ? 'صدور نوبت' : 'باز کردن' }}</button>
                     <button v-if="!a.paid && auth.can('visits.cancel')" type="button" class="btn btn-quiet btn-sm ms-1 text-danger" @click="cancelAdmission(a)">لغو</button>
                   </td>
@@ -513,9 +527,7 @@ watch(departmentId, refresh)
                     </div>
                   </td>
                   <td class="text-nowrap text-end">
-                    <RouterLink v-if="auth.can('visits.print') && visit.queueNumber !== null" :to="`/print/visit/${visit.id}`" target="_blank" class="btn btn-quiet btn-sm">
-                      <i class="ri-printer-line" aria-hidden="true"></i> رسید
-                    </RouterLink>
+                    <VisitReceiptButton v-if="visit.queueNumber !== null" :visit-id="visit.id" :queue-number="visit.queueNumber" />
                     <UiRowMenu v-if="visitMenu(visit).length" :label="`گزینه‌های ${visit.patientName}`" :items="visitMenu(visit)" />
                   </td>
                 </tr>
@@ -552,10 +564,10 @@ watch(departmentId, refresh)
         <div><dt>ساعت</dt><dd><span class="ltr-num">{{ formatTime(checkIn.row.scheduledAt) }}</span></dd></div>
       </dl>
       <div class="mb-3"><UiComboBox v-model="checkIn.departmentId" label="بخش شروع مراجعه" :options="departments" required chip /></div>
-      <p class="form-hint">با تأیید، مراجعه ثبت می‌شود و فیس برای پرداخت به صندوق فرستاده می‌شود.</p>
+      <p class="form-hint">با تأیید، مراجعه و شماره نوبت ثبت می‌شود و رسید برای چاپ باز می‌شود. فیس در صندوق پرداخت می‌شود.</p>
       <div v-if="checkIn.error" class="alert alert-danger" role="alert">{{ checkIn.error }}</div>
       <div class="xr-form-actions">
-        <button type="submit" class="btn btn-primary" :disabled="checkIn.saving || !checkIn.departmentId">{{ checkIn.saving ? 'در حال ثبت…' : 'ثبت مراجعه و ارسال فیس به صندوق' }}</button>
+        <button type="submit" class="btn btn-primary" :disabled="checkIn.saving || !checkIn.departmentId">{{ checkIn.saving ? 'در حال ثبت…' : 'ثبت مراجعه و چاپ نوبت' }}</button>
         <button type="button" class="btn btn-soft-danger" data-modal-cancel>انصراف</button>
       </div>
     </form>
@@ -601,29 +613,40 @@ watch(departmentId, refresh)
 </template>
 
 <style scoped>
-.reception-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--xr-gap);
-}
-
 .reception-filters {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(120px, 140px) auto;
+  flex: 0 1 620px;
+  align-items: center;
   gap: 8px;
+  min-width: 0;
+  max-width: 620px;
   margin-inline-start: auto;
 }
 
 .reception-filters .form-control {
-  min-width: 260px;
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  font-size: 13px;
 }
 
 .reception-filters .form-select {
-  width: auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding-block: 5px;
+  font-size: 12.5px;
+}
+
+.reception-booking {
+  min-height: 38px;
+  padding: 5px 10px;
+  font-size: 12.5px;
 }
 
 .reception-tabs {
-  margin-bottom: 1rem;
+  margin-bottom: 8px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--xr-border, #e5e7eb);
 }
@@ -650,16 +673,16 @@ watch(departmentId, refresh)
   color: #fff;
 }
 
-@media (max-width: 575.98px) {
+@media (max-width: 767.98px) {
   .reception-filters {
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr) auto;
+    flex-basis: 100%;
     width: 100%;
+    max-width: none;
   }
 
-  .reception-filters .form-control,
-  .reception-filters .form-select {
-    min-width: 0;
-    width: 100%;
+  .reception-filters .form-control {
+    grid-column: 1 / -1;
   }
 }
 </style>

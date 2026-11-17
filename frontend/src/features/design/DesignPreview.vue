@@ -4,19 +4,19 @@ import StatCard from '@/components/StatCard.vue'
 import UiCard from '@/components/UiCard.vue'
 
 const rows = [
-  { file: 'P-000001', name: 'نمونه اول', status: 'در انتظار', tone: 'orange' },
-  { file: 'P-000002', name: 'نمونه دوم', status: 'نزد داکتر', tone: 'primary' },
-  { file: 'P-000003', name: 'نمونه سوم', status: 'تکمیل', tone: 'green' },
+  { file: '1', name: 'نمونه اول', status: 'در انتظار', tone: 'orange' },
+  { file: '2', name: 'نمونه دوم', status: 'نزد داکتر', tone: 'primary' },
+  { file: '3', name: 'نمونه سوم', status: 'تکمیل', tone: 'green' },
 ]
 </script>
 
 <template>
   <div class="preview">
     <div class="preview__stats">
-      <StatCard label="مراجعات امروز" value="۱۲۰" icon="ri-user-3-fill" />
-      <StatCard label="در انتظار" value="۱۴" icon="ri-hourglass-fill" tone="orange" />
-      <StatCard label="لغو شده" value="۲" icon="ri-close-line" tone="red" />
-      <StatCard label="نوبت‌ها" value="۳۸" icon="ri-calendar-event-fill" tone="cyan" />
+      <StatCard label="مراجعات امروز" value="120" icon="ri-user-3-fill" />
+      <StatCard label="در انتظار" value="14" icon="ri-hourglass-fill" tone="orange" />
+      <StatCard label="لغو شده" value="2" icon="ri-close-line" tone="red" />
+      <StatCard label="نوبت‌ها" value="38" icon="ri-calendar-event-fill" tone="cyan" />
     </div>
 
     <UiCard title="جدول نمونه">

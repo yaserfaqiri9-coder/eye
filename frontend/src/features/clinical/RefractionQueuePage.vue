@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api, errorMessage } from '@/api/http'
 import { useLiveRefresh } from '@/api/realtime'
+import ShamsiDateInput from '@/components/ShamsiDateInput.vue'
 import UiCard from '@/components/UiCard.vue'
 import CallControls from '@/features/calls/CallControls.vue'
 import CallNotice from '@/features/calls/CallNotice.vue'
 import { useCallDesk } from '@/features/calls/useCallDesk'
 import PatientCell from '@/features/patients/PatientCell.vue'
+import { todayIso } from '@/utils/date'
 import { quantity } from '@/utils/money'
 
 interface QueueRow {
@@ -20,6 +22,8 @@ interface QueueRow {
 }
 
 const calls = useCallDesk('Refraction')
+const tab = ref<'queue' | 'done'>('queue')
+const date = ref<string | null>(todayIso())
 const rows = ref<QueueRow[]>([])
 const q = ref('')
 const loading = ref(true)
@@ -32,7 +36,8 @@ const visible = computed(() => {
 
 async function load() {
   try {
-    rows.value = await api<QueueRow[]>('/refractions/queue')
+    const query = tab.value === 'done' ? `?done=true&date=${date.value ?? todayIso()}` : ''
+    rows.value = await api<QueueRow[]>(`/refractions/queue${query}`)
     error.value = ''
   } catch (cause) {
     error.value = errorMessage(cause)
@@ -41,25 +46,35 @@ async function load() {
   }
 }
 
+watch([tab, date], () => {
+  loading.value = true
+  rows.value = []
+  load()
+})
 useLiveRefresh(['DiagnosticOrderCreated', 'PaymentReceived', 'VisitStatusChanged', 'DiagnosticResultReady'], load)
 onMounted(load)
 </script>
 
 <template>
-  <UiCard title="درخواست‌های رفرکشن امروز">
+  <UiCard title="رفرکشن">
     <template #actions>
-      <input v-model="q" type="search" class="form-control" placeholder="نام یا شماره پرونده" aria-label="جستجوی مریض امروز" />
+      <nav class="xr-tabs" role="tablist" aria-label="بخش‌های رفرکشن">
+        <button type="button" role="tab" class="xr-tab" :class="{ 'xr-tab--active': tab === 'queue' }" :aria-selected="tab === 'queue'" @click="tab = 'queue'">درخواست‌های امروز</button>
+        <button type="button" role="tab" class="xr-tab" :class="{ 'xr-tab--active': tab === 'done' }" :aria-selected="tab === 'done'" @click="tab = 'done'">مریضان دیده‌شده</button>
+      </nav>
+      <input v-model="q" type="search" class="form-control" placeholder="نام یا شماره پرونده" aria-label="جستجوی مریض" />
     </template>
+    <div v-if="tab === 'done'" class="seen-date"><ShamsiDateInput v-model="date" label="تاریخ" :max="todayIso()" /></div>
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
-    <CallNotice :desks="[calls]" />
+    <CallNotice v-if="tab === 'queue'" :desks="[calls]" />
     <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
-    <div v-else-if="visible.length === 0" class="xr-state">درخواستی پیدا نشد.</div>
+    <div v-else-if="visible.length === 0" class="xr-state">{{ tab === 'queue' ? 'درخواستی پیدا نشد.' : 'در این روز رفرکشنی ثبت نشده است.' }}</div>
     <div v-else class="xr-table-wrap">
       <table class="xr-table">
         <thead>
-          <tr><th>نوبت</th><th>مریض</th><th>وضعیت</th><th>فراخوان</th><th>عملیات</th></tr>
+          <tr><th>نوبت</th><th>مریض</th><th>وضعیت</th><th v-if="tab === 'queue'">فراخوان</th><th>عملیات</th></tr>
         </thead>
-        <tbody>
+        <tbody v-if="tab === 'queue'">
           <tr v-for="row in visible" :key="row.id">
             <td><span class="xr-queue">{{ quantity(row.queueNumber) }}</span></td>
             <td><PatientCell :name="row.patientName" :file-number="row.patientFileNumber" /></td>
@@ -71,7 +86,22 @@ onMounted(load)
             </td>
           </tr>
         </tbody>
+        <tbody v-else>
+          <tr v-for="row in visible" :key="row.id">
+            <td><span class="xr-queue">{{ quantity(row.queueNumber) }}</span></td>
+            <td><PatientCell :name="row.patientName" :file-number="row.patientFileNumber" /></td>
+            <td><span class="xr-badge xr-badge--green">تکمیل‌شده</span></td>
+            <td><RouterLink :to="`/refraction/${row.visitId}`" class="btn btn-soft btn-sm text-nowrap">مشاهده رفرکشن</RouterLink></td>
+          </tr>
+        </tbody>
       </table>
     </div>
   </UiCard>
 </template>
+
+<style scoped>
+.seen-date {
+  max-width: 220px;
+  margin-bottom: var(--xr-gap);
+}
+</style>

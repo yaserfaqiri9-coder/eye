@@ -14,7 +14,8 @@ public sealed record CreateVisitRequest(long PatientId, int DepartmentId, long? 
 public sealed record VisitRow(
     long Id, string VisitNumber, int? QueueNumber, long PatientId, string PatientFileNumber, string PatientName,
     int DepartmentId, string DepartmentName, string? DoctorName, string Status, string? Reason, DateOnly VisitDate,
-    DateTime CreatedAt, int Version, IReadOnlyList<string> NextStatuses, string PatientGender, long? DoctorStaffId = null, string FeeStatus = "None");
+    DateTime CreatedAt, int Version, IReadOnlyList<string> NextStatuses, string PatientGender, long? DoctorStaffId = null, string FeeStatus = "None",
+    bool VisionComplete = false, int? PatientAgeYears = null);
 
 public sealed record ChangeVisitStatusRequest(VisitStatus Status, int Version);
 
@@ -46,8 +47,8 @@ public sealed class VisitService(AppDbContext db, DbContextOptions<AppDbContext>
         ?? throw AppException.NotFound();
 
     /// <summary>
-    /// The desk's flow: a visit for a chosen patient, with its fee invoiced and nothing else. It holds no queue number and
-    /// stands in no queue until the fee is settled. Must run inside a transaction.
+    /// The desk reserves the queue number for immediate printing. Clinical work still waits for payment.
+    /// Must run inside a transaction so a failed admission also rolls back its number.
     /// </summary>
     public async Task<Visit> AdmitAsync(CreateAdmissionRequest request, CancellationToken ct)
     {
@@ -62,13 +63,15 @@ public sealed class VisitService(AppDbContext db, DbContextOptions<AppDbContext>
             Reason = Text.Clean(request.Reason),
             Status = VisitStatus.AwaitingPayment,
             VisitDate = KabulClock.Today,
-            VisitNumber = $"V-{await numbers.NextAsync("visit", ct: ct):D7}",
+            VisitNumber = await numbers.NextNumberAsync("visit", ct),
             CreatedByUserId = user.Id,
         };
         db.Visits.Add(visit);
         await db.SaveChangesAsync(ct);
 
-        await visitFees.CreateTokenAsync(visit.DepartmentId, visit.DoctorStaffId, visit.PatientId, ct, visit.Id);
+        var token = await visitFees.CreateTokenAsync(visit.DepartmentId, visit.DoctorStaffId, visit.PatientId, ct, visit.Id);
+        visit.QueueNumber = token.QueueNumber = (int)await numbers.NextAsync(QueueNumberScope, visit.VisitDate.ToString("yyyyMMdd"), ct);
+        audit.Add("QueueNumberIssued", "VisitToken", token.Id.ToString(), token.QueueNumber.ToString());
         db.VisitStatusHistory.Add(new VisitStatusHistory { VisitId = visit.Id, ToStatus = visit.Status, ChangedByUserId = user.Id });
         audit.Add("VisitCreated", "Visit", visit.Id.ToString());
         outbox.Add("VisitCreated", new { visitId = visit.Id }, EventGroups);
@@ -164,7 +167,7 @@ public sealed class VisitService(AppDbContext db, DbContextOptions<AppDbContext>
             DoctorStaffId = request.DoctorStaffId ?? token.DoctorStaffId,
             Reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim(),
             VisitDate = today,
-            VisitNumber = $"V-{await numbers.NextAsync("visit", ct: ct):D7}",
+            VisitNumber = await numbers.NextNumberAsync("visit", ct),
             QueueNumber = keepsNumber ? token.QueueNumber : (int)await numbers.NextAsync(QueueNumberScope, today.ToString("yyyyMMdd"), ct),
             CreatedByUserId = user.Id,
         };
@@ -198,17 +201,20 @@ public sealed class VisitService(AppDbContext db, DbContextOptions<AppDbContext>
         db.VisitTokens.Where(t => t.VisitId == v.Id).Select(t => t.Invoice!.Status == InvoiceStatus.Void ? "Unpaid"
             : t.Invoice.Total - t.Invoice.Discount <= t.Invoice.Paid - t.Invoice.Refunded ? "Paid"
             : t.Invoice.Paid > 0 && t.Invoice.Paid == t.Invoice.Refunded ? "Refunded"
-            : "Unpaid").FirstOrDefault()));
+            : "Unpaid").FirstOrDefault(),
+        v.Patient.BirthDate, v.Patient.EstimatedBirthYear));
 
     public static VisitRow ToRow(VisitProjection v) => new(
         v.Id, v.VisitNumber, v.QueueNumber, v.PatientId, v.FileNumber, $"{v.FirstName} {v.LastName}".Trim(),
         v.DepartmentId, v.DepartmentName, v.DoctorName, v.Status.ToString(), v.Reason, v.VisitDate, v.CreatedAt, v.Version,
-        VisitWorkflow.NextOf(v.Status, v.VisionComplete).Select(s => s.ToString()).ToList(), v.Gender.ToString(), v.DoctorStaffId, v.FeeStatus ?? "None");
+        VisitWorkflow.NextOf(v.Status, v.VisionComplete).Select(s => s.ToString()).ToList(), v.Gender.ToString(), v.DoctorStaffId, v.FeeStatus ?? "None",
+        v.VisionComplete, Patients.PatientEndpoints.AgeOf(v.BirthDate, v.EstimatedBirthYear));
 }
 
 public sealed record VisitProjection(
     long Id, string VisitNumber, int? QueueNumber, long PatientId, string FileNumber, string FirstName, string? LastName,
-    int DepartmentId, string DepartmentName, string? DoctorName, VisitStatus Status, string? Reason, DateOnly VisitDate, DateTime CreatedAt, int Version, Patients.Gender Gender, long? DoctorStaffId, bool VisionComplete, string? FeeStatus);
+    int DepartmentId, string DepartmentName, string? DoctorName, VisitStatus Status, string? Reason, DateOnly VisitDate, DateTime CreatedAt, int Version, Patients.Gender Gender, long? DoctorStaffId, bool VisionComplete, string? FeeStatus,
+    DateOnly? BirthDate = null, int? EstimatedBirthYear = null);
 
 public static class VisitEndpoints
 {

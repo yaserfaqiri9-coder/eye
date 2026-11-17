@@ -1,19 +1,21 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, errorMessage } from '@/api/http'
-import ShamsiDateInput from '@/components/ShamsiDateInput.vue'
-import StatCard from '@/components/StatCard.vue'
+import { api, downloadFile, errorMessage } from '@/api/http'
 import UiCard from '@/components/UiCard.vue'
+import UiFilterBar from '@/components/UiFilterBar.vue'
+import UiPeriodFilter from '@/components/UiPeriodFilter.vue'
 import { useHospital } from '@/features/print/paper'
 import { useAuthStore } from '@/stores/auth'
-import { formatDateTime, todayIso } from '@/utils/date'
-import { downloadCsv } from './exportCsv'
-import { periodChoices, quickRange, reportGroups, type DateRange, type PeriodKind } from './reportCatalog'
+import { formatDateTime } from '@/utils/date'
+import { kindOf, periodChoices, quickRange, type DateRange, type PeriodKind } from '@/utils/period'
+import { reportGroups } from './reportCatalog'
 import { numberText, periodWords } from './reportFormat'
+import ReportArtDefs from './ReportArtDefs.vue'
+import ReportGallery from './ReportGallery.vue'
+import ReportStat from './ReportStat.vue'
 import ReportTableCard from './ReportTableCard.vue'
-import ReportTrendChart from './ReportTrendChart.vue'
-import type { ReportDocument, ReportTile } from './types'
+import type { ReportDocument } from './types'
 
 const route = useRoute()
 const router = useRouter()
@@ -26,10 +28,13 @@ const groups = computed(() =>
     .filter((group) => group.reports.length > 0),
 )
 const allowed = computed(() => groups.value.flatMap((group) => group.reports))
-const active = computed(() => allowed.value.find((report) => report.key === route.query.report) ?? allowed.value[0] ?? null)
+/** No report in the address means the gallery of reports; an unknown or forbidden one is treated the same. */
+const active = computed(() => allowed.value.find((report) => report.key === route.query.report) ?? null)
+const activeGroup = computed(() => groups.value.find((group) => group.reports.some((report) => report.key === active.value?.key))?.key)
+const galleryGroup = computed(() => (typeof route.query.group === 'string' ? route.query.group : undefined))
+const chooseGroup = (key: string) => router.replace({ query: { group: key } })
 
 const isoDate = /^\d{4}-\d{2}-\d{2}$/
-const today = computed(() => todayIso())
 
 /** What the address asks for, or today when it asks for something that makes no sense. */
 const selected = computed<DateRange & { kind: PeriodKind }>(() => {
@@ -47,29 +52,20 @@ function queryFor(report: string, kind: PeriodKind, range?: DateRange) {
 
 const chooseReport = (key: string) => router.push({ query: queryFor(key, selected.value.kind, selected.value) })
 
-const customOpen = ref(selected.value.kind === 'custom')
-const draft = reactive<{ from: string | null; to: string | null }>({ from: selected.value.from, to: selected.value.to })
-const shownChoice = computed<PeriodKind>(() => (customOpen.value ? 'custom' : selected.value.kind))
-
-function choosePeriod(kind: PeriodKind) {
-  if (kind === 'custom') {
-    customOpen.value = true
-    Object.assign(draft, { from: selected.value.from, to: selected.value.to })
-    return
-  }
-  customOpen.value = false
-  router.push({ query: queryFor(active.value!.key, kind) })
-}
-
-function showCustom() {
-  if (!draft.from || !draft.to) return
-  router.push({ query: queryFor(active.value!.key, 'custom', { from: draft.from, to: draft.to }) })
-}
+/** The shared period filter reads and writes the address, so back, forward and reload keep the days. */
+const period = computed<DateRange | null>({
+  get: () => ({ from: selected.value.from, to: selected.value.to }),
+  set: (range) => {
+    if (range && active.value) router.push({ query: queryFor(active.value.key, kindOf(range), range) })
+  },
+})
 
 const doc = ref<ReportDocument | null>(null)
 const loading = ref(false)
 const error = ref('')
 const loadedAt = ref<string | null>(null)
+
+const daysQuery = () => (active.value?.noPeriod ? '' : new URLSearchParams({ from: selected.value.from, to: selected.value.to }).toString())
 
 let controller: AbortController | null = null
 async function load() {
@@ -81,8 +77,8 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const params = report.noPeriod ? '' : `?${new URLSearchParams({ from: selected.value.from, to: selected.value.to })}`
-    doc.value = await api<ReportDocument>(`/reports/${report.key}${params}`, { signal })
+    const days = daysQuery()
+    doc.value = await api<ReportDocument>(`/reports/${report.key}${days ? `?${days}` : ''}`, { signal })
     loadedAt.value = new Date().toISOString()
   } catch (cause) {
     if (signal.aborted) return
@@ -99,20 +95,16 @@ const requestKey = computed(() => {
 })
 watch(requestKey, (key) => key && load(), { immediate: true })
 
-// Back and forward can land on any period, so the panel follows the address.
-watch(
-  () => selected.value.kind,
-  (kind) => {
-    customOpen.value = kind === 'custom'
-    if (kind === 'custom') Object.assign(draft, { from: selected.value.from, to: selected.value.to })
-  },
-)
-
 // An unknown or forbidden choice in the address is replaced, so the address always says what is on screen.
 watch(
   () => route.query,
   (query) => {
-    if (route.name !== 'reports' || !active.value || (query.report === undefined && query.period === undefined)) return
+    if (route.name !== 'reports') return
+    if (!active.value) {
+      if (query.report !== undefined || query.period !== undefined) router.replace({ query: galleryGroup.value ? { group: galleryGroup.value } : {} })
+      return
+    }
+    if (query.report === undefined && query.period === undefined) return
     const wanted = queryFor(active.value.key, selected.value.kind, selected.value) as Record<string, string>
     const same = Object.keys({ ...wanted, ...query }).every((key) => query[key] === wanted[key])
     if (!same) router.replace({ query: wanted })
@@ -120,14 +112,29 @@ watch(
   { immediate: true },
 )
 
-const icons: Partial<Record<ReportTile['kind'], string>> = {
-  count: 'ri-bar-chart-fill',
-  money: 'ri-wallet-3-fill',
-  quantity: 'ri-stack-fill',
-}
+/** One row of four figures at most heads a report; the server already sends no more, this only guards the page. */
+const MAX_TILES = 4
+const tiles = computed(() => doc.value?.tiles.slice(0, MAX_TILES) ?? [])
+const table = computed(() => doc.value?.tables[0] ?? null)
 
-const printReport = () => window.print()
-const exportReport = () => doc.value && active.value && downloadCsv(active.value.key, doc.value)
+const canExcel = computed(() => auth.can('reports.export'))
+const canPdf = computed(() => auth.can('reports.print') || auth.can('reports.export'))
+const saving = ref<'xlsx' | 'pdf' | null>(null)
+
+/** The server writes the file from the same report, so the file always matches the screen. */
+async function save(format: 'xlsx' | 'pdf') {
+  if (!active.value || saving.value) return
+  saving.value = format
+  error.value = ''
+  try {
+    const days = daysQuery()
+    await downloadFile(`/reports/${active.value.key}/export?format=${format}${days ? `&${days}` : ''}`, `report-${active.value.key}.${format}`)
+  } catch (cause) {
+    error.value = errorMessage(cause)
+  } finally {
+    saving.value = null
+  }
+}
 
 onMounted(loadHospital)
 onBeforeUnmount(() => controller?.abort())
@@ -135,59 +142,33 @@ onBeforeUnmount(() => controller?.abort())
 
 <template>
   <div class="report-page">
-    <UiCard v-if="!active">
+    <UiCard v-if="allowed.length === 0">
       <p class="xr-state mb-0">هنوز گزارشی برای نقش شما باز نشده است. اگر به گزارشی نیاز دارید، به مدیر سیستم بگویید.</p>
     </UiCard>
 
+    <ReportGallery v-else-if="!active" :groups="groups" :group="galleryGroup" @update:group="chooseGroup" @open="chooseReport" />
+
+    <!--
+      One report on its own page: a single bar with its name, its days and its actions (with the way back to
+      the gallery), then at most four figures and its tables.
+    -->
     <div v-else class="report-layout">
-      <nav class="report-nav xr-card no-print d-none d-xl-block" aria-label="فهرست گزارش‌ها">
-        <section v-for="group in groups" :key="group.title" class="report-nav__group">
-          <h2 class="report-nav__title">{{ group.title }}</h2>
-          <ul class="report-nav__list">
-            <li v-for="report in group.reports" :key="report.key">
-              <button
-                type="button"
-                class="report-nav__link"
-                :class="{ 'report-nav__link--active': report.key === active.key }"
-                :aria-current="report.key === active.key ? 'true' : undefined"
-                @click="chooseReport(report.key)"
-              >{{ report.name }}</button>
-            </li>
-          </ul>
-        </section>
-      </nav>
-
+      <ReportArtDefs />
       <div class="report-main">
-        <div class="report-controls xr-card no-print" :class="{ 'd-xl-none': active.noPeriod }">
-          <div class="d-xl-none">
-            <label class="form-label" for="report-choice">گزارش</label>
-            <select id="report-choice" class="form-select" :value="active.key" @change="chooseReport(($event.target as HTMLSelectElement).value)">
-              <optgroup v-for="group in groups" :key="group.title" :label="group.title">
-                <option v-for="report in group.reports" :key="report.key" :value="report.key">{{ report.name }}</option>
-              </optgroup>
-            </select>
-          </div>
-
-          <template v-if="!active.noPeriod">
-            <div class="report-periods" role="group" aria-label="دوره گزارش">
-              <button
-                v-for="choice in periodChoices"
-                :key="choice.kind"
-                type="button"
-                class="report-period"
-                :class="{ 'report-period--active': shownChoice === choice.kind }"
-                :aria-pressed="shownChoice === choice.kind"
-                @click="choosePeriod(choice.kind)"
-              >{{ choice.label }}</button>
-            </div>
-
-            <form v-if="customOpen" class="report-custom" @submit.prevent="showCustom">
-              <ShamsiDateInput v-model="draft.from" label="از تاریخ" required :max="draft.to ?? today" />
-              <ShamsiDateInput v-model="draft.to" label="تا تاریخ" required :min="draft.from ?? undefined" :max="today" />
-              <button type="submit" class="btn btn-primary xr-field-height">نمایش</button>
-            </form>
+        <UiFilterBar :title="doc?.title ?? active.name" :subtitle="doc ? periodWords(doc.from, doc.to) : undefined" sticky class="report-bar no-print">
+          <UiPeriodFilter v-if="!active.noPeriod" v-model="period" label="دوره گزارش" />
+          <template #actions>
+            <button v-if="doc && canExcel" type="button" class="report-file report-file--excel" :disabled="loading || saving !== null" @click="save('xlsx')">
+              <i :class="saving === 'xlsx' ? 'ri-loader-4-line report-spin' : 'ri-file-excel-2-line'" aria-hidden="true"></i> Excel
+            </button>
+            <button v-if="doc && canPdf" type="button" class="report-file report-file--pdf" :disabled="loading || saving !== null" @click="save('pdf')">
+              <i :class="saving === 'pdf' ? 'ri-loader-4-line report-spin' : 'ri-file-pdf-2-line'" aria-hidden="true"></i> PDF
+            </button>
+            <RouterLink :to="{ query: activeGroup ? { group: activeGroup } : {} }" class="report-back">
+              <i class="ri-arrow-right-line" aria-hidden="true"></i> گزارش‌ها
+            </RouterLink>
           </template>
-        </div>
+        </UiFilterBar>
 
         <div v-if="error" class="alert alert-danger report-error" role="alert">
           <span>{{ error }}</span>
@@ -201,47 +182,28 @@ onBeforeUnmount(() => controller?.abort())
             <div v-if="hospital?.hospitalName" class="report-print-head__name">{{ hospital.hospitalName }}</div>
             <div>گرفته‌شده در {{ formatDateTime(loadedAt) }}</div>
           </div>
+          <!-- On paper the bar is gone, so the name and days are written once above the figures. -->
+          <div class="report-print-title">
+            <div class="report-head__title">{{ doc.title }}</div>
+            <div class="report-head__period">{{ periodWords(doc.from, doc.to) }}</div>
+          </div>
 
-          <header class="report-head">
-            <div class="report-head__text">
-              <h1 class="report-head__title">{{ doc.title }}</h1>
-              <p class="report-head__description">{{ doc.description }}</p>
-              <p class="report-head__period">
-                <i class="ri-calendar-2-line no-print" aria-hidden="true"></i>
-                {{ periodWords(doc.from, doc.to) }}
-              </p>
-            </div>
-            <div v-if="auth.can('reports.print') || auth.can('reports.export')" class="report-head__actions no-print">
-              <button v-if="auth.can('reports.print')" type="button" class="btn btn-soft" :disabled="loading" @click="printReport">
-                <i class="ri-printer-line" aria-hidden="true"></i> چاپ
-              </button>
-              <button v-if="auth.can('reports.export')" type="button" class="btn btn-soft" :disabled="loading" @click="exportReport">
-                <i class="ri-file-excel-2-line" aria-hidden="true"></i> خروجی اکسل
-              </button>
-            </div>
-          </header>
-
-          <div v-if="doc.tiles.length" class="report-tiles" :class="{ 'report-tiles--pairs': doc.tiles.length % 2 === 0 && doc.tiles.length % 3 !== 0 }">
-            <StatCard
-              v-for="tile in doc.tiles"
+          <div v-if="tiles.length" class="report-tiles">
+            <ReportStat
+              v-for="tile in tiles"
               :key="tile.label"
               :label="tile.label"
               :value="numberText(tile.value, tile.kind)"
-              :icon="icons[tile.kind] ?? icons.count!"
-              :tone="tile.kind === 'money' && tile.value < 0 ? 'red' : 'primary'"
+              :kind="tile.kind"
+              :negative="tile.kind === 'money' && tile.value < 0"
             />
           </div>
 
-          <ReportTrendChart v-if="doc.trend" :trend="doc.trend" />
-
-          <ReportTableCard v-for="table in doc.tables" :key="table.title" :table="table" />
+          <ReportTableCard v-if="table" :table="table" />
+          <p v-if="doc.description" class="report-about no-print">{{ doc.description }}</p>
         </article>
 
         <div v-else-if="loading" class="report-sheet" aria-hidden="true">
-          <div class="report-head__text">
-            <span class="xr-skeleton xr-skeleton--title"></span>
-            <span class="xr-skeleton xr-skeleton--wide mt-3"></span>
-          </div>
           <div class="report-tiles">
             <div v-for="n in 4" :key="n" class="report-skeleton-tile"><span class="xr-skeleton xr-skeleton--wide"></span></div>
           </div>
@@ -253,133 +215,128 @@ onBeforeUnmount(() => controller?.abort())
 </template>
 
 <style scoped>
-.report-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--xr-gap-x);
+/* One calm palette for a report page, the same as the gallery it is opened from. */
+.report-page {
+  --rp-ink: #1f2a44;
+  --rp-soft: #6b7487;
+  --rp-accent: #1a6fdb;
+  --rp-accent-bg: #e9f1fd;
+  --rp-line: #e6eaf0;
 }
 
 .report-main,
 .report-sheet {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--xr-gap-x);
+  gap: 18px;
   align-content: start;
 }
 
-@media (min-width: 1200px) {
-  .report-layout {
-    grid-template-columns: 260px minmax(0, 1fr);
-    align-items: start;
+/* The shared bar sits in the page's grid, which already spaces it. */
+.report-bar {
+  margin-bottom: 0;
+}
+
+/* Written only on paper: the bar that carries the name on screen is not printed. */
+.report-print-title {
+  display: none;
+}
+
+.report-head__title {
+  color: var(--rp-ink);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.report-head__period {
+  color: var(--rp-soft);
+  font-size: 12px;
+}
+
+/* The two files, each in its own colour so they are told apart at a glance. */
+.report-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid;
+  border-radius: 6px;
+  background: var(--xr-surface);
+  font-size: 13.5px;
+  font-weight: 600;
+  transition: background-color 0.15s ease;
+}
+
+.report-file i {
+  font-size: 17px;
+}
+
+.report-file--excel {
+  border-color: #b9e2cb;
+  color: #1d7a46;
+}
+
+.report-file--excel:hover:not(:disabled) {
+  background: #eaf7f0;
+}
+
+.report-file--pdf {
+  border-color: #f2c4c0;
+  color: #c0392b;
+}
+
+.report-file--pdf:hover:not(:disabled) {
+  background: #fdeeed;
+}
+
+.report-file:disabled {
+  opacity: 0.55;
+}
+
+.report-spin {
+  display: inline-block;
+  animation: report-spin 0.8s linear infinite;
+}
+
+@keyframes report-spin {
+  to {
+    transform: rotate(360deg);
   }
-
-  /* Clears the fixed page header, and scrolls by itself on a short screen. */
-  .report-nav {
-    position: sticky;
-    top: 95px;
-    max-height: calc(100vh - 115px);
-    overflow-y: auto;
-  }
 }
 
-.report-nav {
-  padding: 16px 12px;
+.report-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #d5dce6;
+  border-radius: 6px;
+  background: var(--xr-surface);
+  color: var(--rp-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: border-color 0.15s ease, color 0.15s ease;
 }
 
-.report-nav__group + .report-nav__group {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--xr-border);
+.report-back:hover {
+  border-color: var(--rp-accent);
+  color: var(--rp-accent);
 }
 
-.report-nav__title {
-  margin: 0 0 8px;
-  padding-inline: 12px;
-  color: var(--xr-text-soft);
-  font-size: 12.5px;
-  font-weight: 500;
+.report-back:focus-visible,
+.report-file:focus-visible {
+  outline: 2px solid var(--rp-accent);
+  outline-offset: 2px;
 }
 
-.report-nav__list {
+/* What the report shows, in one quiet line under its list. */
+.report-about {
   margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.report-nav__link {
-  display: block;
-  width: 100%;
-  padding: 8px 12px;
-  border: 0;
-  border-inline-start: 3px solid transparent;
-  border-radius: var(--xr-radius-button);
-  background: transparent;
-  color: var(--xr-text);
-  font-size: var(--xr-fs-body);
-  line-height: 1.5;
-  text-align: start;
-  transition: background-color 0.12s ease;
-}
-
-.report-nav__link:hover {
-  background: var(--xr-row-hover);
-}
-
-.report-nav__link--active,
-.report-nav__link--active:hover {
-  border-inline-start-color: var(--xr-primary);
-  background: var(--xr-tone-primary-bg);
-  color: var(--xr-tone-primary-text);
-  font-weight: 600;
-}
-
-.report-nav__link:focus-visible,
-.report-period:focus-visible {
-  outline: 2px solid var(--xr-primary);
-  outline-offset: 1px;
-}
-
-.report-controls {
-  display: grid;
-  gap: 12px;
-  padding: 12px 16px;
-}
-
-.report-periods {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.report-period {
-  min-height: 36px;
-  padding: 4px 14px;
-  border: 0;
-  border-radius: var(--xr-radius-button);
-  background: transparent;
-  color: var(--xr-text);
-  font-size: var(--xr-fs-body);
-  transition: background-color 0.12s ease;
-}
-
-.report-period:hover {
-  background: var(--xr-row-hover);
-}
-
-.report-period--active,
-.report-period--active:hover {
-  background: var(--xr-tone-primary-bg);
-  color: var(--xr-tone-primary-text);
-  font-weight: 600;
-}
-
-.report-custom {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  align-items: end;
-  gap: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--xr-border);
+  color: var(--rp-soft);
+  font-size: 12.5px;
 }
 
 .report-error {
@@ -404,150 +361,108 @@ onBeforeUnmount(() => controller?.abort())
   display: none;
 }
 
-.report-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px 24px;
-}
-
-.report-head__text {
-  flex: 1 1 280px;
-  min-width: 0;
-}
-
-.report-head__title {
-  font-size: 24px;
-  line-height: 1.4;
-}
-
-.report-head__description {
-  margin: 4px 0 0;
-  color: var(--xr-text);
-  font-size: 14.5px;
-}
-
-.report-head__period {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 6px 0 0;
-  color: var(--xr-tone-primary-text);
-  font-weight: 500;
-}
-
-.report-head__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
+/* Four figures in one row, never more. */
 .report-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: var(--xr-gap-x);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
 }
 
-/* Two or four tiles sit in even rows rather than leaving one alone on a row of its own. */
-.report-tiles--pairs {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-@media (min-width: 1600px) {
-  .report-tiles--pairs {
-    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  }
-}
 
 .report-skeleton-tile {
   display: flex;
   align-items: center;
-  min-height: 113px;
-  padding: 20px;
-  border-radius: var(--xr-radius-card);
+  height: 84px;
+  padding: 14px;
+  border-radius: 10px;
   background: var(--xr-surface);
   box-shadow: var(--xr-shadow-card);
 }
 
 .report-skeleton-tile--table {
-  min-height: 240px;
+  height: 240px;
+}
+
+
+@media (max-width: 1199.98px) {
+  .report-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 575.98px) {
   .report-tiles {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-
-  .report-skeleton-tile {
-    min-height: 88px;
-  }
-
-  .report-head__actions {
-    width: 100%;
-  }
-
-  .report-head__actions .btn {
-    flex: 1;
-  }
-
-  .report-period {
-    flex: 1 1 calc(33.333% - 4px);
-    padding-inline: 6px;
+    gap: 10px;
   }
 }
 </style>
 
 <!-- These reach inside shared components, and the print rules must also reach the page around this one. -->
 <style>
-.report-tiles .stat .stat__tile {
-  min-height: 96px;
-  padding: 16px;
+/*
+ * Cards and tables inside a report, kept calm: a white card with a soft shadow, a bold title with no rule under it,
+ * a pale header band on the table, tall rows split by hairlines, no stripes.
+ */
+.report-sheet .xr-card {
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(31, 42, 68, 0.05), 0 4px 16px rgba(31, 42, 68, 0.06);
 }
 
-.report-tiles .stat .stat__icon {
-  width: 46px;
+.report-sheet .xr-card__header {
+  min-height: 0;
+  padding: 16px 20px 12px;
+  border-bottom: 0;
+}
+
+.report-sheet .xr-card__title {
+  color: #1f2a44;
+  font-size: 14.5px;
+  font-weight: 700;
+}
+
+.report-sheet .xr-card__body {
+  padding: 0 10px 12px;
+}
+
+.report-sheet .xr-table {
+  color: #2b3445;
+}
+
+.report-sheet .xr-table th {
+  padding: 12px 14px;
+  border: 0;
+  background: #eef2f8;
+  color: #1f2a44;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.report-sheet .xr-table td {
   height: 46px;
-  font-size: 18px;
+  padding: 10px 14px;
+  border-top: 0;
+  border-bottom: 1px solid #edf0f4;
+  font-size: 13.5px;
 }
 
-/* A number is never broken across lines: only the space before its unit may wrap. */
-.report-tiles .stat .stat__value {
-  font-size: 24px;
-  font-weight: 500;
-  line-height: 1.35;
-  overflow-wrap: normal;
+.report-sheet .xr-table tbody tr:last-child td {
+  border-bottom: 0;
 }
 
-.report-tiles .stat .stat__label {
-  color: var(--xr-text-soft);
-  font-size: 14px;
-  line-height: 1.5;
+.report-sheet .xr-table tbody tr:hover {
+  background: #f7f9fc;
 }
 
-@media (max-width: 575.98px) {
-  .report-tiles .stat .stat__tile {
-    min-height: 88px;
-    padding: 12px;
-  }
+.report-sheet .xr-table tfoot td {
+  border-top: 1px solid #dfe5ee;
+  border-bottom: 0;
+  background: #f7f9fc;
+  color: #1f2a44;
+}
 
-  .report-tiles .stat .stat__icon {
-    display: none;
-  }
-
-  .report-tiles .stat .stat__text {
-    flex: 1;
-    text-align: start;
-  }
-
-  .report-tiles .stat .stat__value {
-    font-size: 20px;
-  }
-
-  .report-tiles .stat .stat__label {
-    font-size: 13px;
-  }
+.report-sheet .xr-section > summary {
+  color: #1a6fdb;
+  font-size: 13px;
 }
 
 /* A named page, so that the slip and form sizes other print pages set never apply to a report. */
@@ -577,7 +492,8 @@ onBeforeUnmount(() => controller?.abort())
 
   .report-page,
   .report-page .report-layout,
-  .report-page .report-main {
+  .report-page .report-main,
+  .report-page .report-grid {
     display: block;
   }
 
@@ -589,7 +505,8 @@ onBeforeUnmount(() => controller?.abort())
     font-size: 11px;
   }
 
-  .report-page .report-sheet > * + * {
+  .report-page .report-sheet > * + *,
+  .report-page .report-grid > * + * {
     margin-top: 14px;
   }
 
@@ -609,12 +526,15 @@ onBeforeUnmount(() => controller?.abort())
     font-weight: 700;
   }
 
+  .report-page .report-print-title {
+    display: block;
+  }
+
   .report-page .report-head__title {
     color: #000;
     font-size: 18px;
   }
 
-  .report-page .report-head__description,
   .report-page .report-head__period {
     color: #000;
     font-size: 11px;
@@ -625,35 +545,26 @@ onBeforeUnmount(() => controller?.abort())
     gap: 8px !important;
   }
 
-  .report-tiles .stat {
+  .report-page .report-tiles .rs {
+    height: auto;
+    padding: 6px 10px;
     border: 1px solid var(--xr-border-table);
     border-radius: 6px;
     box-shadow: none;
     break-inside: avoid;
   }
 
-  .report-tiles .stat .stat__tile {
-    min-height: 0;
-    padding: 6px 10px;
-    border-radius: 0;
-    background: none;
-  }
-
-  .report-tiles .stat .stat__icon {
+  .report-page .report-tiles .rs__picture {
     display: none;
   }
 
-  .report-tiles .stat .stat__text {
-    flex: 1;
-    text-align: start;
-  }
-
-  .report-tiles .stat .stat__value {
+  .report-page .report-tiles .rs__value {
     color: #000;
     font-size: 15px;
   }
 
-  .report-tiles .stat .stat__label {
+  .report-page .report-tiles .rs__label,
+  .report-page .report-tiles .rs__note {
     color: #000;
     font-size: 10px;
   }
@@ -717,8 +628,18 @@ onBeforeUnmount(() => controller?.abort())
     white-space: normal;
   }
 
+  .report-sheet .xr-table th {
+    background: none;
+  }
+
   .report-sheet .xr-table td {
+    height: auto;
     border-top: 1px solid var(--xr-border-table);
+    border-bottom: 0;
+  }
+
+  .report-sheet .xr-table tfoot td {
+    background: none;
   }
 
   .report-page .report-sheet .report-cell__text {

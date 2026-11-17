@@ -66,12 +66,16 @@ public static class RefractionEndpoints
             return row is null ? Results.NoContent() : Results.Ok(await ToDtoAsync(db, row, ct));
         }).RequirePermission("preexam.view");
 
-        group.MapGet("/queue", async (AppDbContext db, CancellationToken ct) =>
+        // With done=true the list shows the refractions already finished on that day, so they can be opened again.
+        group.MapGet("/queue", async (bool? done, DateOnly? date, AppDbContext db, CancellationToken ct) =>
         {
-            var today = KabulClock.Today;
+            var finished = done == true;
+            var day = finished ? date ?? KabulClock.Today : KabulClock.Today;
             var rows = await db.DiagnosticOrders.AsNoTracking()
-                .Where(o => o.Test!.Kind == DiagnosticKind.Refraction && o.Visit!.VisitDate == today && o.Visit.Status != Visits.VisitStatus.Cancelled
-                    && (o.Status == DiagnosticStatus.Requested || o.Status == DiagnosticStatus.InProgress))
+                .Where(o => o.Test!.Kind == DiagnosticKind.Refraction && o.Visit!.VisitDate == day && o.Visit.Status != Visits.VisitStatus.Cancelled
+                    && (finished
+                        ? o.Status == DiagnosticStatus.ResultReady
+                        : o.Status == DiagnosticStatus.Requested || o.Status == DiagnosticStatus.InProgress))
                 .OrderBy(o => o.Visit!.QueueNumber)
                 .Take(200)
                 .Select(o => new
@@ -286,7 +290,7 @@ public static class RefractionEndpoints
 
         var rx = new OpticalPrescription
         {
-            RxNumber = $"OP-{await numbers.NextAsync("optical-rx", ct: ct):D7}",
+            RxNumber = await numbers.NextNumberAsync("optical-rx", ct),
             PatientId = await db.Visits.Where(v => v.Id == row.VisitId).Select(v => v.PatientId).SingleAsync(ct),
             VisitId = row.VisitId,
             DoctorUserId = user.Id,
@@ -306,7 +310,7 @@ public static class RefractionEndpoints
         await db.SaveChangesAsync(ct);
 
         audit.Add("RefractionSentToOptical", "OpticalPrescription", rx.Id.ToString(), $"Visit {row.VisitId}");
-        outbox.Add("OpticalPrescriptionCreated", new { prescriptionId = rx.Id }, Groups.Optical, Groups.Doctor);
+        outbox.Add("OpticalPrescriptionCreated", new { prescriptionId = rx.Id, visitId = rx.VisitId }, Groups.Optical, Groups.Doctor);
         await db.SaveChangesAsync(ct);
     }
 
@@ -347,7 +351,7 @@ public static class RefractionEndpoints
         (rx.SphereOs, rx.CylinderOs, rx.AxisOs, rx.AddOs) = os;
         rx.Pd = row.Pd;
         audit.Add("OpticalPrescriptionEdited", "OpticalPrescription", rx.Id.ToString(), reason);
-        outbox.Add("OpticalPrescriptionCreated", new { prescriptionId = rx.Id }, Groups.Optical, Groups.Doctor);
+        outbox.Add("OpticalPrescriptionCreated", new { prescriptionId = rx.Id, visitId = rx.VisitId }, Groups.Optical, Groups.Doctor);
     }
 
     private static async Task<RefractionDto> ToDtoAsync(AppDbContext db, Refraction r, CancellationToken ct) =>

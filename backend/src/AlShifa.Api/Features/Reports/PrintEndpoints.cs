@@ -50,15 +50,18 @@ public static class PrintEndpoints
 
             if (v.QueueNumber is null)
             {
-                throw new AppException(StatusCodes.Status409Conflict, "no_queue_number", "پیش از پرداخت فیس، رسید نوبت چاپ نمی‌شود.");
+                throw new AppException(StatusCodes.Status409Conflict, "no_queue_number", "برای این مراجعه هنوز شماره نوبت صادر نشده است.");
             }
 
+            var invoice = await db.VisitTokens.AsNoTracking().Where(t => t.VisitId == id).Select(t => t.Invoice).SingleOrDefaultAsync(ct);
             return Results.Ok(new PrintDocument("رسید پذیرش", v.VisitNumber, v.CreatedAt, Receipt, await SettingsEndpoints.LoadAsync(db, ct),
             [
                 new("نام مریض", Name(v.FirstName, v.LastName)),
                 new("شماره پرونده", v.FileNumber),
                 new("بخش", v.Department),
                 new("داکتر", v.Doctor),
+                new("وضعیت فیس", invoice is null ? null : InvoiceStatusLabel(invoice)),
+                new("قابل پرداخت در صندوق", invoice is not null && Balance(invoice) > 0 ? Money(Balance(invoice)) : null),
             ], null, null,
             [new("شماره نوبت", v.QueueNumber.Value.ToString(CultureInfo.InvariantCulture))], null,
             NumberLabel: "شماره مراجعه"));
@@ -83,13 +86,16 @@ public static class PrintEndpoints
                 .SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw AppException.NotFound();
             var doctor = await db.Users.AsNoTracking().Where(u => u.Id == rx.DoctorUserId).Select(u => u.FullName).SingleOrDefaultAsync(ct);
             var specialty = await db.Staff.AsNoTracking().Where(s => s.UserId == rx.DoctorUserId).Select(s => s.Specialty).FirstOrDefaultAsync(ct);
+            // Each line as the old prescriptions read: "Eye drop Tobradex (Tobramycin + Dexamethasone)".
+            var drugs = await PrescriptionEndpoints.DrugDetailsAsync(db, rx.Items.Select(i => i.DrugName).Distinct().ToList(), ct);
+            string Line(string name) => drugs.TryGetValue(name, out var d) ? PrescriptionEndpoints.PrescriptionLine(name, d.Form, d.Generic) : name;
 
             return Results.Ok(new PrintDocument("نسخه داکتر", rx.RxNumber, rx.CreatedAt, A4, await SettingsEndpoints.LoadAsync(db, ct),
             [
                 new("نام مریض", Name(rx.Patient!.FirstName, rx.Patient.LastName)),
             ],
             ["دوا", "مقدار", "روش مصرف", "مدت", "توضیح", "تعداد"],
-            rx.Items.OrderBy(i => i.Id).Select(i => (IReadOnlyList<string?>)[i.DrugName, i.Dose, i.Route, i.Duration, i.Instructions, Number(i.Quantity)]).ToList(),
+            rx.Items.OrderBy(i => i.Id).Select(i => (IReadOnlyList<string?>)[Line(i.DrugName), i.Dose, i.Route, i.Duration, i.Instructions, Number(i.Quantity)]).ToList(),
             null, rx.Notes,
             NumberLabel: "شماره نسخه", Signer: doctor, SignerTitle: specialty));
         }).RequirePermission("prescriptions.print");
@@ -170,7 +176,7 @@ public static class PrintEndpoints
                 .SingleOrDefaultAsync(ct) ?? throw AppException.NotFound();
             var queueNumber = await db.VisitTokens.AsNoTracking().Where(t => t.InvoiceId == p.InvoiceId).Select(t => t.QueueNumber).FirstOrDefaultAsync(ct);
             var kind = await ReceiptKindAsync(db, p.InvoiceId, ct);
-            var balance = Balance(p.Total, p.Discount, p.Paid, p.InvoiceRefunded);
+            var balance = p.Status == InvoiceStatus.Void ? 0 : Balance(p.Total, p.Discount, p.Paid, p.InvoiceRefunded);
             var receiptStatus = p.Status == InvoiceStatus.Void ? "باطل"
                 : p.Refunded >= p.Amount ? "برگشت کامل"
                 : p.Refunded > 0 ? "برگشت جزئی"
@@ -248,7 +254,7 @@ public static class PrintEndpoints
 
     private static string Money(decimal value) => value.ToString("#,0.##", CultureInfo.InvariantCulture) + " افغانی";
 
-    private static decimal Balance(Invoice invoice) => Balance(invoice.Total, invoice.Discount, invoice.Paid, invoice.Refunded);
+    private static decimal Balance(Invoice invoice) => invoice.Status == InvoiceStatus.Void ? 0 : Balance(invoice.Total, invoice.Discount, invoice.Paid, invoice.Refunded);
 
     private static decimal Balance(decimal total, decimal discount, decimal paid, decimal refunded) =>
         Math.Max(0, total - discount - (paid - refunded));

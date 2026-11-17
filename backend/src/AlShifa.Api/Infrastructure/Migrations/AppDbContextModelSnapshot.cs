@@ -1530,6 +1530,14 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .HasMaxLength(40)
                         .HasColumnType("varchar(40)");
 
+                    b.Property<string>("DefaultDose")
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<string>("GenericName")
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("tinyint(1)");
 
@@ -1946,6 +1954,10 @@ namespace AlShifa.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(30)");
 
                     b.Property<string>("LastName")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<string>("Occupation")
                         .HasMaxLength(100)
                         .HasColumnType("varchar(100)");
 

@@ -21,6 +21,7 @@ export const anteriorRows: ExamRow[] = [
   { code: 'Iris', label: 'عنبیه', options: ['Normal', 'Atrophy', 'Synechiae', 'Rubeosis', 'Heterochromia', 'Coloboma', 'Cysts'] },
   { code: 'Pupil', label: 'مردمک', options: ['Round', 'Reactive', 'Fixed', 'Dilated', 'Constricted', 'Irregular', 'RAPD+', 'RAPD-'] },
   { code: 'Lens', label: 'عدسیه', options: ['Clear', 'Cataract', 'Nuclear Sclerosis', 'Cortical', 'PSC', 'Mature', 'Hypermature', 'IOL', 'Aphakic'] },
+  { code: 'Gonioscopy', label: 'گونیوسکوپی', options: ['Open (Grade 4)', 'Grade 3', 'Grade 2', 'Grade 1', 'Closed (Grade 0)', 'PAS', 'Angle NV', 'Angle recession'] },
   { code: 'Vitreous', label: 'زجاجیه', options: ['Clear', 'Hazy', 'Hemorrhage', 'Floaters', 'Detachment', 'Syneresis', 'PVD'] },
   { code: 'EOM', label: 'حرکات چشم', options: ['Full', 'Restricted', 'Paralysis', 'Nystagmus', 'Diplopia'] },
 ]
@@ -28,11 +29,20 @@ export const anteriorRows: ExamRow[] = [
 /** Chosen by clicking the drawing of each eye, as on the previous system. */
 export const fundusOptions = ['Normal', 'Cup/Disc 0.3', 'Cup/Disc 0.4', 'Cup/Disc 0.5', 'Cup/Disc 0.6', 'Cup/Disc 0.7', 'Cup/Disc 0.8', 'Glaucomatous', 'DR Changes', 'ARMD', 'Retinal Detachment', 'Vitreous Hemorrhage', 'Papilledema', 'Optic Atrophy']
 
+/** The dilating drops printed on the paper's DILATATION line. */
+export const dilationDrops = ['T', 'T+Ph', 'Ph', 'C', 'H']
+
+/** The paper's "Indirect: 90 D / 78 D / 20 D - 360° - Direct". "Indirect" alone stays for older records. */
+export const fundusMethods = ['90D', '78D', '20D', '360°', 'Direct', 'Indirect']
+
+/** Several drops or methods share one value, space- or slash-separated as written. */
+export const splitChoices = (value: string | undefined) => (value ?? '').split(/\s*\/\s*|\s+/).filter(Boolean)
+
 // The drop and lens codes are the paper's own. Their meaning awaits confirmation (M-10), so they are offered untranslated.
 export const posteriorRows: ExamRow[] = [
-  { code: 'Dilatation', label: 'گشادسازی مردمک', options: ['T', 'T+Ph', 'Ph', 'C'] },
+  { code: 'Dilatation', label: 'گشادسازی مردمک', options: dilationDrops },
   { code: 'DilateTime', label: 'زمان گشادسازی', options: [] },
-  { code: 'Method', label: 'روش معاینه', options: ['90D', '78D', 'Direct', 'Indirect'] },
+  { code: 'Method', label: 'روش معاینه', options: fundusMethods },
   { code: 'Fundus', label: 'فوندوس', options: fundusOptions },
   { code: 'Disc', label: 'دیسک بینایی', options: ['Pink', 'Pale', 'Swollen', 'Cupped'] },
   { code: 'CDR', label: 'نسبت کاپ به دیسک', options: [] },
@@ -70,27 +80,31 @@ export function serializeFindings(findings: EyeFindings) {
 const historyTag = '[شرح حال]\n'
 const planTag = '[پلان]\n'
 const adviceTag = '[توصیه]\n'
-const planTags = [historyTag, planTag, adviceTag]
+const noteTag = '[یادداشت]\n'
+const planTags = [historyTag, planTag, adviceTag, noteTag]
 
 export interface PlanParts {
   history: string
   plan: string
   advice: string
+  /** The "Note" box at the foot of the paper's front. Missing in records written before it. */
+  note?: string
 }
 
-/** The doctor's history and advice share the plan column. A plan alone is stored untagged, exactly as before. */
-export function parsePlan(text: string | null | undefined): PlanParts {
+/** The doctor's history, advice and note share the plan column. A plan alone is stored untagged, exactly as before. */
+export function parsePlan(text: string | null | undefined): Required<PlanParts> {
   const value = text ?? ''
-  const parts: PlanParts = { history: '', plan: '', advice: '' }
+  const parts: Required<PlanParts> = { history: '', plan: '', advice: '', note: '' }
   if (!planTags.some((tag) => value.startsWith(tag))) {
     parts.plan = value
     return parts
   }
-  const sections = value.split(/\n(?=\[(?:شرح حال|پلان|توصیه)\]\n)/)
+  const sections = value.split(/\n(?=\[(?:شرح حال|پلان|توصیه|یادداشت)\]\n)/)
   for (const section of sections) {
     if (section.startsWith(historyTag)) parts.history = section.slice(historyTag.length)
     else if (section.startsWith(planTag)) parts.plan = section.slice(planTag.length)
     else if (section.startsWith(adviceTag)) parts.advice = section.slice(adviceTag.length)
+    else if (section.startsWith(noteTag)) parts.note = section.slice(noteTag.length)
   }
   return parts
 }
@@ -99,8 +113,11 @@ export function serializePlan(parts: PlanParts) {
   const history = parts.history.trim()
   const plan = parts.plan.trim()
   const advice = parts.advice.trim()
-  if (!history && !advice) return plan
-  return [history && `${historyTag}${history}`, plan && `${planTag}${plan}`, advice && `${adviceTag}${advice}`].filter(Boolean).join('\n')
+  const note = (parts.note ?? '').trim()
+  if (!history && !advice && !note) return plan
+  return [history && `${historyTag}${history}`, plan && `${planTag}${plan}`, advice && `${adviceTag}${advice}`, note && `${noteTag}${note}`]
+    .filter(Boolean)
+    .join('\n')
 }
 
 /** Medical history asked on the paper file: answered yes or no, with how long the patient has been on treatment. */
@@ -334,5 +351,5 @@ export function axisWarning(value: string | null | undefined) {
   const clean = normalizeDigits(value ?? '')
   if (!clean) return ''
   const axis = Number(clean)
-  return Number.isInteger(axis) && axis >= 0 && axis <= 180 ? '' : 'محور باید عددی از ۰ تا ۱۸۰ باشد.'
+  return Number.isInteger(axis) && axis >= 0 && axis <= 180 ? '' : 'محور باید عددی از 0 تا 180 باشد.'
 }

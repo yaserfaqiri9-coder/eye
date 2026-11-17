@@ -9,7 +9,8 @@ public sealed record PatientListItem(long Id, string FileNumber, string FirstNam
 
 public sealed record PatientDto(
     long Id, string FileNumber, string FirstName, string? LastName, string? FatherName, string Gender,
-    DateOnly? BirthDate, int? EstimatedBirthYear, int? AgeYears, string? Phone, string? Address, DateTime CreatedAt, int Version);
+    DateOnly? BirthDate, int? EstimatedBirthYear, int? AgeYears, string? Phone, string? Address, DateTime CreatedAt, int Version,
+    string? Occupation = null);
 
 public sealed record SavePatientRequest(
     [Required, MaxLength(100)] string FirstName,
@@ -21,7 +22,8 @@ public sealed record SavePatientRequest(
     [MaxLength(30)] string? Phone,
     [MaxLength(300)] string? Address,
     bool ConfirmNotDuplicate = false,
-    int? Version = null);
+    int? Version = null,
+    [MaxLength(100)] string? Occupation = null);
 
 public sealed record PatientChangeDto(string Field, string? OldValue, string? NewValue, DateTime ChangedAt, string? ChangedBy);
 
@@ -42,8 +44,8 @@ public static class PatientEndpoints
             if (!string.IsNullOrWhiteSpace(q))
             {
                 // A plain LIKE prefix lets MySQL merge the four column indexes; StartsWith's translation (CONCAT and LEFT) read every patient.
-                // LIKE also follows the columns' case-insensitive collation, so "p-0001" finds "P-0001".
-                var prefix = q.Trim().Replace("|", "||").Replace("%", "|%").Replace("_", "|_") + "%";
+                // A number read off an old paper (P-000123) finds the file by its plain number.
+                var prefix = OldNumbers.Plain(q).Replace("|", "||").Replace("%", "|%").Replace("_", "|_") + "%";
                 query = query.Where(p =>
                     EF.Functions.Like(p.FileNumber, prefix, "|") ||
                     EF.Functions.Like(p.FirstName, prefix, "|") ||
@@ -97,7 +99,7 @@ public static class PatientEndpoints
 
                 var patient = new Patient { CreatedByUserId = user.Id };
                 Apply(patient, request);
-                patient.FileNumber = $"P-{await numbers.NextAsync("patient", ct: ct):D6}";
+                patient.FileNumber = await numbers.NextNumberAsync("patient", ct);
                 db.Patients.Add(patient);
                 await db.SaveChangesAsync(ct);
 
@@ -189,6 +191,7 @@ public static class PatientEndpoints
         patient.EstimatedBirthYear = r.BirthDate is null && r.EstimatedAge is { } age ? KabulClock.Today.Year - age : r.BirthDate is null ? patient.EstimatedBirthYear : null;
         patient.Phone = Clean(r.Phone);
         patient.Address = Clean(r.Address);
+        patient.Occupation = Clean(r.Occupation);
     }
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
@@ -203,6 +206,7 @@ public static class PatientEndpoints
         ["EstimatedBirthYear"] = p.EstimatedBirthYear?.ToString(),
         ["Phone"] = p.Phone,
         ["Address"] = p.Address,
+        ["Occupation"] = p.Occupation,
     };
 
     internal static int? AgeOf(DateOnly? birth, int? estimatedYear)
@@ -219,7 +223,7 @@ public static class PatientEndpoints
 
     private static PatientDto ToDto(Patient p) => new(
         p.Id, p.FileNumber, p.FirstName, p.LastName, p.FatherName, p.Gender.ToString(), p.BirthDate, p.EstimatedBirthYear,
-        AgeOf(p.BirthDate, p.EstimatedBirthYear), p.Phone, p.Address, p.CreatedAt, p.Version);
+        AgeOf(p.BirthDate, p.EstimatedBirthYear), p.Phone, p.Address, p.CreatedAt, p.Version, p.Occupation);
 }
 
 public sealed class PossibleDuplicateException(IReadOnlyList<PatientListItem> matches)

@@ -88,7 +88,7 @@ public sealed class ReceptionTests(ApiFixture api)
     {
         var reception = await UserAsync(Roles.Receptionist);
         var patient = await CreatePatientAsync(reception);
-        Assert.StartsWith("P-", patient.FileNumber);
+        Assert.Matches("^[0-9]+$", patient.FileNumber);
 
         var triage = await UserAsync(Roles.Triage);
         var seen = await triage.GetFromJsonAsync<PatientDto>($"/api/patients/{patient.Id}");
@@ -302,7 +302,7 @@ public sealed class ReceptionTests(ApiFixture api)
     }
 
     [Fact]
-    public async Task Appointment_arrival_sends_the_fee_to_the_cashier_and_reception_takes_no_money_and_issues_no_number()
+    public async Task Appointment_arrival_reserves_a_number_and_sends_the_fee_to_the_cashier_without_taking_money()
     {
         var admin = await UserAsync(Roles.SuperAdmin);
         var staff = await admin.PostAsJsonAsync("/api/staff", new SaveStaffRequest("داکتر " + Name("cash"), null, true, true, null, null));
@@ -325,7 +325,8 @@ public sealed class ReceptionTests(ApiFixture api)
         using var scope = api.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var visit = await db.Visits.AsNoTracking().SingleAsync(v => v.Id == admission.VisitId);
-        Assert.Null(visit.QueueNumber);
+        Assert.NotNull(visit.QueueNumber);
+        Assert.Equal(admission.QueueNumber, visit.QueueNumber);
         Assert.Equal(VisitStatus.AwaitingPayment, visit.Status);
         Assert.False(await db.Payments.AnyAsync(p => p.InvoiceId == admission.InvoiceId));
     }

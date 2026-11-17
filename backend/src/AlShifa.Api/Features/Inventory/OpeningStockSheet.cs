@@ -242,12 +242,12 @@ public static class OpeningStockSheet
         var problems = new List<string>();
         Decision Stop(Outcome outcome) => new(row, outcome, string.Join("؛ ", problems));
 
-        if (row.Name.Length is 0 or > 150) problems.Add(row.Name.Length == 0 ? "نام خالی است" : "نام بیش از ۱۵۰ حرف");
+        if (row.Name.Length is 0 or > 150) problems.Add(row.Name.Length == 0 ? "نام خالی است" : "نام بیش از 150 حرف");
         if (!Kinds.TryGetValue(Normalize(row.Kind), out var kind)) problems.Add($"نوع نامعتبر «{row.Kind}» (دوا، فریم، عدسیه یا عمومی)");
-        if (row.Unit.Length is 0 or > 30) problems.Add(row.Unit.Length == 0 ? "واحد خالی است" : "واحد بیش از ۳۰ حرف");
-        if (row.Batch.Length > 50) problems.Add("شماره بچ بیش از ۵۰ حرف");
-        if (row.Form.Length > 80) problems.Add("شکل بیش از ۸۰ حرف");
-        if (row.Dose.Length > 45) problems.Add("دوز بیش از ۴۵ حرف");
+        if (row.Unit.Length is 0 or > 30) problems.Add(row.Unit.Length == 0 ? "واحد خالی است" : "واحد بیش از 30 حرف");
+        if (row.Batch.Length > 50) problems.Add("شماره بچ بیش از 50 حرف");
+        if (row.Form.Length > 80) problems.Add("شکل بیش از 80 حرف");
+        if (row.Dose.Length > 45) problems.Add("دوز بیش از 45 حرف");
 
         var quantity = Number(row.Quantity);
         if (quantity is not > 0 || decimal.Round(quantity.Value, 3) != quantity) problems.Add($"تعداد نامعتبر «{row.Quantity}»");
@@ -299,9 +299,9 @@ public static class OpeningStockSheet
         return $"[sheet:{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..16]}]";
     }
 
-    /// <summary>One product per name and unit, so the same item in several locations or batches shares it. Older imports stored it as the product code.</summary>
+    /// <summary>One product per name and unit, so the same item in several locations or batches shares it.</summary>
     public static string ProductKey(Parsed item) =>
-        $"OS-{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"{Normalize(item.ProductName)}|{Normalize(item.Unit)}")))[..12]}";
+        $"{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"{Normalize(item.ProductName)}|{Normalize(item.Unit)}")))[..12]}";
 
     private static string Clean(string text) =>
         string.Join(' ', text.Replace('ي', 'ی').Replace('ك', 'ک').Replace(' ', ' ').Split(' ', StringSplitOptions.RemoveEmptyEntries));
@@ -498,9 +498,8 @@ public static class OpeningStockSheet
         foreach (var d in decisions.Where(d => d.Outcome == Outcome.Import).ToList())
         {
             var item = d.Item!;
-            var code = ProductKey(item);
-            var same = products.Where(p => p.Code == code || (Normalize(p.Name) == Normalize(item.ProductName) && Normalize(p.Unit) == Normalize(item.Unit))).ToList();
-            var similar = products.Where(p => !p.Code.StartsWith("OS-") && !same.Contains(p) && Normalize(p.Name).Contains(Normalize(d.Row.Name))).ToList();
+            var same = products.Where(p => Normalize(p.Name) == Normalize(item.ProductName) && Normalize(p.Unit) == Normalize(item.Unit)).ToList();
+            var similar = products.Where(p => !same.Contains(p) && Normalize(p.Name).Contains(Normalize(d.Row.Name))).ToList();
             var reason = same.Count > 1 ? $"چند جنس هم‌نام در سیستم: {string.Join("، ", same.Select(p => p.Code))}"
                 : similar.Count > 0 ? $"جنس مشابه در سیستم؛ تطبیق دستی لازم: {string.Join("، ", similar.Take(5).Select(p => $"{p.Code} {p.Name} ({p.Unit})"))}"
                 : same.SingleOrDefault() is { } existing && existing.Kind != item.Kind ? $"نوع جنس با سیستم فرق دارد ({existing.Code}: {existing.Kind})"
@@ -557,7 +556,7 @@ public static class OpeningStockSheet
             if (!productIds.TryGetValue(code, out var productId))
             {
                 // Matched exactly as the preview matched it; the preview already stopped any row with more than one match.
-                var existing = products.SingleOrDefault(p => p.Code == code || (Normalize(p.Name) == Normalize(item.ProductName) && Normalize(p.Unit) == Normalize(item.Unit)))?.Id;
+                var existing = products.SingleOrDefault(p => Normalize(p.Name) == Normalize(item.ProductName) && Normalize(p.Unit) == Normalize(item.Unit))?.Id;
                 if (existing is null)
                 {
                     var product = new Product

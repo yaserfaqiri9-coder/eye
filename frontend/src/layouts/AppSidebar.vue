@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import UiAvatar from '@/components/UiAvatar.vue'
-import { roleLabel } from '@/features/users/roles'
 import { useAuthStore } from '@/stores/auth'
 import { isMenuParent, menu, type MenuEntry, type MenuItem, type MenuParent } from './menu'
 
@@ -96,8 +94,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => observer?.disconnect())
-
-const roles = computed(() => auth.user?.roles.map(roleLabel).join('، ') ?? '')
 
 const allowed = (item: MenuItem) =>
   (!item.permission || auth.can(item.permission)) && !auth.user?.hiddenMenu?.includes(item.to)
@@ -233,13 +229,6 @@ watch(
       </div>
     </div>
     <div class="sidebar__footer">
-      <div v-if="auth.user" class="sidebar__user" :title="collapsed ? `${auth.user.fullName} — ${roles}` : undefined">
-        <span class="sidebar__avatar"><UiAvatar :seed="auth.user.fullName" :size="36" plain /></span>
-        <span class="sidebar__user-text">
-          <strong>{{ auth.user.fullName }}</strong>
-          <small :title="roles">{{ roles }}</small>
-        </span>
-      </div>
       <button type="button" class="sidebar__toggle" :aria-label="mini ? 'باز نگه داشتن منو' : 'جمع کردن منو'" :title="mini ? 'باز نگه داشتن منو' : 'جمع کردن منو'" @click="toggleMini">
         <i :class="mini ? 'ri-side-bar-line' : 'ri-side-bar-fill'" aria-hidden="true"></i><span>{{ mini ? 'باز نگه داشتن منو' : 'جمع کردن منو' }}</span>
       </button>
@@ -303,13 +292,8 @@ watch(
 .sidebar__item--active .sidebar__link:focus-visible, .sidebar__item--open .sidebar__link:focus-visible { outline-color: var(--xr-primary); }
 .sidebar__link:focus-visible, .sidebar__brand-link:focus-visible, .sidebar__toggle:focus-visible, .sidebar__close:focus-visible { outline: 2px solid #fff; outline-offset: -3px; }
 
-/* Footer: who is signed in, then the collapse (desktop) or close (mobile) control. */
+/* Footer: the collapse (desktop) or close (mobile) control. */
 .sidebar__footer { flex: none; display: flex; flex-direction: column; gap: 10px; padding: 12px; border-top: 1px solid rgba(255,255,255,.10); background: rgba(0,0,0,.035); }
-.sidebar__user { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; background: rgba(255,255,255,.08); color: #fff; }
-.sidebar__avatar { flex: 0 0 36px; display: grid; place-items: center; width: 36px; height: 36px; overflow: hidden; border-radius: 50%; background: #fff; }
-.sidebar__user-text { display: flex; flex-direction: column; min-width: 0; white-space: nowrap; }
-.sidebar__user-text strong { overflow: hidden; font-size: 13px; font-weight: 600; line-height: 20px; text-overflow: ellipsis; }
-.sidebar__user-text small { overflow: hidden; font-size: 11px; line-height: 16px; opacity: .82; text-overflow: ellipsis; }
 .sidebar__toggle, .sidebar__close { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 40px; padding: 8px 12px; border: 1px solid rgba(255,255,255,.16); border-radius: 10px; background: rgba(255,255,255,.025); color: #fff; font: inherit; font-size: 12.5px; text-align: start; white-space: nowrap; cursor: pointer; transition: background-color .2s ease, border-color .2s ease; }
 .sidebar__toggle i, .sidebar__close i { width: 20px; flex: 0 0 20px; text-align: center; font-size: 19px; }
 .sidebar__toggle:hover, .sidebar__close:hover { background: rgba(255,255,255,.09); border-color: rgba(255,255,255,.28); }
@@ -326,9 +310,8 @@ watch(
 @media (min-width: 992px) and (hover: hover) {
   .sidebar--mini { width: var(--xr-sidebar-mini); }
   .sidebar--mini .sidebar__link span, .sidebar--mini .sidebar__toggle span, .sidebar--mini .sidebar__arrow,
-  .sidebar--mini .sidebar__brand-text, .sidebar--mini .sidebar__user-text { display: none; }
-  .sidebar--mini .sidebar__brand-link, .sidebar--mini .sidebar__user { justify-content: center; padding-inline: 0; }
-  .sidebar--mini .sidebar__user { background: transparent; border-color: transparent; }
+  .sidebar--mini .sidebar__brand-text { display: none; }
+  .sidebar--mini .sidebar__brand-link { justify-content: center; padding-inline: 0; }
   .sidebar--mini .sidebar__link, .sidebar--mini .sidebar__toggle { justify-content: center; padding-inline: 0; }
   .sidebar--mini .sidebar__item--open .sidebar__submenu-list { padding-inline: 0; }
 }

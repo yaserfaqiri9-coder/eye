@@ -17,7 +17,7 @@ const style = (page: Page, label: string) =>
     return { background: s.backgroundColor, border: s.borderTopColor, radius: s.borderTopLeftRadius, height: s.height }
   })
 
-test('fields are white with the template border; only the header search stays tinted', async ({ page }) => {
+test('fields are white with the template border, the header search included', async ({ page }) => {
   await login(page)
   await page.goto('/users')
   await page.getByRole('button', { name: 'کاربر جدید' }).click()
@@ -27,7 +27,7 @@ test('fields are white with the template border; only the header search stays ti
   expect(await style(dialog as unknown as Page, 'نام کاربری')).toEqual({ background: 'rgb(255, 255, 255)', border: 'rgb(215, 219, 218)', radius: '10px', height: '45px' })
   // The border animates into its focus colour.
   await expect.poll(async () => (await style(dialog as unknown as Page, 'نام کامل')).border).toBe('rgb(8, 155, 171)')
-  expect((await style(page, 'جستجوی مریض در هدر')).background).toBe('rgb(206, 235, 238)')
+  expect((await style(page, 'جستجوی مریض در هدر')).background).toBe('rgb(255, 255, 255)')
 })
 
 test('a dialog takes focus, keeps Tab inside, and never drops typed values silently', async ({ page }) => {

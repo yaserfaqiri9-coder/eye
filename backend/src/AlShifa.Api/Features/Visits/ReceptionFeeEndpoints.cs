@@ -27,8 +27,8 @@ public sealed record AdmissionRow(
 public sealed record LockedFee(VisitToken Token, Visit? Visit);
 
 /// <summary>
-/// The visit fee and the queue number it buys. The number is issued in the transaction that settles the fee, so a
-/// rolled-back payment returns its number and a settled fee cannot end up with none. Lock order: visit, token, invoice.
+/// Admission reserves a number; settlement activates the visit without replacing it. Legacy tokens and recovery
+/// can still issue a missing number when settling the fee. Lock order: visit, token, invoice.
 /// </summary>
 public sealed class VisitFeeService(AppDbContext db, DbContextOptions<AppDbContext> options, NumberService numbers, InvoiceService invoices, CurrentUser user, AuditService audit, Outbox outbox)
 {
@@ -102,6 +102,25 @@ public sealed class VisitFeeService(AppDbContext db, DbContextOptions<AppDbConte
         }
 
         await IssueNumberIfSettledAsync(fee, invoice, ct);
+        return await LoadLockedAdmissionAsync(fee, invoice, ct);
+    }
+
+    /// <summary>Reserve a missing number on an older admission without collecting money or activating clinical work.</summary>
+    public async Task<AdmissionRow> ReserveNumberAsync(long visitId, CancellationToken ct)
+    {
+        var (fee, invoice) = await LockVisitFeeAsync(visitId, ct);
+        var visit = fee.Visit!;
+        if (visit.VisitDate != KabulClock.Today || invoice.Status == InvoiceStatus.Void)
+        {
+            throw new AppException(StatusCodes.Status409Conflict, "visit_expired", "شماره نوبت فقط برای مراجعه فعال امروز صادر می‌شود.");
+        }
+        if (fee.Token.QueueNumber is null)
+        {
+            fee.Token.QueueNumber = visit.QueueNumber ?? (int)await numbers.NextAsync(VisitService.QueueNumberScope, visit.VisitDate.ToString("yyyyMMdd"), ct);
+            audit.Add("QueueNumberIssued", "VisitToken", fee.Token.Id.ToString(), fee.Token.QueueNumber.ToString());
+        }
+        visit.QueueNumber = fee.Token.QueueNumber;
+        await db.SaveChangesAsync(ct);
         return await LoadLockedAdmissionAsync(fee, invoice, ct);
     }
 
@@ -280,6 +299,14 @@ public static class ReceptionFeeEndpoints
             await tx.CommitAsync(ct);
             return Results.Ok(row);
         }).RequirePermission("visitfees.create");
+
+        admissions.MapPost("/{visitId:long}/reserve-number", async (long visitId, AppDbContext db, VisitFeeService visitFees, CancellationToken ct) =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var row = await visitFees.ReserveNumberAsync(visitId, ct);
+            await tx.CommitAsync(ct);
+            return Results.Ok(row);
+        }).RequirePermission("visitfees.create").RequirePermission("visits.print");
 
         var tokens = app.MapGroup("/api/visit-tokens").WithTags("Reception");
 

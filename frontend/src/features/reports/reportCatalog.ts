@@ -1,90 +1,56 @@
-import { isoToShamsi, shamsiMonthLength, shamsiToIso, shamsiWeekColumn, todayIso } from '@/utils/date'
+export { addDays, periodChoices, previousRange, quickRange, type DateRange, type PeriodKind } from '@/utils/period'
 
 export interface ReportEntry {
   key: string
   name: string
-  /** Any one of these opens the report. */
+  /** One plain line on what the report shows, for a user who does not know the report names. */
+  hint: string
+  /** Any one of these opens the report; the server checks the same. */
   needs: string[]
-  /** Answers for the present moment, so it has no period to choose. */
+  /** Shows the present moment, so it has no period to choose. */
   noPeriod?: boolean
 }
 
 export interface ReportGroup {
+  /** Names the group's tab in the address, so a reload or back lands on the same tab. */
+  key: string
   title: string
   reports: ReportEntry[]
 }
 
+/** Fifteen plain reports, each one list with the detail behind its few figures. */
 export const reportGroups: ReportGroup[] = [
   {
+    key: 'clinic',
     title: 'کار شفاخانه',
     reports: [
-      { key: 'overview', name: 'خلاصه کار', needs: ['reports.view'] },
-      { key: 'patients', name: 'مریضان و مراجعات', needs: ['reports.view'] },
-      { key: 'doctors', name: 'کار داکتران', needs: ['reports.view'] },
-      { key: 'diagnostics', name: 'آزمایش، رفرکشن و عکس‌برداری', needs: ['reports.view'] },
-      { key: 'surgeries', name: 'عملیات', needs: ['reports.view'] },
-      { key: 'diseases', name: 'بیماری‌های شایع', needs: ['reports.view'] },
+      { key: 'patients', name: 'مراجعات مریضان', hint: 'هر مراجعه با نام مریض، بخش، داکتر و وضعیت', needs: ['patients.view'] },
+      { key: 'doctors', name: 'کار داکتران', hint: 'هر داکتر چند مریض دید و چه کاری ثبت کرد', needs: ['reports.view'] },
+      { key: 'surgeries', name: 'عملیات‌ها', hint: 'هر عملیات با مریض، نوع، چشم و وضعیت', needs: ['surgery.view'] },
+      { key: 'diagnostics', name: 'آزمایش و عکس‌برداری', hint: 'هر درخواست آزمایش، رفرکشن و عکس‌برداری', needs: ['diagnostics.view'] },
+      { key: 'diseases', name: 'بیماری‌های شایع', hint: 'کدام تشخیص بیشتر ثبت شده است', needs: ['reports.view'] },
     ],
   },
   {
+    key: 'money',
     title: 'پول و حساب',
     reports: [
-      { key: 'income', name: 'درآمد و مصارف', needs: ['ledger.view'] },
-      { key: 'cash', name: 'صندوق و دریافت‌ها', needs: ['ledger.view'] },
-      { key: 'outstanding', name: 'پول‌های گرفته‌نشده', needs: ['ledger.view'], noPeriod: true },
-      { key: 'adjustments', name: 'تخفیف، برگشت وجه و باطل', needs: ['ledger.view'] },
-      { key: 'expenses', name: 'مصارف', needs: ['ledger.view'] },
+      { key: 'cash', name: 'دریافت‌ها', hint: 'هر پولی که در صندوق گرفته شد', needs: ['ledger.view'] },
+      { key: 'outstanding', name: 'طلبات', hint: 'فاکتورهایی که هنوز پرداخت نشده‌اند', needs: ['ledger.view'], noPeriod: true },
+      { key: 'expenses', name: 'مصارف', hint: 'هر مصرف ثبت‌شده', needs: ['ledger.view'] },
+      { key: 'profit-loss', name: 'مفاد و ضرر کل سیستم', hint: 'عواید خالص، قیمت خرید فروش‌ها، مصارف و مفاد ثبت‌شده', needs: ['ledger.view'] },
+      { key: 'revenue-sources', name: 'عواید بخش‌ها', hint: 'عواید خدمات هر بخش، دواخانه و عینک با کسورات مشترک', needs: ['ledger.view'] },
+      { key: 'expense-summary', name: 'خلاصه مصارف به تفکیک نوع', hint: 'جمع مصارف هر نوع با برگشت اسناد و مبلغ خالص', needs: ['ledger.view'] },
+      { key: 'daily-finance', name: 'عملکرد مالی روزانه', hint: 'مقایسه روزانه عواید خالص، مصارف و مفاد', needs: ['ledger.view'] },
+      { key: 'cash-flow', name: 'گردش حساب صندوق', hint: 'ورودی، خروجی و مانده دفتری حساب صندوق', needs: ['ledger.view'] },
     ],
   },
   {
+    key: 'stock',
     title: 'دوا و گدام',
     reports: [
-      { key: 'sales', name: 'فروش دواخانه و عینک', needs: ['pharmacy.view', 'optical.view'] },
-      { key: 'stock', name: 'موجودی گدام', needs: ['inventory.view'], noPeriod: true },
+      { key: 'sales', name: 'فروش دواخانه و عینک', hint: 'هر فروش با اجناس و مبلغ آن', needs: ['pharmacy.view', 'optical.view'] },
+      { key: 'stock', name: 'موجودی گدام', hint: 'هر جنس با موجودی، تاریخ ختم و ارزش', needs: ['inventory.view'], noPeriod: true },
     ],
   },
 ]
-
-export type PeriodKind = 'today' | 'yesterday' | 'week' | 'month' | 'last-month' | 'custom'
-
-export const periodChoices: { kind: PeriodKind; label: string }[] = [
-  { kind: 'today', label: 'امروز' },
-  { kind: 'yesterday', label: 'دیروز' },
-  { kind: 'week', label: 'این هفته' },
-  { kind: 'month', label: 'این ماه' },
-  { kind: 'last-month', label: 'ماه گذشته' },
-  { kind: 'custom', label: 'دوره دلخواه' },
-]
-
-export interface DateRange {
-  from: string
-  to: string
-}
-
-function addDays(iso: string, days: number) {
-  const date = new Date(`${iso}T00:00:00Z`)
-  date.setUTCDate(date.getUTCDate() + days)
-  return date.toISOString().slice(0, 10)
-}
-
-/** The dates of a quick choice, on the Kabul calendar. A running week or month ends today, so no empty future days are reported. */
-export function quickRange(kind: Exclude<PeriodKind, 'custom'>, today = todayIso()): DateRange {
-  const { year, month, day } = isoToShamsi(today)
-  switch (kind) {
-    case 'today':
-      return { from: today, to: today }
-    case 'yesterday': {
-      const yesterday = addDays(today, -1)
-      return { from: yesterday, to: yesterday }
-    }
-    case 'week':
-      return { from: addDays(today, -shamsiWeekColumn(year, month, day)), to: today }
-    case 'month':
-      return { from: shamsiToIso(year, month, 1), to: today }
-    case 'last-month': {
-      const lastYear = month === 1 ? year - 1 : year
-      const last = month === 1 ? 12 : month - 1
-      return { from: shamsiToIso(lastYear, last, 1), to: shamsiToIso(lastYear, last, shamsiMonthLength(lastYear, last)) }
-    }
-  }
-}

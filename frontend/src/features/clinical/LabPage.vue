@@ -4,8 +4,11 @@ import { api, ApiError, errorMessage, newIdempotencyKey } from '@/api/http'
 import { testOptions } from '@/api/lookups'
 import { useLiveRefresh } from '@/api/realtime'
 import UiCard from '@/components/UiCard.vue'
+import UiFilterBar from '@/components/UiFilterBar.vue'
 import UiComboBox, { type ComboOption } from '@/components/UiComboBox.vue'
 import UiModal from '@/components/UiModal.vue'
+import UiPager from '@/components/UiPager.vue'
+import { usePagedList } from '@/api/paged'
 import CallControls from '@/features/calls/CallControls.vue'
 import CallNotice from '@/features/calls/CallNotice.vue'
 import { useCallDesk } from '@/features/calls/useCallDesk'
@@ -18,17 +21,16 @@ import { diagnosticStatusLabels, diagnosticStatusTones, type DiagnosticOrder } f
 const auth = useAuthStore()
 const imagingCalls = useCallDesk('Imaging')
 const labCalls = useCallDesk('Lab')
-const rows = ref<DiagnosticOrder[]>([])
 const status = ref('')
+// Refraction has its own queue and form. Read a page at a time, so older requests stay reachable.
+const list = usePagedList<DiagnosticOrder>(() => `/diagnostic-orders?excludeRefraction=true${status.value ? `&status=${status.value}` : ''}`)
+const rows = list.rows
 const loading = ref(true)
 const error = ref('')
 
 async function load() {
   try {
-    // Refraction has its own queue and form.
-    const params = new URLSearchParams({ pageSize: '100', excludeRefraction: 'true' })
-    if (status.value) params.set('status', status.value)
-    rows.value = (await api<{ items: DiagnosticOrder[] }>(`/diagnostic-orders?${params}`)).items
+    await list.load()
     error.value = ''
   } catch (cause) {
     error.value = errorMessage(cause)
@@ -80,20 +82,29 @@ async function saveNew() {
 
 useLiveRefresh(['DiagnosticOrderCreated', 'DiagnosticResultReady', 'PaymentReceived'], load)
 onMounted(load)
-watch(status, load)
+watch(status, () => {
+  list.page.value = 1
+  return load()
+})
+
+function goTo(page: number) {
+  list.page.value = page
+  return load()
+}
 </script>
 
 <template>
-  <UiCard title="درخواست‌های آزمایش">
-    <template #actions>
-      <div class="d-flex gap-2">
-        <select v-model="status" class="form-select" aria-label="فیلتر وضعیت">
-          <option value="">همه وضعیت‌ها</option>
-          <option v-for="(label, value) in diagnosticStatusLabels" :key="value" :value="value">{{ label }}</option>
-        </select>
-        <button v-if="auth.can('diagnostics.create')" type="button" class="btn btn-primary text-nowrap" @click="openNew">درخواست مستقل</button>
-      </div>
+  <UiFilterBar title="درخواست‌های آزمایش">
+    <select v-model="status" class="form-select" aria-label="فیلتر وضعیت">
+      <option value="">همه وضعیت‌ها</option>
+      <option v-for="(label, value) in diagnosticStatusLabels" :key="value" :value="value">{{ label }}</option>
+    </select>
+    <template v-if="auth.can('diagnostics.create')" #actions>
+      <button type="button" class="btn btn-primary text-nowrap" @click="openNew">درخواست مستقل</button>
     </template>
+  </UiFilterBar>
+
+  <UiCard>
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
     <CallNotice :desks="[imagingCalls, labCalls]" />
     <div v-if="loading" class="xr-state" role="status">در حال بارگذاری...</div>
@@ -127,6 +138,7 @@ watch(status, load)
         </tbody>
       </table>
     </div>
+    <UiPager :page="list.page.value" :page-count="list.pageCount.value" @go="goTo" />
   </UiCard>
 
   <UiModal v-if="fresh.open" title="درخواست مستقل آزمایش" @close="fresh.open = false">

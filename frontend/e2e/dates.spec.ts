@@ -1,4 +1,4 @@
-﻿import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { call } from './helpers'
 
 const adminUser = process.env.ALSHIFA_E2E_USER!
@@ -100,10 +100,10 @@ test('calendar: year, month and day selection, keyboard, limits, closing, and no
   // Direct year and month choice; 30 Hut exists only in a leap year.
   await calendar.getByLabel('سال', { exact: true }).selectOption('1403')
   await calendar.getByLabel('ماه', { exact: true }).selectOption({ label: 'حوت' })
-  await expect(calendar.getByRole('button', { name: /^۳۰ حوت ۱۴۰۳$/ })).toBeVisible()
+  await expect(calendar.getByRole('button', { name: /^30 حوت 1403$/ })).toBeVisible()
   await calendar.getByLabel('سال', { exact: true }).selectOption('1404')
-  await expect(calendar.getByRole('button', { name: /^۲۹ حوت ۱۴۰۴$/ })).toBeVisible()
-  await expect(calendar.getByRole('button', { name: /^۳۰ حوت ۱۴۰۴$/ })).toHaveCount(0)
+  await expect(calendar.getByRole('button', { name: /^29 حوت 1404$/ })).toBeVisible()
+  await expect(calendar.getByRole('button', { name: /^30 حوت 1404$/ })).toHaveCount(0)
 
   // Birth dates cannot be in the future: tomorrow is off, today works.
   await expect(calendar.getByRole('button', { name: 'امروز' })).toBeEnabled()
@@ -143,11 +143,11 @@ test('calendar: year, month and day selection, keyboard, limits, closing, and no
   await expect(calendar).toBeVisible()
   await expect(calendar.locator('[data-cursor="true"]')).toBeFocused()
   await reception.keyboard.press('ArrowLeft')
-  await expect(calendar.locator('[data-cursor="true"]')).toHaveAttribute('aria-label', /^۳ دلو ۱۳۸۳$/)
+  await expect(calendar.locator('[data-cursor="true"]')).toHaveAttribute('aria-label', /^3 دلو 1383$/)
   await reception.keyboard.press('ArrowRight')
   await reception.keyboard.press('Enter')
   await expect(calendar).toBeHidden()
-  await expect(field).toHaveValue('۱۳۸۳/۱۱/۰۲')
+  await expect(field).toHaveValue('1383/11/02')
   await expect(field).toBeFocused()
 
   await reception.getByRole('button', { name: 'ذخیره' }).click()
@@ -158,7 +158,7 @@ test('calendar: year, month and day selection, keyboard, limits, closing, and no
 
   // Editing shows the stored date and leaves it intact. The old input wiped it on opening.
   await reception.getByRole('link', { name: 'ویرایش' }).click()
-  await expect(field).toHaveValue('۱۳۸۳/۱۱/۰۲')
+  await expect(field).toHaveValue('1383/11/02')
   await reception.getByLabel('آدرس').fill('هرات')
   await reception.getByRole('button', { name: 'ذخیره' }).click()
   await expect(reception).toHaveURL(new RegExp(`/patients/${id}$`))

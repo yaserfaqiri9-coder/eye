@@ -33,6 +33,8 @@ public sealed record LocalResultRequest(bool Played, [MaxLength(200)] string? Re
 
 public sealed record NextCallDto(long Id, int QueueNumber, string Destination, IReadOnlyList<string> Clips);
 
+public sealed record DisplayCallDto(long Id, int QueueNumber, string Destination, string? PatientName);
+
 public sealed record StationHistoryRow(long Id, string? VisitNumber, int QueueNumber, string Destination, bool IsRecall, string Status, string? Outcome, string? FailureReason, DateTime RequestedAt, DateTime? FinishedAt, string? RequestedBy);
 
 public sealed record StationStatus(bool Active, bool OtherStationOnline, DateTime? LastSeenAt, int ClipsTotal, int ClipsMissing, IReadOnlyList<string> MissingSample, IReadOnlyList<string> TestClips, IReadOnlyList<StationHistoryRow> History);
@@ -84,6 +86,25 @@ public static partial class CallEndpoints
     {
         var calls = app.MapGroup("/api/calls").WithTags("Calls");
 
+        // A TV observes announcements without claiming the audio station or taking a call out of its queue.
+        calls.MapGet("/display", async (AppDbContext db, CancellationToken ct) =>
+        {
+            var cutoff = DateTime.UtcNow.AddSeconds(-25);
+            var call = await db.PatientCalls.AsNoTracking()
+                .Where(c => (c.Status == CallStatus.Playing && c.ClaimedAt >= cutoff)
+                    || (c.Status == CallStatus.Played && c.FinishedAt >= cutoff))
+                .OrderByDescending(c => c.ClaimedAt).ThenByDescending(c => c.Id)
+                .Select(c => new
+                {
+                    c.Id, c.QueueNumber, c.Destination,
+                    PatientName = c.Visit != null && c.Visit.Patient != null
+                        ? (c.Visit.Patient.FirstName + " " + (c.Visit.Patient.LastName ?? "")).Trim()
+                        : null,
+                }).FirstOrDefaultAsync(ct);
+            return call is null ? Results.NoContent()
+                : Results.Ok(new DisplayCallDto(call.Id, call.QueueNumber, VoicePack.Label(call.Destination), call.PatientName));
+        }).RequirePermission("calls.manage");
+
         calls.MapGet("/desk/{desk}", async (CallDesk desk, AppDbContext db, CurrentUser user, HttpContext http, CancellationToken ct) =>
         {
             EnsureDesk(http, desk);
@@ -105,7 +126,7 @@ public static partial class CallEndpoints
         }).RequireAuthorization();
 
         // No Idempotency wrapper: the visit lock must be the transaction's first step so the checks below read what the previous holder committed.
-        calls.MapPost("/", async (CreateCallRequest request, AppDbContext db, ClinicalAccess access, CurrentUser user, AuditService audit, Outbox outbox, IConfiguration config, IHostEnvironment env, HttpContext http, CancellationToken ct) =>
+        calls.MapPost("/", async (CreateCallRequest request, AppDbContext db, ClinicalAccess access, CurrentUser user, AuditService audit, Outbox outbox, HttpContext http, CancellationToken ct) =>
         {
             var desk = EnsureDesk(http, request.Desk);
             if ((request.Desk == CallDesk.Reception) != (request.TokenId is not null) || (request.VisitId is null) == (request.TokenId is null))
@@ -149,12 +170,9 @@ public static partial class CallEndpoints
 
             var playLocally = !IsFresh(await ReadStationAsync(db, ct), now);
             var destination = await DestinationAsync(db, request.Desk, user.Id, ct);
-            var clips = VoicePack.Clips(entry.QueueNumber, destination, request.Recall);
-            var root = VoicePack.Root(config, env);
-            if (entry.QueueNumber is < 1 or > VoicePack.MaxNumber || clips.Any(c => !File.Exists(Path.Combine(root, c))))
-            {
-                throw new AppException(StatusCodes.Status409Conflict, "voice_clip_missing", $"فایل صوتی این اعلان موجود نیست ({string.Join("، ", clips.Where(c => !File.Exists(Path.Combine(root, c))))}). مجموعه صوتی را بررسی کنید.");
-            }
+            // Audio availability must never block recording a valid call. Empty clips are reported by the player,
+            // with no substitution of a different number, department or an old synthesized announcement.
+            var clips = VoicePack.RecordedClips(entry.QueueNumber, destination, request.Desk);
 
             var call = new PatientCall
             {
@@ -296,7 +314,7 @@ public static partial class CallEndpoints
             await tx.CommitAsync(ct);
             return next is null
                 ? Results.NoContent()
-                : Results.Ok(new NextCallDto(next.Id, next.QueueNumber, VoicePack.Label(next.Destination), VoicePack.Clips(next.QueueNumber, next.Destination, next.IsRecall)));
+                : Results.Ok(new NextCallDto(next.Id, next.QueueNumber, VoicePack.Label(next.Destination), VoicePack.RecordedClips(next.QueueNumber, next.Destination, next.Desk)));
         }).RequirePermission("calls.manage");
 
         calls.MapPost("/{id:long}/result", async (long id, CallResultRequest request, AppDbContext db, Outbox outbox, CancellationToken ct) =>
@@ -334,10 +352,9 @@ public static partial class CallEndpoints
                 .Select(c => new { Call = c, VisitNumber = c.Visit != null ? c.Visit.VisitNumber : null, RequestedBy = db.Users.Where(u => u.Id == c.RequestedByUserId).Select(u => u.FullName).FirstOrDefault() })
                 .ToListAsync(ct);
 
-            var root = VoicePack.Root(config, env);
-            var present = Directory.Exists(root) ? Directory.EnumerateFiles(root, "*.mp3").Select(f => Path.GetFileName(f)).ToHashSet() : [];
-            var required = VoicePack.AllClips().ToList();
-            var missing = required.Where(c => !present.Contains(c)).ToList();
+            var root = VoicePack.RecordedRoot(env);
+            var required = VoicePack.RecordedFiles().ToList();
+            var missing = required.Where(c => !File.Exists(Path.Combine(root, c))).ToList();
 
             return Results.Ok(new StationStatus(
                 station?.Id == stationId && IsFresh(station, now),
@@ -346,7 +363,7 @@ public static partial class CallEndpoints
                 required.Count,
                 missing.Count,
                 missing.Take(5).ToList(),
-                VoicePack.Clips(100, VoicePack.Sections[CallDesk.Vision].Clip, false),
+                VoicePack.RecordedClips(25, "vision", CallDesk.Vision),
                 history.Select(h => new StationHistoryRow(h.Call.Id, h.VisitNumber, h.Call.QueueNumber, VoicePack.Label(h.Call.Destination), h.Call.IsRecall, Effective(h.Call, now).ToString(), h.Call.Outcome?.ToString(), h.Call.FailureReason, h.Call.RequestedAt, h.Call.FinishedAt, h.RequestedBy)).ToList()));
         }).RequirePermission("calls.manage");
 
@@ -386,7 +403,7 @@ public static partial class CallEndpoints
         {
             if (request.Desks.Select(d => d.Room).Concat(request.Doctors.Select(d => d.Room)).Any(r => r is < 1 or > VoicePack.MaxRoom))
             {
-                throw new AppException(StatusCodes.Status400BadRequest, "invalid_room", $"شماره اتاق باید بین ۱ و {VoicePack.MaxRoom} باشد؛ مجموعه صوتی فقط همین اتاق‌ها را دارد.");
+                throw new AppException(StatusCodes.Status400BadRequest, "invalid_room", $"شماره اتاق باید بین 1 و {VoicePack.MaxRoom} باشد؛ مجموعه صوتی فقط همین اتاق‌ها را دارد.");
             }
 
             if (request.Desks.Any(d => !VoicePack.Sections.ContainsKey(d.Desk)))

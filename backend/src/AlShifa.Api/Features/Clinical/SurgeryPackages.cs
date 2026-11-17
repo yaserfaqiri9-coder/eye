@@ -50,17 +50,22 @@ public class SurgeryPackageItem
 
 public sealed record PackageItemInput(int ProductId, [Range(0.001, 100000)] decimal Quantity);
 
+/// <summary>
+/// A package is kept in stock as a whole, like any product: its name, what one costs to buy, what the patient pays and how many
+/// are on the shelf. On create <paramref name="Quantity"/> is the opening count; on edit it is how many more to add (0 adds none).
+/// </summary>
 public sealed record SavePackageRequest(
-    [Required, MaxLength(200)] string Name,
-    int ServiceId,
+    [Required, MaxLength(150)] string Name,
+    [Range(0, 100000000)] decimal SalePrice,
+    [Range(0, 100000000)] decimal? CostPrice,
+    [Range(0, 100000)] decimal Quantity,
     [Required, MaxLength(30)] string LocationCode,
-    [Required, MinLength(1)] PackageItemInput[] Items,
     bool IsActive = true,
     int? Version = null);
 
 public sealed record PackageItemRow(int ProductId, string ProductName, string Unit, decimal Quantity);
 
-public sealed record PackageRow(int Id, string Name, int ServiceId, string ServiceName, decimal? Price, string LocationCode, string LocationName, bool IsActive, int Version, IReadOnlyList<PackageItemRow> Items);
+public sealed record PackageRow(int Id, string Name, int ServiceId, string ServiceName, decimal? Price, string LocationCode, string LocationName, bool IsActive, int Version, IReadOnlyList<PackageItemRow> Items, decimal OnHand = 0, decimal? CostPrice = null);
 
 public sealed record SupplyLocationRow(string Code, string Name);
 
@@ -94,27 +99,29 @@ public static class SurgeryPackageEndpoints
             return Results.Ok(await ProjectAsync(db, query, ct));
         }).RequirePermission("surgery.view");
 
-        packages.MapPost("/", async (SavePackageRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        packages.MapPost("/", async (SavePackageRequest request, AppDbContext db, NumberService numbers, StockService stock, LedgerService ledger, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
         {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
             var package = new SurgeryPackage();
-            await ApplyAsync(db, package, request, ct);
-            db.SurgeryPackages.Add(package);
-            await db.SaveChangesAsync(ct);
+            await ApplyAsync(db, numbers, stock, ledger, user, package, request, ct);
             audit.Add("SurgeryPackageCreated", nameof(SurgeryPackage), package.Id.ToString(), package.Name);
+            outbox.Add("InventoryChanged", new { packageId = package.Id }, Groups.Pharmacy, Groups.Optical, Groups.Inventory);
             await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
             return Results.Created($"/api/surgery-packages/{package.Id}", (await ProjectAsync(db, db.SurgeryPackages.Where(p => p.Id == package.Id), ct)).Single());
         }).RequirePermission("surgery.approve");
 
-        // A change applies to operations recorded after it. Supplies already taken stay as they were.
-        packages.MapPut("/{id:int}", async (int id, SavePackageRequest request, AppDbContext db, AuditService audit, CancellationToken ct) =>
+        // A new price applies to operations recorded after it; added stock comes in at the cost given now.
+        packages.MapPut("/{id:int}", async (int id, SavePackageRequest request, AppDbContext db, NumberService numbers, StockService stock, LedgerService ledger, CurrentUser user, AuditService audit, Outbox outbox, CancellationToken ct) =>
         {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
             var package = await db.SurgeryPackages.Include(p => p.Items).SingleOrDefaultAsync(p => p.Id == id, ct) ?? throw AppException.NotFound();
             db.Entry(package).Property(p => p.Version).OriginalValue = request.Version ?? -1;
-            db.SurgeryPackageItems.RemoveRange(package.Items);
-            package.Items.Clear();
-            await ApplyAsync(db, package, request, ct);
+            await ApplyAsync(db, numbers, stock, ledger, user, package, request, ct);
             audit.Add("SurgeryPackageEdited", nameof(SurgeryPackage), id.ToString(), package.Name);
+            outbox.Add("InventoryChanged", new { packageId = id }, Groups.Pharmacy, Groups.Optical, Groups.Inventory);
             await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
             return Results.Ok((await ProjectAsync(db, db.SurgeryPackages.Where(p => p.Id == id), ct)).Single());
         }).RequirePermission("surgery.approve");
 
@@ -245,34 +252,100 @@ public static class SurgeryPackageEndpoints
         return new SuppliesRow(surgery.SuppliesRecordedAt is not null, surgery.SuppliesRecordedAt, locationName, surgery.PackageId, items);
     }
 
-    private static async Task ApplyAsync(AppDbContext db, SurgeryPackage package, SavePackageRequest request, CancellationToken ct)
+    /// <summary>Products in this category are packages: one on the shelf is one operation's kit, bought and sold whole.</summary>
+    public const string PackageCategory = "پکیج عملیات";
+
+    /// <summary>
+    /// Keeps the package's own product (its stock) and own service (its fee) in step with the form, and puts any added count on the shelf.
+    /// A package made before packages were stocked whole gets its product and service on its first edit. Runs inside the caller's transaction.
+    /// </summary>
+    private static async Task ApplyAsync(AppDbContext db, NumberService numbers, StockService stock, LedgerService ledger, CurrentUser user, SurgeryPackage package, SavePackageRequest request, CancellationToken ct)
     {
         var name = request.Name.Trim();
+        if (name.Length == 0)
+        {
+            throw new AppException(StatusCodes.Status400BadRequest, "name_required", "نام پکیج را وارد کنید.");
+        }
+
         if (await db.SurgeryPackages.AnyAsync(p => p.Name == name && p.Id != package.Id, ct))
         {
             throw new AppException(StatusCodes.Status409Conflict, "duplicate_name", "پکیجی با همین نام وجود دارد.");
         }
 
-        if (!await db.Services.AnyAsync(s => s.Id == request.ServiceId && s.IsActive, ct))
+        if (request.SalePrice <= 0)
         {
-            throw new AppException(StatusCodes.Status400BadRequest, "unknown_service", "خدمت انتخاب‌شده معتبر نیست.");
+            throw new AppException(StatusCodes.Status400BadRequest, "invalid_price", "قیمت فروش پکیج را وارد کنید.");
         }
 
-        var locationId = await db.StockLocations.Where(l => l.Code == request.LocationCode).Select(l => (int?)l.Id).SingleOrDefaultAsync(ct)
+        if (request.Quantity < 0 || request.Quantity != decimal.Truncate(request.Quantity) || request.CostPrice < 0)
+        {
+            throw new AppException(StatusCodes.Status400BadRequest, "invalid_quantity", "تعداد پکیج باید عدد صحیح و قیمت خرید مثبت باشد.");
+        }
+
+        var location = await db.StockLocations.SingleOrDefaultAsync(l => l.Code == request.LocationCode, ct)
             ?? throw new AppException(StatusCodes.Status400BadRequest, "unknown_location", "محل نگهداری معتبر نیست.");
 
-        var lines = request.Items.GroupBy(i => i.ProductId).Select(g => new SurgeryPackageItem { ProductId = g.Key, Quantity = g.Sum(i => i.Quantity) }).ToList();
-        var productIds = lines.Select(l => l.ProductId).ToList();
-        if (await db.Products.CountAsync(p => productIds.Contains(p.Id) && p.IsActive, ct) != lines.Count)
+        var productId = package.Items.Count == 1 ? package.Items[0].ProductId : 0;
+        var product = productId == 0 ? null : await db.Products.SingleOrDefaultAsync(p => p.Id == productId && p.Category == PackageCategory, ct);
+        Service service;
+        if (product is null)
         {
-            throw new AppException(StatusCodes.Status400BadRequest, "unknown_product", "یکی از اجناس معتبر یا فعال نیست.");
+            product = new Product { Code = await InventoryEndpoints.NextProductCodeAsync(db, numbers, ct), Kind = ProductKind.General, Category = PackageCategory, Unit = "پکیج" };
+            db.Products.Add(product);
+            service = new Service { Code = await ShortCodes.NextAsync(numbers, "service", c => db.Services.AnyAsync(s => s.Code == c, ct), ct) };
+            db.Services.Add(service);
+            await db.SaveChangesAsync(ct);
+            db.SurgeryPackageItems.RemoveRange(package.Items);
+            package.Items.Clear();
+            package.Items.Add(new SurgeryPackageItem { ProductId = product.Id, Quantity = 1 });
+            package.ServiceId = service.Id;
+        }
+        else
+        {
+            service = await db.Services.SingleAsync(s => s.Id == package.ServiceId, ct);
+        }
+
+        product.Name = name;
+        product.SalePrice = request.SalePrice;
+        product.IsActive = request.IsActive;
+        service.Name = name;
+        service.IsActive = request.IsActive;
+
+        // Prices are append-only, so operations already charged keep the fee they were charged.
+        var price = await db.ServicePrices.Where(s => s.ServiceId == service.Id).OrderByDescending(s => s.EffectiveFrom).ThenByDescending(s => s.Id).Select(s => (decimal?)s.Price).FirstOrDefaultAsync(ct);
+        if (price != request.SalePrice)
+        {
+            db.ServicePrices.Add(new ServicePrice { ServiceId = service.Id, Price = request.SalePrice, EffectiveFrom = DateTime.UtcNow, CreatedByUserId = user.Id });
         }
 
         package.Name = name;
-        package.ServiceId = request.ServiceId;
-        package.LocationId = locationId;
+        package.LocationId = location.Id;
         package.IsActive = request.IsActive;
-        package.Items.AddRange(lines);
+        if (package.Id == 0)
+        {
+            db.SurgeryPackages.Add(package);
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        if (request.Quantity > 0)
+        {
+            // Entered like opening stock: no supplier and nothing owed, and a mistake is reversed from the movement history.
+            var cost = request.CostPrice ?? 0;
+            var batch = new StockBatch { ProductId = product.Id, LocationId = location.Id, LotNumber = "", UnitCost = cost, Quantity = request.Quantity };
+            db.StockBatches.Add(batch);
+            await db.SaveChangesAsync(ct);
+            var reason = $"ورود پکیج {name}";
+            stock.AddMovement(batch, MovementKind.Adjustment, request.Quantity, OpeningStockImport.SourceType, batch.Id, reason);
+            await db.SaveChangesAsync(ct);
+
+            var value = decimal.Round(request.Quantity * cost, 2, MidpointRounding.AwayFromZero);
+            if (value > 0)
+            {
+                var movementId = await db.StockMovements.Where(m => m.BatchId == batch.Id).MaxAsync(m => m.Id, ct);
+                ledger.Post(OpeningStockSheet.LedgerKind, nameof(StockMovement), movementId, reason, (Accounts.Inventory, value, 0), (Accounts.OpeningBalance, 0, value));
+            }
+        }
     }
 
     private static async Task<List<PackageRow>> ProjectAsync(AppDbContext db, IQueryable<SurgeryPackage> query, CancellationToken ct)
@@ -280,6 +353,9 @@ public static class SurgeryPackageEndpoints
         var now = DateTime.UtcNow;
         var rows = await query.OrderBy(p => p.Name).Select(p => new
         {
+            // Meaningful for a package stocked whole, whose one item is its own product.
+            OnHand = db.StockBatches.Where(b => b.LocationId == p.LocationId && b.ProductId == p.Items.Select(i => i.ProductId).FirstOrDefault()).Sum(b => (decimal?)b.Quantity) ?? 0,
+            CostPrice = db.StockBatches.Where(b => b.ProductId == p.Items.Select(i => i.ProductId).FirstOrDefault()).OrderByDescending(b => b.Id).Select(b => (decimal?)b.UnitCost).FirstOrDefault(),
             p.Id,
             p.Name,
             p.ServiceId,
@@ -291,6 +367,6 @@ public static class SurgeryPackageEndpoints
             p.Version,
             Items = p.Items.OrderBy(i => i.Product!.Name).Select(i => new PackageItemRow(i.ProductId, i.Product!.Name, i.Product.Unit, i.Quantity)).ToList(),
         }).ToListAsync(ct);
-        return rows.Select(r => new PackageRow(r.Id, r.Name, r.ServiceId, r.ServiceName, r.Price, r.LocationCode, r.LocationName, r.IsActive, r.Version, r.Items)).ToList();
+        return rows.Select(r => new PackageRow(r.Id, r.Name, r.ServiceId, r.ServiceName, r.Price, r.LocationCode, r.LocationName, r.IsActive, r.Version, r.Items, r.OnHand, r.CostPrice)).ToList();
     }
 }

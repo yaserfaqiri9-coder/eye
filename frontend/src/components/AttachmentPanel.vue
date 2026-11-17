@@ -68,6 +68,6 @@ onMounted(load)
     </ul>
     <p v-else class="small text-muted mb-2">فایلی ضمیمه نشده است.</p>
     <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
-    <input v-if="canUpload" class="form-control" type="file" accept="application/pdf,image/png,image/jpeg" :disabled="uploading" aria-label="بارگذاری فایل (PDF، PNG یا JPEG تا ۱۰ مگابایت)" @change="upload" />
+    <input v-if="canUpload" class="form-control" type="file" accept="application/pdf,image/png,image/jpeg" :disabled="uploading" aria-label="بارگذاری فایل (PDF، PNG یا JPEG تا 10 مگابایت)" @change="upload" />
   </div>
 </template>

@@ -2,7 +2,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, ApiError, errorMessage, newIdempotencyKey } from '@/api/http'
 import { useLiveRefresh } from '@/api/realtime'
 import { useAuthStore } from '@/stores/auth'
-import { MissingClipError, sharedPlayer as player } from './clipPlayer'
+import { sharedPlayer as player } from './clipPlayer'
 
 export interface StationCall {
   id: number
@@ -86,6 +86,8 @@ const nowPlaying = ref<StationCall | null>(null)
 const volume = ref(loadVolume())
 const error = ref('')
 const testing = ref(false)
+const preparing = ref(false)
+const prepared = ref(false)
 
 const reports: { id: number; played: boolean; reason: string | null }[] = []
 let pumping = false
@@ -125,6 +127,7 @@ async function activate(takeOver = false, quiet = false) {
       if (!quiet) error.value = 'مرورگر اجازه پخش صدا را نداد.'
       return
     }
+    await prepareAudio()
     await api('/calls/station/claim', { method: 'POST', body: { stationId, takeOver } })
     activated.value = true
     needsClick.value = false
@@ -138,7 +141,7 @@ async function activate(takeOver = false, quiet = false) {
       busyElsewhere.value = true
       waitingForClick.value = false
     }
-    if (!quiet) error.value = errorMessage(cause)
+    if (!quiet) error.value = cause instanceof Error ? cause.message : errorMessage(cause)
   } finally {
     activating = false
   }
@@ -180,12 +183,12 @@ async function pump() {
       nowPlaying.value = call
       let reason: string | null = null
       try {
-        await player.play(call.clips)
+        await player.play(call.clips, call.id)
       } catch (cause) {
-        reason = cause instanceof MissingClipError ? cause.message : 'پخش صدا در این رایانه ناموفق بود.'
+        reason = cause instanceof Error ? cause.message : 'پخش صدا در این رایانه ناموفق بود.'
         error.value = reason
       }
-      reports.push({ id: call.id, played: reason === null, reason })
+      reports.push({ id: call.id, played: reason === null, reason: reason?.slice(0, 200) ?? null })
       await flushReports()
       nowPlaying.value = null
       await loadStatus()
@@ -214,10 +217,30 @@ async function testSound() {
     needsClick.value = false
     await player.play(status.value.testClips)
   } catch (cause) {
-    error.value = cause instanceof MissingClipError ? cause.message : 'پخش آزمایشی ناموفق بود.'
+    error.value = cause instanceof Error ? cause.message : 'پخش آزمایشی ناموفق بود.'
   } finally {
     testing.value = false
   }
+}
+
+async function prepareAudio() {
+  preparing.value = true
+  try {
+    await player.prepare()
+    prepared.value = true
+  } catch (cause) {
+    prepared.value = false
+    throw cause
+  } finally { preparing.value = false }
+}
+
+async function retryAudio() {
+  error.value = ''
+  try {
+    if (!(await player.unlock())) throw new Error('مرورگر اجازه پخش صدا را نداد؛ دوباره کلیک کنید.')
+    await prepareAudio()
+    await loadStatus()
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : errorMessage(cause) }
 }
 
 async function restoreSound() {
@@ -276,6 +299,9 @@ export function useAudioStation() {
     volume,
     error,
     testing,
+    preparing,
+    prepared,
+    retryAudio,
     packReady: computed(() => status.value !== null && status.value.clipsMissing === 0),
     packPending: computed(() => status.value !== null && status.value.clipsTotal > 0 && status.value.clipsMissing === status.value.clipsTotal),
     onAir: computed(() => activated.value && !needsClick.value && serverReachable.value),

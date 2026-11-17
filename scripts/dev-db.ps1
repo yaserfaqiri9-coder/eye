@@ -42,6 +42,10 @@ default-time-zone=+00:00
 innodb_buffer_pool_size=512M
 max_connections=200
 log_error=$($tools -replace '\\','/')/mysql-dev.err
+# Development only: speed over crash safety. A power cut may lose the last second of dev data; the installed system on 3308 is untouched.
+skip-log-bin
+innodb_flush_log_at_trx_commit=2
+innodb_doublewrite=OFF
 "@ | Set-Content -Path $ini -Encoding ascii
 }
 

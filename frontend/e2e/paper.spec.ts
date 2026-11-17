@@ -151,9 +151,7 @@ test('the file prints on one double-sided A4 sheet from recorded data, and the o
   await doctor.getByLabel('Advice').fill('پرهیز از مالیدن چشم')
   await doctor.getByRole('combobox', { name: 'افزودن دوا' }).fill('Timolol 0.5%')
   await doctor.getByRole('combobox', { name: 'افزودن دوا' }).press('Enter')
-  await doctor.getByLabel('دوز 1').fill('1x2')
-  await doctor.getByRole('textbox', { name: 'تاریخ پیگیری', exact: true }).fill('1410/01/15')
-  await doctor.getByRole('textbox', { name: 'تاریخ پیگیری', exact: true }).press('Tab')
+  await doctor.getByLabel('طریقه مصرف 1').fill('1x2')
   await doctor.getByRole('button', { name: 'ذخیره', exact: true }).click()
   await expect(doctor.getByText('ذخیره شد و نسخه دوا برای دواخانه ارسال شد.')).toBeVisible()
 
@@ -164,8 +162,8 @@ test('the file prints on one double-sided A4 sheet from recorded data, and the o
   await expect(doctor.getByLabel('تشخیص OS 1')).toHaveValue('Refractive error')
   await expect(doctor.getByLabel('نام دوا 1')).toHaveValue(/Timolol 0\.5%/)
 
+  // The order opens on its form: no second click to start a new one.
   await doctor.getByRole('button', { name: /^نسخه عینک/ }).click()
-  await doctor.getByRole('button', { name: 'نسخه عینک جدید' }).click()
   await doctor.getByRole('button', { name: 'انتقال از نسخه نهایی بینایی‌سنجی' }).click()
   await expect(doctor.getByLabel('نسخه عینک: VA OD')).toHaveValue('6/6')
   await expect(doctor.getByLabel('Bifocal')).toBeChecked()
@@ -174,7 +172,6 @@ test('the file prints on one double-sided A4 sheet from recorded data, and the o
   await doctor.keyboard.press('Escape')
 
   await doctor.getByRole('button', { name: /^عملیات/ }).click()
-  await doctor.getByRole('button', { name: 'ارجاع جدید به عملیات' }).click()
   await doctor.getByLabel('نوع عملیات').fill('Phaco + IOL')
   await pick(doctor, doctor, 'خدمت قابل پرداخت', 'فیس عکس')
   await doctor.getByRole('button', { name: 'ارجاع به عملیات' }).click()
@@ -199,11 +196,11 @@ test('the file prints on one double-sided A4 sheet from recorded data, and the o
   await expect(back).toContainText('Cataract')
   await expect(back).toContainText('Refractive error')
   await expect(back).toContainText('Timolol')
-  await expect(back.locator('.rx-table thead th')).toHaveText(['دوا', 'دوز', 'تعداد'])
+  await expect(back.locator('.rx-table thead th')).toHaveText(['دوا', 'طریقه مصرف', 'تعداد'])
   await expect(back.locator('.rx-table tbody tr').first().locator('td')).toHaveCount(3)
   await expect(back.locator('.rx-table tbody tr').first()).toContainText('1x2')
-  await expect(back).toContainText('1410/01/15')
-  await expect(back).toContainText('پاورقی آزمایشی')
+  // The approved paper has no footer line, so the configured footer stays off it (as on the other papers in print.spec).
+  await expect(back).not.toContainText('پاورقی آزمایشی')
 
   // Never on paper: the confidential note and any money.
   for (const sheet of [front, back]) {
@@ -297,7 +294,7 @@ test('a very full record still prints on two sides: long text is cut with a visi
   await call(doctor, 'POST', '/prescriptions', { visitId: visit.id, notes: '', items: Array.from({ length: 18 }, (_, i) => ({ drugName: `دوا ${i + 13}`, dose: '1', route: 'Topical', duration: '7 days', instructions: 'روزانه', quantity: 1 })) })
   await doctor.reload()
   await expect(back).toContainText('14 قلم دیگر')
-  await expect(back.locator('.rx-table thead th')).toHaveText(['دوا', 'دوز', 'تعداد'])
+  await expect(back.locator('.rx-table thead th')).toHaveText(['دوا', 'طریقه مصرف', 'تعداد'])
   await expect(back.locator('.rx-table tbody tr')).toHaveCount(16)
   await expect(back.locator('.rx-table tbody tr').first().locator('td')).toHaveCount(3)
   const dimensions = await doctor.locator('.sheet').evaluateAll((els) => els.map((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight })))
